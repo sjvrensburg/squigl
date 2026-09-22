@@ -14,7 +14,9 @@ pub mod loopback;
 pub mod protocol;
 pub mod session;
 pub mod sink;
+pub mod webrtc_source;
 
 pub use cameras::{list_cameras, CameraInfo};
 pub use error::{Error, Result};
 pub use session::{CameraControl, CameraSession, ConnectOptions, Facing, ZOOM_STEP};
+pub use webrtc_source::WebrtcSource;
