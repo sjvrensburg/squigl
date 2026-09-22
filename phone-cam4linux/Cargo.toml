@@ -13,6 +13,7 @@ log.workspace = true
 openh264 = { workspace = true, features = ["source"] }
 v4l.workspace = true
 ffmpeg-next = { workspace = true, optional = true }
+str0m = { version = "0.23.1", default-features = false, features = ["rust-crypto"] }
 
 [features]
 default = []
