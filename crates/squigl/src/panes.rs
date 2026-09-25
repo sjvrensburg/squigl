@@ -19,7 +19,7 @@ impl Pane {
     }
 
     /// Its position in [`Pane::ALL`]: 0, 1, 2.
-    fn index(self) -> usize {
+    pub fn index(self) -> usize {
         Pane::ALL.iter().position(|&p| p == self).unwrap_or(0)
     }
 }

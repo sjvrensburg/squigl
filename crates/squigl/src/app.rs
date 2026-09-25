@@ -528,6 +528,8 @@ pub struct App {
     screenshot: Option<(Duration, PathBuf, Instant)>,
     /// Whether the keys are the camera window's shortcuts or a window's.
     keys: KeyFocus,
+    /// The same, for each detached pane's window, indexed by [`Pane::index`].
+    detached_keys: [KeyFocus; 3],
 }
 
 impl App {
@@ -592,6 +594,7 @@ impl App {
             dev_zoom: None,
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
             keys: KeyFocus::default(),
+            detached_keys: Default::default(),
         };
         app.apply_config(config, true);
         app
@@ -1823,6 +1826,20 @@ impl App {
                     .with_title(format!("Squigl: {}", p.title()))
                     .with_inner_size([700.0, 500.0]),
                 |ui, _class| {
+                    // This window's keys are the camera window's shortcuts too, acting
+                    // on this pane: D attaches it back.
+                    let idx = p.index();
+                    let shortcuts = self.detached_keys[idx].begin_pass(ui.ctx(), &[]);
+                    let key_pressed = ui.input(|i| {
+                        i.viewport().focused.unwrap_or(false)
+                            && i.events
+                                .iter()
+                                .any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))
+                    });
+                    if shortcuts && key_pressed && !ui.ctx().text_edit_focused() {
+                        self.panes.set_active(p);
+                        self.handle_keys(ui.ctx());
+                    }
                     egui::CentralPanel::default().show(ui, |ui| match frame {
                         Some(f) => self.pane(ui, p, f),
                         None => {
@@ -1831,6 +1848,7 @@ impl App {
                             });
                         }
                     });
+                    self.detached_keys[idx].end_pass(ui.ctx(), &[]);
                     ui.input(|i| i.viewport().close_requested())
                 },
             );
