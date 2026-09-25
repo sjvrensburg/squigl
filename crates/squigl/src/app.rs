@@ -523,6 +523,8 @@ pub struct App {
     /// Development aid: write a screenshot of the window to this path after the
     /// delay, then quit.
     screenshot: Option<(Duration, PathBuf, Instant)>,
+    /// Whether the keys are the camera window's shortcuts or a window's.
+    keys: KeyFocus,
 }
 
 impl App {
@@ -585,6 +587,7 @@ impl App {
             dev_read_all: false,
             dev_zoom: None,
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
+            keys: KeyFocus::default(),
         };
         app.apply_config(config, true);
         app
@@ -644,7 +647,8 @@ impl App {
         let mut save = false;
         let mut copy = false;
         let ui_cfg = self.config.ui.clone();
-        egui::Window::new("Readings this session")
+        egui::Window::new(HISTORY_TITLE)
+            .id(window_id(HISTORY_TITLE))
             .open(&mut open)
             .default_width(560.0)
             .resizable(true)
@@ -1426,17 +1430,18 @@ impl App {
                         .suffix("x")
                         .fixed_decimals(2),
                 );
-                if slider.changed() {
+                // `changed()` alone is not a move: the slider re-rounds the shown
+                // value to two decimals every frame, which is off the zoom grid.
+                if slider.changed() && self.shared().set_zoom(value) {
                     self.go_live();
-                    self.shared().set_zoom(value);
                 }
                 if ui
                     .button("1x  [0]")
                     .on_hover_text("reset the phone's zoom")
                     .clicked()
+                    && self.shared().set_zoom(1.0)
                 {
                     self.go_live();
-                    self.shared().set_zoom(1.0);
                 }
             });
         }
@@ -1607,9 +1612,8 @@ impl App {
         if response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             let notches = wheel_notches(&mut self.wheel_preview, delta);
-            if notches != 0 {
+            if notches != 0 && self.shared().step_zoom(notches) {
                 self.go_live();
-                self.shared().step_zoom(notches);
             }
         }
 
@@ -1745,52 +1749,6 @@ impl App {
         egui::CentralPanel::default().show(ui, |ui| self.crop_image(ui, frame));
     }
 
-    /// Live enhancement controls: mode, and -- once it is on -- the knobs that shape
-    /// it. Deliberately not a one-time tuned setting: light, angle and distance vary
-    /// shot to shot, so the user drives these directly while looking at the result.
-    fn enhance_controls(&mut self, ui: &mut egui::Ui) {
-        let cfg = &mut self.config.enhance;
-        ui.horizontal(|ui| {
-            ui.label("Enhance [E]");
-            ComboBox::from_id_salt("enhance-mode")
-                .selected_text(cfg.mode.label())
-                .show_ui(ui, |ui| {
-                    for mode in [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink] {
-                        ui.selectable_value(&mut cfg.mode, mode, mode.label());
-                    }
-                });
-            if cfg.mode == EnhanceMode::Ink {
-                ComboBox::from_id_salt("enhance-channel")
-                    .selected_text(cfg.channel.label())
-                    .show_ui(ui, |ui| {
-                        for channel in enhance::Channel::ALL {
-                            ui.selectable_value(&mut cfg.channel, channel, channel.label());
-                        }
-                    });
-            }
-        });
-        if cfg.mode != EnhanceMode::Off {
-            ui.horizontal(|ui| {
-                ui.label("Strength");
-                ui.add(Slider::new(&mut cfg.strength, 0.0..=1.0).step_by(0.05));
-                ui.label("Black pt");
-                ui.add(
-                    Slider::new(&mut cfg.black_point, 0.0..=49.0)
-                        .step_by(1.0)
-                        .suffix("%"),
-                );
-                ui.label("White pt");
-                ui.add(
-                    Slider::new(&mut cfg.white_point, 51.0..=100.0)
-                        .step_by(1.0)
-                        .suffix("%"),
-                );
-                ui.label("Gamma");
-                ui.add(Slider::new(&mut cfg.gamma, 0.3..=3.0).step_by(0.1));
-            });
-        }
-    }
-
     fn crop_image(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
         let Some(selection) = self.selection() else {
             ui.vertical_centered(|ui| {
@@ -1816,7 +1774,7 @@ impl App {
             return;
         };
         let crop = selection.rect;
-        self.enhance_controls(ui);
+        enhance_controls(ui, &mut self.config.enhance);
         let step = crop.w.max(crop.h).div_ceil(PREVIEW_MAX_EDGE).max(1);
         let (tw, th) = self.crop_view.update(
             ui.ctx(),
@@ -1843,7 +1801,7 @@ impl App {
             })
             .unwrap_or_default();
         ui.label(format!(
-            "{nw}×{nh} px at ({}, {}){}{}{}{}",
+            "{nw}×{nh} px at ({}, {}){}{}{}",
             crop.x,
             crop.y,
             if selection.quad.is_some() {
@@ -1857,11 +1815,6 @@ impl App {
                 String::new()
             },
             block,
-            if self.config.enhance.mode != EnhanceMode::Off {
-                format!(", enhanced ({})", self.config.enhance.mode.label())
-            } else {
-                String::new()
-            },
         ));
         let avail = ui.available_size();
         let scale = (avail.x / nw as f32).min(avail.y / nh as f32);
@@ -2012,6 +1965,8 @@ impl App {
             });
     }
 
+    /// The camera window's shortcuts. Only called while it owns the keyboard (see
+    /// [`KeyFocus`]).
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let (space, esc, save, rot_cw, rot_ccw, enter, read_all) = ctx.input(|i| {
             (
@@ -2066,17 +2021,11 @@ impl App {
                 i.key_pressed(Key::Num0),
             )
         });
-        if zoom_in || zoom_out || zoom_reset {
+        let moved = (zoom_in && self.shared().step_zoom(2))
+            | (zoom_out && self.shared().step_zoom(-2))
+            | (zoom_reset && self.shared().set_zoom(1.0));
+        if moved {
             self.go_live();
-        }
-        if zoom_in {
-            self.shared().step_zoom(2);
-        }
-        if zoom_out {
-            self.shared().step_zoom(-2);
-        }
-        if zoom_reset {
-            self.shared().set_zoom(1.0);
         }
         // Digital box: [ / ] shrink and grow, arrows pan (shift: finer).
         if let (Some(crop), Some((vw, vh))) = (self.crop, self.crop_space) {
@@ -2170,6 +2119,31 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let shortcuts = self.keys.begin_pass(ui.ctx(), &self.open_windows());
+        self.pass(ui, shortcuts);
+        self.keys.end_pass(ui.ctx(), &self.open_windows());
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.worker.stop();
+    }
+}
+
+impl App {
+    /// Titles of the windows open over the camera window.
+    fn open_windows(&self) -> Vec<&'static str> {
+        [
+            (self.settings_open, settings::TITLE),
+            (self.history_open, HISTORY_TITLE),
+        ]
+        .into_iter()
+        .filter_map(|(open, title)| open.then_some(title))
+        .collect()
+    }
+
+    /// One pass of the window: the windows first, then the shortcuts (when
+    /// `shortcuts`, see [`KeyFocus::begin_pass`]), then the panels.
+    fn pass(&mut self, ui: &mut egui::Ui, shortcuts: bool) {
         if self.ctx.is_none() {
             self.ctx = Some(ui.ctx().clone());
             ui.ctx().set_zoom_factor(self.config.ui.scale);
@@ -2178,7 +2152,11 @@ impl eframe::App for App {
         self.settings_window(ui.ctx());
         self.history_window(ui.ctx());
         self.fps.tick(self.shared().frames());
-        self.handle_keys(ui.ctx());
+        // A click into a text field while the windows were drawn makes the keys
+        // its already.
+        if shortcuts && !ui.ctx().text_edit_focused() {
+            self.handle_keys(ui.ctx());
+        }
         self.handle_screenshot(ui.ctx());
         self.drop_stale_blocks();
         self.poll_read();
@@ -2262,10 +2240,138 @@ impl eframe::App for App {
             .show(ui, |ui| self.crop_panel(ui, &frame));
         egui::CentralPanel::default().show(ui, |ui| self.preview_panel(ui, &frame));
     }
+}
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.worker.stop();
+/// The history window's title.
+const HISTORY_TITLE: &str = "Readings this session";
+
+/// The id a window over the camera window is given, so [`KeyFocus`] can tell its
+/// area and widgets.
+pub fn window_id(title: &str) -> egui::Id {
+    egui::Id::new(("window", title))
+}
+
+/// Whether this pass's keys are the camera window's shortcuts or belong to a
+/// window. The camera window is driven by global keys, several of which egui also
+/// acts on: tab and the arrows move the focus (here they walk the blocks and pan
+/// the box), enter and space press the focused button -- left alone, tab parks
+/// the focus on Rotate and enter then presses it instead of reading. So the
+/// camera window's widgets never keep the focus, and while its keys are
+/// shortcuts, egui's focus move is cancelled.
+///
+/// A window (Settings, the history) or popup owns the keys while one of its
+/// widgets has the focus, while it is open (a popup) or while the pointer is over
+/// it (a window); then egui has them all, with its own navigation. So does a text
+/// editor on the camera window (the typed number of the zoom or an enhance
+/// slider). The focus as the last pass left it counts too: egui drops a field's
+/// focus on escape before the pass begins, and that escape is still the field's.
+#[derive(Debug, Default)]
+struct KeyFocus {
+    /// A window or popup widget, or a text editor anywhere (a slider's typed
+    /// number), had the focus at the end of the last pass.
+    window_had_focus: bool,
+}
+
+impl KeyFocus {
+    /// Before any widget of the pass: returns whether its keys are shortcuts.
+    /// `open_windows`: titles of the windows open now.
+    fn begin_pass(&self, ctx: &egui::Context, open_windows: &[&str]) -> bool {
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            let on_camera = ctx
+                .read_response(id)
+                .is_some_and(|r| r.layer_id.order == egui::Order::Background);
+            if on_camera && !ctx.text_edit_focused() {
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
+        }
+        let over_window = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
+            open_windows.iter().any(|title| {
+                ctx.memory(|m| m.area_rect(window_id(title)))
+                    .is_some_and(|r| r.contains(pos))
+            })
+        });
+        let windows_have_keys = self.window_had_focus
+            || Self::window_has_focus(ctx, open_windows)
+            || over_window
+            || egui::Popup::is_any_open(ctx);
+        if !windows_have_keys {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
+        !windows_have_keys
     }
+
+    /// After every widget of the pass, once they have taken or given up the focus.
+    fn end_pass(&mut self, ctx: &egui::Context, open_windows: &[&str]) {
+        self.window_had_focus = Self::window_has_focus(ctx, open_windows);
+    }
+
+    /// Whether a widget of an open window, or of a popup, or a text editor on the
+    /// camera window has the focus.
+    fn window_has_focus(ctx: &egui::Context, open_windows: &[&str]) -> bool {
+        let focused = ctx.memory(|m| m.focused());
+        focused
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|r| match r.layer_id.order {
+                egui::Order::Background => ctx.text_edit_focused(),
+                egui::Order::Middle => open_windows
+                    .iter()
+                    .any(|title| r.layer_id.id == window_id(title)),
+                _ => true,
+            })
+    }
+}
+
+/// Live enhancement controls: mode, and the knobs that shape it. Deliberately not a
+/// one-time tuned setting: light, angle and distance vary shot to shot, so the user
+/// drives these directly while looking at the result. Every control is always laid
+/// out -- disabled when the mode does not use it -- in a fixed grid, so switching the
+/// mode never changes the size of anything around them.
+fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig) {
+    ui.horizontal(|ui| {
+        ui.label("Enhance [E]");
+        ComboBox::from_id_salt("enhance-mode")
+            .selected_text(cfg.mode.label())
+            .show_ui(ui, |ui| {
+                for mode in [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink] {
+                    ui.selectable_value(&mut cfg.mode, mode, mode.label());
+                }
+            });
+        ui.add_enabled_ui(cfg.mode == EnhanceMode::Ink, |ui| {
+            ComboBox::from_id_salt("enhance-channel")
+                .selected_text(cfg.channel.label())
+                .show_ui(ui, |ui| {
+                    for channel in enhance::Channel::ALL {
+                        ui.selectable_value(&mut cfg.channel, channel, channel.label());
+                    }
+                });
+        });
+    });
+    ui.add_enabled_ui(cfg.mode != EnhanceMode::Off, |ui| {
+        // Two knobs a row: the row of four is wider than a narrow panel, and a
+        // slider does not wrap.
+        egui::Grid::new("enhance-knobs")
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.label("Strength");
+                ui.add(Slider::new(&mut cfg.strength, 0.0..=1.0).step_by(0.05));
+                ui.label("Gamma");
+                ui.add(Slider::new(&mut cfg.gamma, 0.3..=3.0).step_by(0.1));
+                ui.end_row();
+                ui.label("Black pt");
+                ui.add(
+                    Slider::new(&mut cfg.black_point, 0.0..=49.0)
+                        .step_by(1.0)
+                        .suffix("%"),
+                );
+                ui.label("White pt");
+                ui.add(
+                    Slider::new(&mut cfg.white_point, 51.0..=100.0)
+                        .step_by(1.0)
+                        .suffix("%"),
+                );
+                ui.end_row();
+            });
+    });
 }
 
 /// Amber/red tint for a wavering/hesitant token; `None` for steady (shown plain).
@@ -2472,6 +2578,544 @@ impl FpsCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One headless egui pass.
+    fn pass(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) {
+        ctx.run_ui(input, f).drop_without_applying_deltas();
+    }
+
+    /// A narrowish crop panel: 40% of a 1280 px window, less its margins.
+    const PANEL_WIDTH: f32 = 480.0;
+
+    /// Lays out `f` in a fixed-width region, one pass per call, returning the
+    /// size it took.
+    fn laid_out(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> Vec2 {
+        let mut f = f;
+        let mut size = Vec2::ZERO;
+        pass(ctx, input, |ui| {
+            size = ui
+                .allocate_ui(Vec2::new(PANEL_WIDTH, 600.0), |ui| f(ui))
+                .response
+                .rect
+                .size();
+        });
+        size
+    }
+
+    #[test]
+    fn switching_enhancement_keeps_its_controls_the_same_size() {
+        let ctx = egui::Context::default();
+        let sizes: Vec<Vec2> = [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink]
+            .into_iter()
+            .map(|mode| {
+                let mut cfg = EnhanceConfig {
+                    mode,
+                    ..EnhanceConfig::default()
+                };
+                // Twice: the first pass only measures the text.
+                laid_out(&ctx, Default::default(), |ui| {
+                    enhance_controls(ui, &mut cfg)
+                });
+                laid_out(&ctx, Default::default(), |ui| {
+                    enhance_controls(ui, &mut cfg)
+                })
+            })
+            .collect();
+        assert!(sizes.iter().all(|s| *s == sizes[0]), "{sizes:?}");
+        assert!(sizes[0].x <= PANEL_WIDTH, "wider than the panel: {sizes:?}");
+    }
+
+    fn key_event(key: Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    fn key(key: Key) -> Vec<egui::Event> {
+        vec![key_event(key, egui::Modifiers::NONE)]
+    }
+
+    fn shift_tab() -> Vec<egui::Event> {
+        vec![key_event(Key::Tab, egui::Modifiers::SHIFT)]
+    }
+
+    fn move_to(pos: Pos2) -> Vec<egui::Event> {
+        vec![egui::Event::PointerMoved(pos)]
+    }
+
+    fn release(key: Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn click(pos: Pos2) -> Vec<egui::Event> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![egui::Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// Settings' fields, in tab order.
+    const NAME: usize = 0;
+    const DEVICE: usize = 1;
+    const URL: usize = 2;
+    const MAX_TOKENS: usize = 3;
+    const API_KEY: usize = 4;
+    /// Somewhere on the preview, away from every widget and window.
+    const CANVAS: Pos2 = Pos2::new(150.0, 500.0);
+
+    /// A stand-in for the app, passed through exactly as `App` passes: the key
+    /// focus's start of pass, then Settings and history windows, the shortcuts
+    /// (counting the presses they read), and the main panel with Rotate and the
+    /// enhance combo box, then the key focus's end of pass.
+    struct Harness {
+        ctx: egui::Context,
+        keys: KeyFocus,
+        settings_open: bool,
+        history_open: bool,
+        text: [String; 3],
+        device: usize,
+        enhance: usize,
+        max_tokens: u32,
+        zoom: f32,
+        /// Settings' fields (see `NAME`...), then Rotate, the enhance combo box,
+        /// the history window and the zoom slider.
+        ids: Vec<egui::Id>,
+        rects: Vec<egui::Rect>,
+        rotations: usize,
+        shortcuts: usize,
+        /// Passes run, and whether the next one asks egui for a second.
+        passes: usize,
+        discard: bool,
+    }
+
+    const ROTATE: usize = 5;
+    const ENHANCE: usize = 6;
+    const HISTORY: usize = 7;
+    const ZOOM: usize = 8;
+
+    impl Harness {
+        fn new(settings_open: bool, history_open: bool) -> Self {
+            let mut h = Self {
+                ctx: egui::Context::default(),
+                keys: KeyFocus::default(),
+                settings_open,
+                history_open,
+                text: Default::default(),
+                device: 0,
+                enhance: 0,
+                max_tokens: 512,
+                zoom: 1.0,
+                ids: vec![egui::Id::NULL; 9],
+                rects: vec![egui::Rect::NOTHING; 9],
+                rotations: 0,
+                shortcuts: 0,
+                passes: 0,
+                discard: false,
+            };
+            // Let the windows size themselves; no input yet.
+            for _ in 0..3 {
+                h.pass(Vec::new());
+            }
+            h
+        }
+
+        fn open(&self) -> Vec<&'static str> {
+            [
+                (self.settings_open, settings::TITLE),
+                (self.history_open, HISTORY_TITLE),
+            ]
+            .into_iter()
+            .filter_map(|(open, title)| open.then_some(title))
+            .collect()
+        }
+
+        fn at(&self, widget: usize) -> Pos2 {
+            self.rects[widget].center()
+        }
+
+        fn pass(&mut self, events: Vec<egui::Event>) {
+            let ctx = self.ctx.clone();
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(1200.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            pass(&ctx, raw, |ui| {
+                self.passes += 1;
+                let shortcuts = self.keys.begin_pass(ui.ctx(), &self.open());
+                let mut seen = Vec::new();
+                if self.settings_open {
+                    egui::Window::new(settings::TITLE)
+                        .id(window_id(settings::TITLE))
+                        .default_pos([700.0, 40.0])
+                        .show(ui.ctx(), |ui| {
+                            let [name, url, api_key] = &mut self.text;
+                            seen.push((NAME, ui.text_edit_singleline(name)));
+                            seen.push((
+                                DEVICE,
+                                ComboBox::from_id_salt("device")
+                                    .selected_text(["WebGPU", "CPU"][self.device])
+                                    .show_index(ui, &mut self.device, 2, |i| ["WebGPU", "CPU"][i]),
+                            ));
+                            seen.push((URL, ui.text_edit_singleline(url)));
+                            seen.push((
+                                MAX_TOKENS,
+                                ui.add(egui::DragValue::new(&mut self.max_tokens)),
+                            ));
+                            seen.push((API_KEY, ui.text_edit_singleline(api_key)));
+                        });
+                }
+                if self.history_open {
+                    if let Some(r) = egui::Window::new(HISTORY_TITLE)
+                        .id(window_id(HISTORY_TITLE))
+                        .default_pos([700.0, 450.0])
+                        .show(ui.ctx(), |ui| {
+                            ui.label("1. x^2");
+                            ui.button("Copy all")
+                        })
+                    {
+                        seen.push((HISTORY, r.response));
+                    }
+                }
+                if shortcuts && !ui.ctx().text_edit_focused() {
+                    self.shortcuts += ui.input(|i| {
+                        [
+                            Key::Enter,
+                            Key::Space,
+                            Key::Tab,
+                            Key::Escape,
+                            Key::ArrowRight,
+                        ]
+                        .iter()
+                        .map(|k| i.num_presses(*k))
+                        .sum::<usize>()
+                    });
+                }
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let rotate = ui.button("Rotate right  [R]");
+                    if rotate.clicked() {
+                        self.rotations += 1;
+                    }
+                    seen.push((ROTATE, rotate));
+                    seen.push((
+                        ENHANCE,
+                        ComboBox::from_id_salt("enhance-mode")
+                            .selected_text(["Off", "Auto", "Ink"][self.enhance])
+                            .show_index(ui, &mut self.enhance, 3, |i| ["Off", "Auto", "Ink"][i]),
+                    ));
+                    seen.push((
+                        ZOOM,
+                        ui.add(Slider::new(&mut self.zoom, 1.0..=8.0).fixed_decimals(2)),
+                    ));
+                });
+                self.keys.end_pass(ui.ctx(), &self.open());
+                if std::mem::take(&mut self.discard) {
+                    ui.ctx().request_discard("test: lay out again");
+                }
+                for (i, r) in seen {
+                    self.ids[i] = r.id;
+                    self.rects[i] = r.rect;
+                }
+            });
+        }
+
+        fn focused(&self) -> Option<usize> {
+            let id = self.ctx.memory(|m| m.focused())?;
+            Some(self.ids.iter().position(|i| *i == id).unwrap_or(usize::MAX))
+        }
+
+        /// Clicks Settings field `i`, then takes the pointer off the window.
+        fn click_field(&mut self, i: usize) {
+            self.pass(click(self.at(i)));
+            assert_eq!(self.focused(), Some(i), "clicking field {i}");
+            self.pass(move_to(CANVAS));
+        }
+    }
+
+    /// Tab (walking blocks) must never land keyboard focus on Rotate, nor enter or
+    /// space press it: on the camera window they are all shortcuts.
+    #[test]
+    fn tab_and_enter_never_press_a_button() {
+        let mut h = Harness::new(false, false);
+        h.pass(move_to(CANVAS));
+        for _ in 0..3 {
+            for k in [Key::Tab, Key::Enter, Key::ArrowRight, Key::Space] {
+                h.pass(key(k));
+                assert_eq!(h.focused(), None, "after {k:?}");
+            }
+        }
+        assert_eq!(h.rotations, 0);
+        assert_eq!(h.shortcuts, 12, "every key was a shortcut");
+        // The mouse still presses it.
+        h.pass(click(h.at(ROTATE)));
+        assert_eq!(h.rotations, 1);
+    }
+
+    /// egui can run a pass twice (a new grid lays out again); the second gets no
+    /// input, and no key acts twice.
+    #[test]
+    fn a_second_layout_pass_does_not_replay_keys() {
+        let mut h = Harness::new(true, false);
+        h.pass(move_to(CANVAS));
+        let before = h.passes;
+        h.discard = true;
+        h.pass(key(Key::Enter));
+        assert_eq!(h.passes, before + 2, "egui ran the pass twice");
+        assert_eq!(h.shortcuts, 1);
+        // ... nor does the escape leaving a field turn into a shortcut on the
+        // second pass.
+        h.click_field(NAME);
+        h.discard = true;
+        h.pass(key(Key::Escape));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 1);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 2);
+    }
+
+    /// Presses and releases arrive as they happen, whoever has the keys: a
+    /// release after ownership changed is not lost (no key stays held), and the
+    /// next press is a fresh one.
+    #[test]
+    fn releases_reach_egui_across_ownership_changes() {
+        let mut h = Harness::new(true, false);
+        h.click_field(URL);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.focused(), None, "enter submitted the field");
+        h.pass(vec![release(Key::Enter)]);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        h.pass(vec![
+            key_event(Key::Enter, egui::Modifiers::NONE),
+            release(Key::Enter),
+        ]);
+        assert_eq!(h.shortcuts, 1);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        // The other way: pressed as a shortcut, released inside a field.
+        h.pass(key(Key::Space));
+        h.pass(click(h.at(NAME)));
+        h.pass(vec![release(Key::Space)]);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        assert_eq!(h.shortcuts, 2);
+    }
+
+    /// A held arrow (press, repeats, release) pans on every repeat and never
+    /// moves the focus.
+    #[test]
+    fn held_arrow_repeats_are_shortcuts() {
+        let mut h = Harness::new(false, false);
+        h.pass(move_to(CANVAS));
+        h.pass(key(Key::ArrowRight));
+        for _ in 0..3 {
+            h.pass(vec![egui::Event::Key {
+                key: Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(h.focused(), None);
+        }
+        h.pass(vec![release(Key::ArrowRight)]);
+        assert_eq!(h.shortcuts, 4);
+        assert_eq!(h.rotations, 0);
+    }
+
+    /// A pointer move in the same batch as a key decides where the key goes.
+    #[test]
+    fn a_pointer_move_in_the_same_batch_counts() {
+        let mut h = Harness::new(false, true);
+        h.pass(move_to(CANVAS));
+        let mut onto = move_to(h.at(HISTORY));
+        onto.extend(key(Key::Enter));
+        h.pass(onto);
+        assert_eq!(h.shortcuts, 0);
+        let mut off = move_to(CANVAS);
+        off.extend(key(Key::Enter));
+        h.pass(off);
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// Escape or enter ending the typed number of a camera-window slider (the
+    /// zoom, the enhance knobs) is the editor's: it neither drops the box or the
+    /// capture nor reads. The next one is a shortcut again.
+    #[test]
+    fn keys_ending_a_slider_number_edit_are_not_shortcuts() {
+        for leave in [Key::Escape, Key::Enter] {
+            let mut h = Harness::new(false, false);
+            // The slider's number box sits at its right end.
+            let number = h.rects[ZOOM].right_center() - Vec2::new(10.0, 0.0);
+            h.pass(click(number));
+            assert!(h.ctx.text_edit_focused(), "editing the number");
+            h.pass(key(leave));
+            assert_eq!(h.focused(), None, "{leave:?} ends the edit");
+            assert_eq!(h.shortcuts, 0, "{leave:?} was a shortcut");
+            h.pass(key(leave));
+            assert_eq!(h.shortcuts, 1, "{leave:?} after the edit");
+            assert_eq!(h.rotations, 0);
+        }
+    }
+
+    /// A window closed under the pointer does not keep the keys.
+    #[test]
+    fn a_closed_window_under_the_pointer_gives_the_keys_back() {
+        let mut h = Harness::new(true, false);
+        h.pass(click(h.at(NAME)));
+        h.settings_open = false;
+        h.pass(Vec::new());
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// In Settings, with the pointer elsewhere, tab walks text field -> combo box
+    /// -> text field -> an unedited DragValue -> text field and back, one key per
+    /// pass, and none of it is a shortcut. (egui lands a backward move at the
+    /// start of the following pass, so each shift+tab shows on the next one.)
+    #[test]
+    fn settings_keep_egui_tab_navigation() {
+        let mut h = Harness::new(true, false);
+        h.click_field(NAME);
+        for want in [DEVICE, URL, MAX_TOKENS, API_KEY] {
+            h.pass(key(Key::Tab));
+            assert_eq!(h.focused(), Some(want), "tab");
+        }
+        h.pass(shift_tab());
+        for want in [MAX_TOKENS, URL, DEVICE] {
+            h.pass(shift_tab());
+            assert_eq!(h.focused(), Some(want), "shift+tab");
+        }
+        h.pass(key(Key::Space));
+        assert_eq!(h.focused(), Some(NAME), "shift+tab");
+        assert_eq!(h.shortcuts, 0);
+        assert_eq!(h.rotations, 0);
+    }
+
+    #[test]
+    fn shift_tab_into_an_unedited_drag_value_keeps_it() {
+        let mut h = Harness::new(true, false);
+        h.click_field(API_KEY);
+        h.pass(shift_tab());
+        h.pass(key(Key::Space));
+        assert_eq!(h.focused(), Some(MAX_TOKENS));
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 0);
+        assert_eq!(h.rotations, 0);
+    }
+
+    /// With Settings open but not in use, tab still walks the blocks: egui never
+    /// sees it, so it cannot pull the focus into the window's first field.
+    #[test]
+    fn tab_on_the_camera_window_stays_a_shortcut_with_settings_open() {
+        let mut h = Harness::new(true, false);
+        h.pass(move_to(CANVAS));
+        h.pass(key(Key::Tab));
+        h.pass(key(Key::Tab));
+        h.pass(key(Key::Enter));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 3);
+    }
+
+    /// Tab off Settings' last widget lands on the camera window; the key after it
+    /// is a shortcut, not a press of whatever got the focus.
+    #[test]
+    fn tab_out_of_settings_hands_the_keys_back() {
+        let mut h = Harness::new(true, false);
+        h.click_field(API_KEY);
+        h.pass(key(Key::Tab));
+        h.pass(key(Key::Enter));
+        assert_eq!(h.rotations, 0);
+        assert_eq!(h.shortcuts, 1);
+        assert_eq!(h.focused(), None);
+    }
+
+    /// Escape straight after clicking into a field only leaves the field; the
+    /// next key is a shortcut.
+    #[test]
+    fn escape_out_of_a_field_is_not_a_shortcut() {
+        let mut h = Harness::new(true, false);
+        h.click_field(NAME);
+        h.pass(key(Key::Escape));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 0);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// Enter submitting a single-line field is the field's; the very next enter
+    /// reads.
+    #[test]
+    fn enter_after_submitting_a_field_reads() {
+        let mut h = Harness::new(true, false);
+        h.click_field(URL);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 0);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// Closing Settings with a field focused gives the keys back at once.
+    #[test]
+    fn closing_settings_hands_the_keys_back() {
+        let mut h = Harness::new(true, false);
+        h.click_field(NAME);
+        h.settings_open = false;
+        h.pass(Vec::new());
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// With the pointer over the history window, the keys are egui's: tab
+    /// focuses its first widget, which keeps them once the pointer is off it
+    /// until escape; then they are shortcuts again.
+    #[test]
+    fn a_hovered_window_takes_the_keys() {
+        let mut h = Harness::new(false, true);
+        h.pass(move_to(h.at(HISTORY)));
+        h.pass(key(Key::Enter));
+        h.pass(key(Key::Tab));
+        assert!(h.focused().is_some_and(|w| w != ROTATE && w != ENHANCE));
+        h.pass(move_to(CANVAS));
+        h.pass(key(Key::Space));
+        h.pass(key(Key::Escape));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 0);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+        assert_eq!(h.rotations, 0);
+    }
+
+    /// An open popup (the enhance combo box, opened from the unfocused camera
+    /// window) takes the keys until it closes.
+    #[test]
+    fn an_open_popup_takes_the_keys() {
+        let mut h = Harness::new(false, false);
+        h.pass(click(h.at(ENHANCE)));
+        assert!(egui::Popup::is_any_open(&h.ctx), "the popup is open");
+        h.pass(key(Key::ArrowDown));
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 0);
+        h.pass(click(CANVAS));
+        assert!(!egui::Popup::is_any_open(&h.ctx), "the popup is closed");
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
+        assert_eq!(h.rotations, 0);
+    }
 
     /// A 6x4 source frame with luma = 16 + x + 10 y, so every pixel is identifiable.
     fn frame() -> YuvFrame {

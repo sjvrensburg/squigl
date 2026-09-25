@@ -25,12 +25,16 @@ pub struct Outcome {
     pub apply_scale: bool,
 }
 
+/// The window's title.
+pub const TITLE: &str = "Settings";
+
 /// Draws the window; `draft` is edited in place.
 pub fn show(ctx: &egui::Context, open: &mut bool, draft: &mut Config) -> Outcome {
     let mut action = Action::None;
     let mut apply_scale = false;
     let mut stay_open = *open;
-    egui::Window::new("Settings")
+    egui::Window::new(TITLE)
+        .id(crate::app::window_id(TITLE))
         .open(&mut stay_open)
         .default_width(520.0)
         .resizable(true)
