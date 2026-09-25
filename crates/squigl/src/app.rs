@@ -2261,12 +2261,14 @@ pub fn window_id(title: &str) -> egui::Id {
 ///
 /// A window (Settings, the history) or popup owns the keys while one of its
 /// widgets has the focus, while it is open (a popup) or while the pointer is over
-/// it (a window); then egui has them all, with its own navigation. The focus as
-/// the last pass left it counts too: egui drops a field's focus on escape before
-/// the pass begins, and that escape is still the field's.
+/// it (a window); then egui has them all, with its own navigation. So does a text
+/// editor on the camera window (the typed number of the zoom or an enhance
+/// slider). The focus as the last pass left it counts too: egui drops a field's
+/// focus on escape before the pass begins, and that escape is still the field's.
 #[derive(Debug, Default)]
 struct KeyFocus {
-    /// A window or popup widget had the focus at the end of the last pass.
+    /// A window or popup widget, or a text editor anywhere (a slider's typed
+    /// number), had the focus at the end of the last pass.
     window_had_focus: bool,
 }
 
@@ -2303,13 +2305,14 @@ impl KeyFocus {
         self.window_had_focus = Self::window_has_focus(ctx, open_windows);
     }
 
-    /// Whether a widget of an open window, or of a popup, has the focus.
+    /// Whether a widget of an open window, or of a popup, or a text editor on the
+    /// camera window has the focus.
     fn window_has_focus(ctx: &egui::Context, open_windows: &[&str]) -> bool {
         let focused = ctx.memory(|m| m.focused());
         focused
             .and_then(|id| ctx.read_response(id))
             .is_some_and(|r| match r.layer_id.order {
-                egui::Order::Background => false,
+                egui::Order::Background => ctx.text_edit_focused(),
                 egui::Order::Middle => open_windows
                     .iter()
                     .any(|title| r.layer_id.id == window_id(title)),
@@ -2686,8 +2689,9 @@ mod tests {
         device: usize,
         enhance: usize,
         max_tokens: u32,
-        /// Settings' fields (see `NAME`...), then Rotate, the enhance combo box
-        /// and the history window.
+        zoom: f32,
+        /// Settings' fields (see `NAME`...), then Rotate, the enhance combo box,
+        /// the history window and the zoom slider.
         ids: Vec<egui::Id>,
         rects: Vec<egui::Rect>,
         rotations: usize,
@@ -2700,6 +2704,7 @@ mod tests {
     const ROTATE: usize = 5;
     const ENHANCE: usize = 6;
     const HISTORY: usize = 7;
+    const ZOOM: usize = 8;
 
     impl Harness {
         fn new(settings_open: bool, history_open: bool) -> Self {
@@ -2712,8 +2717,9 @@ mod tests {
                 device: 0,
                 enhance: 0,
                 max_tokens: 512,
-                ids: vec![egui::Id::NULL; 8],
-                rects: vec![egui::Rect::NOTHING; 8],
+                zoom: 1.0,
+                ids: vec![egui::Id::NULL; 9],
+                rects: vec![egui::Rect::NOTHING; 9],
                 rotations: 0,
                 shortcuts: 0,
                 passes: 0,
@@ -2812,6 +2818,10 @@ mod tests {
                         ComboBox::from_id_salt("enhance-mode")
                             .selected_text(["Off", "Auto", "Ink"][self.enhance])
                             .show_index(ui, &mut self.enhance, 3, |i| ["Off", "Auto", "Ink"][i]),
+                    ));
+                    seen.push((
+                        ZOOM,
+                        ui.add(Slider::new(&mut self.zoom, 1.0..=8.0).fixed_decimals(2)),
                     ));
                 });
                 self.keys.end_pass(ui.ctx(), &self.open());
@@ -2939,6 +2949,26 @@ mod tests {
         off.extend(key(Key::Enter));
         h.pass(off);
         assert_eq!(h.shortcuts, 1);
+    }
+
+    /// Escape or enter ending the typed number of a camera-window slider (the
+    /// zoom, the enhance knobs) is the editor's: it neither drops the box or the
+    /// capture nor reads. The next one is a shortcut again.
+    #[test]
+    fn keys_ending_a_slider_number_edit_are_not_shortcuts() {
+        for leave in [Key::Escape, Key::Enter] {
+            let mut h = Harness::new(false, false);
+            // The slider's number box sits at its right end.
+            let number = h.rects[ZOOM].right_center() - Vec2::new(10.0, 0.0);
+            h.pass(click(number));
+            assert!(h.ctx.text_edit_focused(), "editing the number");
+            h.pass(key(leave));
+            assert_eq!(h.focused(), None, "{leave:?} ends the edit");
+            assert_eq!(h.shortcuts, 0, "{leave:?} was a shortcut");
+            h.pass(key(leave));
+            assert_eq!(h.shortcuts, 1, "{leave:?} after the edit");
+            assert_eq!(h.rotations, 0);
+        }
     }
 
     /// A window closed under the pointer does not keep the keys.
