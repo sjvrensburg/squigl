@@ -221,6 +221,8 @@ Keys: `space` capture/retake, `enter` read, `L` block mode on/off, `tab`/`shift+
 next/previous block, `ctrl+enter` read all blocks, `esc` clear the region (then
 retake), `R`/`shift+R` rotate, `ctrl+S` save (to `~/Pictures/squigl/`, or `--save-dir`),
 `shift+enter` second opinion, `ctrl+,` settings, `H` reading history,
+`M` maximise/restore the active pane (the one last clicked), `D` detach it into its
+own window or attach it back (closing that window also re-attaches it),
 `ctrl+plus`/`ctrl+minus`/`ctrl+0` window scale.
 Phone zoom: the slider, the wheel over the preview, `+`/`-`, `0` to reset. The
 region: drag inside it to move it, drag a corner handle to reshape it, arrow keys to
