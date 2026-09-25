@@ -46,6 +46,13 @@ Exercise the whole V4L2 sink path with **no phone attached**:
 ./target/release/squigl-cli --test-pattern --device /dev/video10
 ```
 
+Exercise the WebRTC source (no ADB, no phone -- any browser on the LAN works for
+testing, `--webrtc-bind 127.0.0.1` even lets you test from the same machine):
+```
+./target/release/squigl-cli --webrtc --webrtc-bind 127.0.0.1 --device /dev/video10
+```
+then open `https://127.0.0.1:8443/` and accept the self-signed certificate warning.
+
 ## Releases
 
 `.github/workflows/release.yml` runs on a `v*` tag: builds both binaries on
@@ -103,10 +110,28 @@ The pipeline, in data-flow order (all in `phone-cam4linux/src/`):
 7. **`loopback.rs`** — auto-loads `v4l2loopback` via `pkexec modprobe` if the device
    node is missing.
 
+**`webrtc_source.rs`** is a second, independent camera source alongside `session.rs`,
+for phones that stream over the network instead of ADB (there's no squigl-side app to
+push here, unlike scrcpy-server -- the phone side is a browser page doing
+`getUserMedia` and posting an SDP offer over HTTP, WHIP-style). `WebrtcSource::accept_offer`
+drives `str0m` (a sans-I/O WebRTC/ICE/DTLS/SRTP implementation, chosen because it fits
+this crate's synchronous style with no async runtime) to answer the offer, restricted to
+H.264 only (`clear_codecs().enable_h264(true)`); `run`/`run_to_v4l2` then block decoding
+frames the same way `CameraSession::run` does. str0m's H.264 depacketizer already hands
+back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` unchanged --
+no format conversion between the two sources. LAN-only by design: a host ICE candidate
+on the bound interface, no STUN/TURN, no auth.
+
 `crates/squigl-cli` is a clap CLI over this library; it owns the policy bits: Ctrl-C/SIGTERM
 handling, the reconnect-with-backoff loop (keeping the V4L2 sink open across sessions),
-`--list-sizes` and `--resolution max`. `contrib/` has boot-time loopback config and a
-systemd user unit.
+`--list-sizes` and `--resolution max`. `--webrtc` switches to the WebRTC source instead of
+ADB: `webrtc_server.rs` runs a `tiny_http` HTTPS server (a fresh `rcgen` self-signed cert
+per run -- `getUserMedia` needs a secure context and a LAN IP isn't CA-certifiable, so the
+phone's browser shows a one-time-per-restart warning to accept) serving `webrtc_capture.html`
+(the `getUserMedia` + `RTCPeerConnection` page, with `setCodecPreferences` steering the
+browser to H.264 since that's all squigl decodes) at `/` and a minimal WHIP-shaped ingest
+endpoint at `POST /whip` (one session at a time; a second POST while one is active gets a
+503). `contrib/` has boot-time loopback config and a systemd user unit.
 
 `crates/squigl` is the egui document-camera window (`stream.rs`: worker thread with
 the reconnect loop, publishing the latest `YuvFrame`; `app.rs`: preview, crop in
@@ -225,6 +250,9 @@ white-balance control exists at any version.
 
 ## Scope
 
-Camera→V4L2 only (no audio, display mirroring, or input control). USB and TCP/IP ADB
-(`--connect`); the one-time `--tcpip` switch needs USB. Cross-platform virtual-camera sinks (Windows/macOS) are explicitly out of
-scope — V4L2 is Linux-only.
+Camera→V4L2 only (no audio, display mirroring, or input control). Two camera sources:
+USB/TCP-IP ADB (`--connect`; the one-time `--tcpip` switch needs USB) via scrcpy-server,
+and `--webrtc` (any browser, no app, LAN only -- see `webrtc_source.rs` above; no
+STUN/TURN means it does not reach a phone outside the local network, and it has none of
+the zoom/torch/facing control the ADB path gets from scrcpy). Cross-platform
+virtual-camera sinks (Windows/macOS) are explicitly out of scope — V4L2 is Linux-only.

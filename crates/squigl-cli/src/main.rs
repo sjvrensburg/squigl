@@ -4,10 +4,13 @@ use phone_cam4linux::adb::AdbDevice;
 use phone_cam4linux::cameras::{is_usable_size, largest_usable_size};
 use phone_cam4linux::decode::Backend;
 use phone_cam4linux::{loopback, sink::V4l2Sink, ConnectOptions, Facing};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+mod webrtc_server;
 
 /// Stream an Android phone's camera to a Linux V4L2 device.
 #[derive(Parser, Debug)]
@@ -81,6 +84,25 @@ struct Args {
     /// Useful for testing the loopback/format/sink path without hardware attached.
     #[arg(long)]
     test_pattern: bool,
+
+    /// Skip ADB entirely: serve a capture page over HTTPS for the phone's browser to
+    /// open (getUserMedia + WebRTC) instead of pushing scrcpy-server. LAN only --
+    /// there's no STUN/TURN, so the phone must be reachable directly. The phone's
+    /// browser will show a self-signed certificate warning once per server restart;
+    /// accepting it is expected. All other camera-control flags (--facing, --zoom,
+    /// --torch, --resolution) don't apply here -- the browser's own camera picker and
+    /// default resolution are in charge instead.
+    #[arg(long, conflicts_with_all = ["serial", "connect", "facing", "zoom", "torch", "test_pattern", "resolution"])]
+    webrtc: bool,
+
+    /// Address to bind the WebRTC capture server to. Defaults to this machine's
+    /// LAN-facing IP (auto-detected).
+    #[arg(long, requires = "webrtc")]
+    webrtc_bind: Option<IpAddr>,
+
+    /// Port for the WebRTC capture server.
+    #[arg(long, requires = "webrtc", default_value_t = 8443)]
+    webrtc_port: u16,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -143,6 +165,14 @@ fn main() -> Result<()> {
 
     if args.test_pattern {
         return run_test_pattern(&args.device, &stop);
+    }
+
+    if args.webrtc {
+        let bind = match args.webrtc_bind {
+            Some(addr) => addr,
+            None => webrtc_server::detect_lan_ip().context("auto-detecting a LAN IP to bind to (pass --webrtc-bind explicitly if this is wrong)")?,
+        };
+        return webrtc_server::run(&args.device, bind, args.webrtc_port, decoder, &stop);
     }
 
     let facing = match args.facing {
