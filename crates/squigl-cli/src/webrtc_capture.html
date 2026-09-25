@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Squigl camera</title>
+<style>
+  body { font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 1rem; }
+  video { width: 100%; border-radius: 8px; background: #000; }
+  #status { margin-top: 1rem; white-space: pre-wrap; font-size: 0.85rem; color: #9cf; }
+  button { font-size: 1.1rem; padding: 0.6rem 1.2rem; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>Squigl camera</h1>
+<video id="preview" autoplay playsinline muted></video>
+<div><button id="start">Start streaming</button></div>
+<div id="status">Tap "Start streaming" and allow camera access. Keep this tab open
+while streaming; closing it or locking the phone ends the session.</div>
+<script>
+const statusEl = document.getElementById('status');
+const log = (msg) => { statusEl.textContent += '\n' + msg; };
+
+document.getElementById('start').addEventListener('click', start, { once: true });
+
+async function start() {
+  try {
+    log('requesting camera...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
+    });
+    document.getElementById('preview').srcObject = stream;
+
+    const pc = new RTCPeerConnection();
+    const [track] = stream.getVideoTracks();
+    const transceiver = pc.addTransceiver(track, { direction: 'sendonly' });
+
+    // squigl only understands H.264 -- steer the browser's encoder to it (it defaults
+    // to VP8/VP9 otherwise) rather than letting negotiation fail on a codec mismatch.
+    if (transceiver.setCodecPreferences && typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities) {
+      const caps = RTCRtpSender.getCapabilities('video');
+      const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+      if (h264.length > 0) {
+        transceiver.setCodecPreferences(h264);
+      } else {
+        log('warning: this browser has no H.264 encoder; streaming will likely fail');
+      }
+    }
+
+    log('creating offer...');
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    // No trickle ICE support server-side (host candidates only, gathered up front),
+    // so wait for gathering to finish before sending the single offer/answer round trip.
+    await waitForIceGathering(pc);
+
+    log('sending offer...');
+    const res = await fetch('/whip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+    });
+    if (!res.ok) {
+      throw new Error(`rejected (${res.status}): ${await res.text()}`);
+    }
+    const answerSdp = await res.text();
+    await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+    pc.oniceconnectionstatechange = () => log('connection: ' + pc.iceConnectionState);
+    log('streaming -- this feeds squigl directly, this preview is just local confirmation.');
+  } catch (e) {
+    log('error: ' + e.message);
+  }
+}
+
+function waitForIceGathering(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    pc.addEventListener('icegatheringstatechange', function check() {
+      if (pc.iceGatheringState === 'complete') {
+        pc.removeEventListener('icegatheringstatechange', check);
+        resolve();
+      }
+    });
+  });
+}
+</script>
+</body>
+</html>
