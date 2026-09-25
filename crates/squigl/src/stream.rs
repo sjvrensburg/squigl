@@ -125,22 +125,27 @@ impl Shared {
 
     /// Asks for the camera zoom `zoom` (snapped to the phone's x1.0625 grid; the
     /// phone clamps to its range). Applied live by the zoom thread when a session is
-    /// up, and remembered for the next connection either way.
-    pub fn set_zoom(&self, zoom: f32) {
+    /// up, and remembered for the next connection either way. Returns whether the
+    /// target moved: a value that snaps back to the current grid step (a slider
+    /// re-rounding what it shows) is no change.
+    pub fn set_zoom(&self, zoom: f32) -> bool {
         let target = zoom_to_steps(zoom);
         let mut state = self.zoom.lock().unwrap();
-        if state.target != target {
-            state.target = target;
-            let ratio = steps_to_zoom(target);
-            self.config.lock().unwrap().options.zoom = (ratio > 1.0).then_some(ratio);
-            self.zoom_changed.notify_all();
+        if state.target == target {
+            return false;
         }
+        state.target = target;
+        let ratio = steps_to_zoom(target);
+        self.config.lock().unwrap().options.zoom = (ratio > 1.0).then_some(ratio);
+        self.zoom_changed.notify_all();
+        true
     }
 
-    /// One grid step in (`+1`) or out (`-1`) from the current target.
-    pub fn step_zoom(&self, steps: i32) {
+    /// One grid step in (`+1`) or out (`-1`) from the current target. Returns
+    /// whether the target moved (it does not below 1x).
+    pub fn step_zoom(&self, steps: i32) -> bool {
         let target = self.zoom.lock().unwrap().target + steps;
-        self.set_zoom(steps_to_zoom(target.max(0)));
+        self.set_zoom(steps_to_zoom(target.max(0)))
     }
 
     /// The zoom thread: walk the applied zoom towards the target, one control message
@@ -207,6 +212,27 @@ impl Shared {
         self.restart.store(true, Ordering::Relaxed);
     }
 
+    /// The state for a worker that has not connected yet, starting at the
+    /// configured zoom.
+    fn new(config: StreamConfig) -> Self {
+        let start = zoom_to_steps(config.options.zoom.unwrap_or(1.0));
+        Self {
+            stop: AtomicBool::new(false),
+            restart: AtomicBool::new(false),
+            frames: AtomicU64::new(0),
+            latest: Mutex::new(None),
+            status: Mutex::new(Status::Connecting),
+            config: Mutex::new(config),
+            cameras: Mutex::new(Vec::new()),
+            control: Mutex::new(None),
+            zoom: Mutex::new(ZoomState {
+                applied: start,
+                target: start,
+            }),
+            zoom_changed: Condvar::new(),
+        }
+    }
+
     fn set_status(&self, status: Status) {
         *self.status.lock().unwrap() = status;
     }
@@ -221,26 +247,7 @@ impl Worker {
     /// Starts streaming in the background. `wake` is called after every frame and
     /// status change so the UI can repaint.
     pub fn start(config: StreamConfig, wake: impl Fn() + Send + 'static) -> Self {
-        let shared = Arc::new(Shared {
-            stop: AtomicBool::new(false),
-            restart: AtomicBool::new(false),
-            frames: AtomicU64::new(0),
-            latest: Mutex::new(None),
-            status: Mutex::new(Status::Connecting),
-            config: Mutex::new(config),
-            cameras: Mutex::new(Vec::new()),
-            control: Mutex::new(None),
-            zoom: Mutex::new(ZoomState {
-                applied: 0,
-                target: 0,
-            }),
-            zoom_changed: Condvar::new(),
-        });
-        let start = zoom_to_steps(shared.config.lock().unwrap().options.zoom.unwrap_or(1.0));
-        *shared.zoom.lock().unwrap() = ZoomState {
-            applied: start,
-            target: start,
-        };
+        let shared = Arc::new(Shared::new(config));
         let zoom_shared = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("squigl-zoom".into())
@@ -421,5 +428,44 @@ fn sleep_unless(total: Duration, done: impl Fn() -> bool) {
     let deadline = Instant::now() + total;
     while !done() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared() -> Shared {
+        Shared::new(StreamConfig {
+            options: ConnectOptions::default(),
+            resolution: Resolution::PhoneDefault,
+            tee_device: None,
+        })
+    }
+
+    /// The zoom slider shows the target rounded to two decimals and writes that back
+    /// every frame; at any zoom off 1x that must not count as a change, or a capture
+    /// is dropped the frame after it is taken.
+    #[test]
+    fn a_rounded_slider_value_is_no_zoom_change() {
+        let s = shared();
+        for steps in 1..60 {
+            assert!(s.set_zoom(steps_to_zoom(steps)));
+            let shown = (s.zoom() * 100.0).round() / 100.0;
+            assert!(
+                !s.set_zoom(shown),
+                "{shown} moved the zoom off step {steps}"
+            );
+            assert_eq!(zoom_to_steps(s.zoom()), steps);
+        }
+    }
+
+    #[test]
+    fn stepping_reports_whether_the_zoom_moved() {
+        let s = shared();
+        assert!(!s.step_zoom(-2), "already at 1x");
+        assert!(s.step_zoom(2));
+        assert!(!s.set_zoom(s.zoom()));
+        assert!(s.set_zoom(1.0));
     }
 }

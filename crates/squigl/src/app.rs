@@ -1426,17 +1426,18 @@ impl App {
                         .suffix("x")
                         .fixed_decimals(2),
                 );
-                if slider.changed() {
+                // `changed()` alone is not a move: the slider re-rounds the shown
+                // value to two decimals every frame, which is off the zoom grid.
+                if slider.changed() && self.shared().set_zoom(value) {
                     self.go_live();
-                    self.shared().set_zoom(value);
                 }
                 if ui
                     .button("1x  [0]")
                     .on_hover_text("reset the phone's zoom")
                     .clicked()
+                    && self.shared().set_zoom(1.0)
                 {
                     self.go_live();
-                    self.shared().set_zoom(1.0);
                 }
             });
         }
@@ -1607,9 +1608,8 @@ impl App {
         if response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             let notches = wheel_notches(&mut self.wheel_preview, delta);
-            if notches != 0 {
+            if notches != 0 && self.shared().step_zoom(notches) {
                 self.go_live();
-                self.shared().step_zoom(notches);
             }
         }
 
@@ -1745,52 +1745,6 @@ impl App {
         egui::CentralPanel::default().show(ui, |ui| self.crop_image(ui, frame));
     }
 
-    /// Live enhancement controls: mode, and -- once it is on -- the knobs that shape
-    /// it. Deliberately not a one-time tuned setting: light, angle and distance vary
-    /// shot to shot, so the user drives these directly while looking at the result.
-    fn enhance_controls(&mut self, ui: &mut egui::Ui) {
-        let cfg = &mut self.config.enhance;
-        ui.horizontal(|ui| {
-            ui.label("Enhance [E]");
-            ComboBox::from_id_salt("enhance-mode")
-                .selected_text(cfg.mode.label())
-                .show_ui(ui, |ui| {
-                    for mode in [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink] {
-                        ui.selectable_value(&mut cfg.mode, mode, mode.label());
-                    }
-                });
-            if cfg.mode == EnhanceMode::Ink {
-                ComboBox::from_id_salt("enhance-channel")
-                    .selected_text(cfg.channel.label())
-                    .show_ui(ui, |ui| {
-                        for channel in enhance::Channel::ALL {
-                            ui.selectable_value(&mut cfg.channel, channel, channel.label());
-                        }
-                    });
-            }
-        });
-        if cfg.mode != EnhanceMode::Off {
-            ui.horizontal(|ui| {
-                ui.label("Strength");
-                ui.add(Slider::new(&mut cfg.strength, 0.0..=1.0).step_by(0.05));
-                ui.label("Black pt");
-                ui.add(
-                    Slider::new(&mut cfg.black_point, 0.0..=49.0)
-                        .step_by(1.0)
-                        .suffix("%"),
-                );
-                ui.label("White pt");
-                ui.add(
-                    Slider::new(&mut cfg.white_point, 51.0..=100.0)
-                        .step_by(1.0)
-                        .suffix("%"),
-                );
-                ui.label("Gamma");
-                ui.add(Slider::new(&mut cfg.gamma, 0.3..=3.0).step_by(0.1));
-            });
-        }
-    }
-
     fn crop_image(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
         let Some(selection) = self.selection() else {
             ui.vertical_centered(|ui| {
@@ -1816,7 +1770,7 @@ impl App {
             return;
         };
         let crop = selection.rect;
-        self.enhance_controls(ui);
+        enhance_controls(ui, &mut self.config.enhance);
         let step = crop.w.max(crop.h).div_ceil(PREVIEW_MAX_EDGE).max(1);
         let (tw, th) = self.crop_view.update(
             ui.ctx(),
@@ -1843,7 +1797,7 @@ impl App {
             })
             .unwrap_or_default();
         ui.label(format!(
-            "{nw}×{nh} px at ({}, {}){}{}{}{}",
+            "{nw}×{nh} px at ({}, {}){}{}{}",
             crop.x,
             crop.y,
             if selection.quad.is_some() {
@@ -1857,11 +1811,6 @@ impl App {
                 String::new()
             },
             block,
-            if self.config.enhance.mode != EnhanceMode::Off {
-                format!(", enhanced ({})", self.config.enhance.mode.label())
-            } else {
-                String::new()
-            },
         ));
         let avail = ui.available_size();
         let scale = (avail.x / nw as f32).min(avail.y / nh as f32);
@@ -2012,7 +1961,13 @@ impl App {
             });
     }
 
-    fn handle_keys(&mut self, ctx: &egui::Context) {
+    /// `typing`: a text field had the focus as the pass began (a single-line one
+    /// gives it up on the very enter that submits it).
+    fn handle_keys(&mut self, ctx: &egui::Context, typing: bool) {
+        // Typing into a text field (settings, prompts) is not a shortcut.
+        if typing || ctx.text_edit_focused() {
+            return;
+        }
         let (space, esc, save, rot_cw, rot_ccw, enter, read_all) = ctx.input(|i| {
             (
                 i.key_pressed(Key::Space),
@@ -2066,17 +2021,11 @@ impl App {
                 i.key_pressed(Key::Num0),
             )
         });
-        if zoom_in || zoom_out || zoom_reset {
+        let moved = (zoom_in && self.shared().step_zoom(2))
+            | (zoom_out && self.shared().step_zoom(-2))
+            | (zoom_reset && self.shared().set_zoom(1.0));
+        if moved {
             self.go_live();
-        }
-        if zoom_in {
-            self.shared().step_zoom(2);
-        }
-        if zoom_out {
-            self.shared().step_zoom(-2);
-        }
-        if zoom_reset {
-            self.shared().set_zoom(1.0);
         }
         // Digital box: [ / ] shrink and grow, arrows pan (shift: finer).
         if let (Some(crop), Some((vw, vh))) = (self.crop, self.crop_space) {
@@ -2174,11 +2123,12 @@ impl eframe::App for App {
             self.ctx = Some(ui.ctx().clone());
             ui.ctx().set_zoom_factor(self.config.ui.scale);
         }
+        let typing = keep_focus_off_widgets(ui.ctx());
         self.track_zoom(ui.ctx());
         self.settings_window(ui.ctx());
         self.history_window(ui.ctx());
         self.fps.tick(self.shared().frames());
-        self.handle_keys(ui.ctx());
+        self.handle_keys(ui.ctx(), typing);
         self.handle_screenshot(ui.ctx());
         self.drop_stale_blocks();
         self.poll_read();
@@ -2266,6 +2216,78 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.worker.stop();
     }
+}
+
+/// Keyboard focus is for text fields only. Everything else in the window is driven
+/// by global keys, several of which egui also reads as focus moves (tab walks the
+/// blocks, the arrows pan the box): left alone, those park focus on a widget such
+/// as Rotate, and enter or space then presses it instead of reading or capturing.
+/// Called before any widget is drawn, so this pass's focus move is cancelled too.
+/// Returns whether a text field has the focus (keys are typing, not shortcuts).
+fn keep_focus_off_widgets(ctx: &egui::Context) -> bool {
+    if ctx.text_edit_focused() {
+        return true;
+    }
+    ctx.memory_mut(|m| {
+        m.move_focus(egui::FocusDirection::None);
+        if let Some(id) = m.focused() {
+            m.surrender_focus(id);
+        }
+    });
+    false
+}
+
+/// Live enhancement controls: mode, and the knobs that shape it. Deliberately not a
+/// one-time tuned setting: light, angle and distance vary shot to shot, so the user
+/// drives these directly while looking at the result. Every control is always laid
+/// out -- disabled when the mode does not use it -- in a fixed grid, so switching the
+/// mode never changes the size of anything around them.
+fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig) {
+    ui.horizontal(|ui| {
+        ui.label("Enhance [E]");
+        ComboBox::from_id_salt("enhance-mode")
+            .selected_text(cfg.mode.label())
+            .show_ui(ui, |ui| {
+                for mode in [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink] {
+                    ui.selectable_value(&mut cfg.mode, mode, mode.label());
+                }
+            });
+        ui.add_enabled_ui(cfg.mode == EnhanceMode::Ink, |ui| {
+            ComboBox::from_id_salt("enhance-channel")
+                .selected_text(cfg.channel.label())
+                .show_ui(ui, |ui| {
+                    for channel in enhance::Channel::ALL {
+                        ui.selectable_value(&mut cfg.channel, channel, channel.label());
+                    }
+                });
+        });
+    });
+    ui.add_enabled_ui(cfg.mode != EnhanceMode::Off, |ui| {
+        // Two knobs a row: the row of four is wider than a narrow panel, and a
+        // slider does not wrap.
+        egui::Grid::new("enhance-knobs")
+            .num_columns(4)
+            .show(ui, |ui| {
+                ui.label("Strength");
+                ui.add(Slider::new(&mut cfg.strength, 0.0..=1.0).step_by(0.05));
+                ui.label("Gamma");
+                ui.add(Slider::new(&mut cfg.gamma, 0.3..=3.0).step_by(0.1));
+                ui.end_row();
+                ui.label("Black pt");
+                ui.add(
+                    Slider::new(&mut cfg.black_point, 0.0..=49.0)
+                        .step_by(1.0)
+                        .suffix("%"),
+                );
+                ui.label("White pt");
+                ui.add(
+                    Slider::new(&mut cfg.white_point, 51.0..=100.0)
+                        .step_by(1.0)
+                        .suffix("%"),
+                );
+                ui.end_row();
+            });
+    });
 }
 
 /// Amber/red tint for a wavering/hesitant token; `None` for steady (shown plain).
@@ -2472,6 +2494,115 @@ impl FpsCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One headless egui pass.
+    fn pass(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) {
+        ctx.run_ui(input, f).drop_without_applying_deltas();
+    }
+
+    /// A narrowish crop panel: 40% of a 1280 px window, less its margins.
+    const PANEL_WIDTH: f32 = 480.0;
+
+    /// Lays out `f` in a fixed-width region, one pass per call, returning the
+    /// size it took.
+    fn laid_out(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> Vec2 {
+        let mut f = f;
+        let mut size = Vec2::ZERO;
+        pass(ctx, input, |ui| {
+            size = ui
+                .allocate_ui(Vec2::new(PANEL_WIDTH, 600.0), |ui| f(ui))
+                .response
+                .rect
+                .size();
+        });
+        size
+    }
+
+    #[test]
+    fn switching_enhancement_keeps_its_controls_the_same_size() {
+        let ctx = egui::Context::default();
+        let sizes: Vec<Vec2> = [EnhanceMode::Off, EnhanceMode::Auto, EnhanceMode::Ink]
+            .into_iter()
+            .map(|mode| {
+                let mut cfg = EnhanceConfig {
+                    mode,
+                    ..EnhanceConfig::default()
+                };
+                // Twice: the first pass only measures the text.
+                laid_out(&ctx, Default::default(), |ui| {
+                    enhance_controls(ui, &mut cfg)
+                });
+                laid_out(&ctx, Default::default(), |ui| {
+                    enhance_controls(ui, &mut cfg)
+                })
+            })
+            .collect();
+        assert!(sizes.iter().all(|s| *s == sizes[0]), "{sizes:?}");
+        assert!(sizes[0].x <= PANEL_WIDTH, "wider than the panel: {sizes:?}");
+    }
+
+    fn key(key: Key) -> egui::RawInput {
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Tab (walking blocks) must not land keyboard focus on a button, whose click
+    /// enter would then fake instead of the read.
+    #[test]
+    fn tab_and_enter_never_press_a_button() {
+        let ctx = egui::Context::default();
+        let mut clicks = 0;
+        let mut frame = |input: egui::RawInput| {
+            pass(&ctx, input, |ui| {
+                keep_focus_off_widgets(ui.ctx());
+                if ui.button("Rotate right  [R]").clicked() {
+                    clicks += 1;
+                }
+            });
+        };
+        frame(Default::default());
+        for _ in 0..3 {
+            frame(key(Key::Tab));
+            frame(key(Key::Enter));
+            frame(key(Key::ArrowRight));
+            frame(key(Key::Space));
+        }
+        assert_eq!(clicks, 0);
+        assert_eq!(ctx.memory(|m| m.focused()), None);
+    }
+
+    /// ... while a text field keeps its focus, and with it the keys typed into it.
+    #[test]
+    fn a_text_field_keeps_keyboard_focus() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let mut id = None;
+        let mut frame = |input: egui::RawInput, focus: bool| {
+            pass(&ctx, input, |ui| {
+                keep_focus_off_widgets(ui.ctx());
+                let r = ui.text_edit_multiline(&mut text);
+                if focus {
+                    r.request_focus();
+                }
+                id = Some(r.id);
+            });
+        };
+        frame(Default::default(), true);
+        frame(Default::default(), false);
+        frame(key(Key::Enter), false);
+        frame(key(Key::ArrowRight), false);
+        assert!(ctx.text_edit_focused());
+        assert_eq!(ctx.memory(|m| m.focused()), id);
+        assert_eq!(text, "\n");
+    }
 
     /// A 6x4 source frame with luma = 16 + x + 10 y, so every pixel is identifiable.
     fn frame() -> YuvFrame {
