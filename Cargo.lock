@@ -4622,7 +4622,7 @@ dependencies = [
 
 [[package]]
 name = "phone-cam4linux"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -6077,7 +6077,7 @@ dependencies = [
 
 [[package]]
 name = "squigl"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6108,7 +6108,7 @@ dependencies = [
 
 [[package]]
 name = "squigl-cli"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
