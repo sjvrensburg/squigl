@@ -123,7 +123,10 @@ formula block) and the perspective `rectify` (imageproc) a
 non-rectangular block goes through before it is shown or read -- feature-independent
 so the window builds without a detector; `history.rs`: every finished read of the
 session (`App::history`, appended alongside `results`, which only ever drops its
-prefix -- "copy all" relies on that), Markdown export by capture; `settings.rs`: the Settings window editing
+prefix -- "copy all" relies on that), Markdown export by capture; `panes.rs`: which
+of Preview/Zoom/Reading is active, maximised or detached (`App::pane` draws one with
+its header; a detached pane is an egui immediate viewport, `App::detached_windows`;
+the shortcuts act only in the main window); `settings.rs`: the Settings window editing
 a draft `Config`, applied by `App::apply_config` (backends whose entry is unchanged
 are kept, so the local model is not reloaded; the detector is rebuilt through the
 `DetectorFactory` main.rs passes in; the scale is egui's zoom factor and the value
