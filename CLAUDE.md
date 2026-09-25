@@ -161,7 +161,9 @@ typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by 
 crate and evaluated inside MiTeX's Typst scope (vendored under `assets/mitex/`, so
 `\operatorname` and friends resolve), the rest escaped as markup, rasterised by
 `typst-render` at the window's pixel density and cached per reading as a texture
-(`app::Typeset`); a reading that fails to compile is shown as text. The `mitex`
+(`app::Typeset`), laid out at the Reading pane's width once a resize settles
+(`SettledWidth`; below `MIN_READING_WIDTH` the pane scrolls sideways instead); a
+reading that fails to compile is shown as text. The `mitex`
 crate's built-in spec predates Typst 0.15's symbol renames (`diff`→`partial`,
 `sect`→`inter`, `plus.circle`→`plus.o`, …), so `modernise` rewrites its output by
 the `RENAMES` table -- extend it when a reading fails with "unknown variable";

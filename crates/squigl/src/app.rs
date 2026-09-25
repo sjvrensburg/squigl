@@ -239,14 +239,59 @@ fn typeset_source(r: &Reading, ui_cfg: &UiConfig) -> (String, Vec<TintSpan>) {
     (text, spans)
 }
 
-/// Width the readings are typeset at, in points; shown scaled down if the panel
-/// is narrower.
-const TYPESET_WIDTH_PT: f32 = 480.0;
+/// The narrowest the readings are laid out at, in points: a narrower Reading pane
+/// scrolls sideways rather than squeezing them.
+const MIN_READING_WIDTH: f32 = 320.0;
 
-/// A reading typeset, or why not.
+/// How long the Reading pane's width must hold still before the readings are
+/// typeset again at it, so dragging a divider does not recompile every reading on
+/// every frame.
+const RESIZE_SETTLE: Duration = Duration::from_millis(250);
+
+/// A reading typeset, or why not. An image remembers the width it was laid out
+/// at (typeset points are egui points), so a resized pane lays it out again.
 enum Typeset {
-    Image { texture: TextureHandle, size: Vec2 },
+    Image {
+        texture: TextureHandle,
+        size: Vec2,
+        width_pt: f32,
+    },
     Failed,
+}
+
+/// A width that follows the one it is fed, in whole points, once that has held
+/// still for [`RESIZE_SETTLE`]; the first width is taken at once.
+#[derive(Default)]
+struct SettledWidth {
+    settled: Option<f32>,
+    seen: f32,
+    since: Option<Instant>,
+}
+
+impl SettledWidth {
+    /// Feeds this frame's width; returns the settled width and whether a change
+    /// is still waiting to settle (so the caller asks for a repaint).
+    fn update(&mut self, width: f32, now: Instant) -> (f32, bool) {
+        let width = width.round();
+        match self.settled {
+            None => self.settled = Some(width),
+            Some(s) if s == width => {}
+            Some(_) if width != self.seen || self.since.is_none() => self.since = Some(now),
+            Some(_) => {
+                if self
+                    .since
+                    .is_some_and(|t| now.duration_since(t) >= RESIZE_SETTLE)
+                {
+                    self.settled = Some(width);
+                }
+            }
+        }
+        self.seen = width;
+        if self.settled == Some(width) {
+            self.since = None;
+        }
+        (self.settled.unwrap_or(width), self.settled != Some(width))
+    }
 }
 
 /// One entry in the results list: its block label (in a "read all"), the answer,
@@ -490,6 +535,8 @@ pub struct App {
     /// How many captures so far; history entries say which they came from.
     capture_seq: u32,
     typesetter: Option<Arc<dyn Typesetter>>,
+    /// The width the readings are typeset at, following the Reading pane's.
+    reading_width: SettledWidth,
     /// Show readings typeset (maths rendered) rather than as raw text.
     typeset_on: bool,
     /// The zoom factor the typeset textures were rendered for.
@@ -575,6 +622,7 @@ impl App {
             panes: Panes::default(),
             capture_seq: 0,
             typesetter: typesetter.clone(),
+            reading_width: SettledWidth::default(),
             typeset_on: typesetter.is_some(),
             last_zoom: None,
             results_key: None,
@@ -1954,7 +2002,8 @@ impl App {
     /// Backend picker, the Read button, and the readings so far.
     fn read_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        // Wrapped, so a narrow pane stacks the controls rather than cutting them off.
+        ui.horizontal_wrapped(|ui| {
             let what = match self.read_mode() {
                 Mode::Crop => "Read the box  [enter]",
                 Mode::Formula => "Read the formula  [enter]",
@@ -2008,7 +2057,7 @@ impl App {
                 .get(self.selected_backend)
                 .and_then(|b| b.status())
             {
-                ui.weak(status);
+                ui.add(egui::Label::new(egui::RichText::new(status).weak()).extend());
             }
             if !self.results.is_empty() {
                 if ui
@@ -2036,16 +2085,22 @@ impl App {
                 self.history_open = !self.history_open;
             }
             if self.typesetter.is_some() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.checkbox(&mut self.typeset_on, "typeset")
-                        .on_hover_text("render the maths; off shows the raw text");
-                });
+                ui.checkbox(&mut self.typeset_on, "typeset")
+                    .on_hover_text("render the maths; off shows the raw text");
             }
         });
         ui.separator();
-        egui::ScrollArea::vertical()
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // As wide as the pane, down to a floor below which it scrolls sideways.
+                let width = ui.available_width().max(MIN_READING_WIDTH);
+                ui.set_min_width(width);
+                ui.set_max_width(width);
+                let (typeset_width, settling) = self.reading_width.update(width, Instant::now());
+                if settling {
+                    ui.ctx().request_repaint_after(RESIZE_SETTLE);
+                }
                 // One read at a time: newest on top. A "read all": in page order.
                 let in_order = matches!(self.results_key, Some((_, ResultsScope::AllBlocks)));
                 let typesetter = self.typeset_on.then(|| self.typesetter.clone()).flatten();
@@ -2064,6 +2119,7 @@ impl App {
                             t,
                             typesetter.as_deref(),
                             &mut entry.typeset,
+                            typeset_width,
                             reading_size,
                             &self.config.ui,
                         ),
@@ -2563,15 +2619,19 @@ fn hesitant_count(r: &Reading, ui_cfg: &UiConfig) -> Option<usize> {
 /// One backend's answer: every distinct reading with its support, and what did not
 /// come back. Text is selectable, with a copy button, since the point is to use it.
 /// With a typesetter, each reading is rendered on first show and cached in
-/// `typeset` by its index; a reading that fails to render stays text.
+/// `typeset` by its index, laid out to fill `width_pt` (what is left of it beside
+/// the row's buttons) and laid out again when that changes; a reading that fails
+/// to render stays text.
 fn show_transcription(
     ui: &mut egui::Ui,
     t: &Transcription,
     typesetter: Option<&dyn Typesetter>,
     typeset: &mut HashMap<usize, Typeset>,
+    width_pt: f32,
     size_pt: f32,
     ui_cfg: &UiConfig,
 ) {
+    let left = ui.max_rect().left();
     ui.horizontal(|ui| {
         ui.strong(&t.backend);
         ui.weak(format!(
@@ -2602,18 +2662,19 @@ fn show_transcription(
             if let Some(n) = hesitant_count(r, ui_cfg).filter(|&n| n > 0) {
                 ui.weak(format!("{n} hesitant"));
             }
+            let row_width = (width_pt - (ui.cursor().min.x - left)).floor();
+            if matches!(typeset.get(&i), Some(Typeset::Image { width_pt, .. }) if *width_pt != row_width)
+            {
+                typeset.remove(&i);
+            }
             let rendered = typesetter.map(|ts| {
                 typeset
                     .entry(i)
-                    .or_insert_with(|| typeset_reading(ui, ts, r, ui_cfg, size_pt))
+                    .or_insert_with(|| typeset_reading(ui, ts, r, ui_cfg, row_width, size_pt))
             });
             match rendered {
-                Some(Typeset::Image { texture, size }) => {
-                    ui.add(
-                        egui::Image::from_texture(&*texture)
-                            .fit_to_exact_size(*size)
-                            .max_width(ui.available_width()),
-                    );
+                Some(Typeset::Image { texture, size, .. }) => {
+                    ui.add(egui::Image::from_texture(&*texture).fit_to_exact_size(*size));
                 }
                 _ => {
                     // Points to egui's logical pixels: 1 pt = 4/3 px at 96 dpi.
@@ -2645,19 +2706,20 @@ fn typeset_reading(
     ts: &dyn Typesetter,
     r: &Reading,
     ui_cfg: &UiConfig,
+    width_pt: f32,
     size_pt: f32,
 ) -> Typeset {
     let colour = ui.visuals().text_color();
     let scale = ui.ctx().pixels_per_point() * 1.5;
     let (text, spans) = typeset_source(r, ui_cfg);
     let rgb = [colour.r(), colour.g(), colour.b()];
-    let mut result = ts.render(&text, &spans, TYPESET_WIDTH_PT, size_pt, scale, rgb);
+    let mut result = ts.render(&text, &spans, width_pt, size_pt, scale, rgb);
     if let Err(e) = &result {
         if !spans.is_empty() {
             log::warn!(
                 "typesetting tinted failed, retrying untinted: {e}\ntext: {text:?}\nspans: {spans:?}"
             );
-            result = ts.render(&text, &[], TYPESET_WIDTH_PT, size_pt, scale, rgb);
+            result = ts.render(&text, &[], width_pt, size_pt, scale, rgb);
         }
     }
     match result {
@@ -2671,6 +2733,7 @@ fn typeset_reading(
             Typeset::Image {
                 texture,
                 size: Vec2::new(w as f32 / scale, h as f32 / scale),
+                width_pt,
             }
         }
         Err(e) => {
@@ -2754,6 +2817,84 @@ mod tests {
             .collect();
         assert!(sizes.iter().all(|s| *s == sizes[0]), "{sizes:?}");
         assert!(sizes[0].x <= PANEL_WIDTH, "wider than the panel: {sizes:?}");
+    }
+
+    #[test]
+    fn settled_width_takes_the_first_at_once_and_a_change_once_still() {
+        let mut w = SettledWidth::default();
+        let t0 = Instant::now();
+        assert_eq!(w.update(600.4, t0), (600.0, false));
+        // Mid-drag: the width keeps moving, so the settled one stays put.
+        let later = |ms| t0 + Duration::from_millis(ms);
+        assert_eq!(w.update(620.0, later(10)), (600.0, true));
+        assert_eq!(w.update(640.0, later(20)), (600.0, true));
+        assert_eq!(w.update(640.0, later(200)), (600.0, true));
+        // Still for long enough since it last moved.
+        assert_eq!(w.update(640.0, later(20) + RESIZE_SETTLE), (640.0, false));
+        // Back to the settled width before settling elsewhere: nothing to do.
+        assert_eq!(w.update(700.0, later(1000)), (640.0, true));
+        assert_eq!(w.update(640.0, later(1010)), (640.0, false));
+        assert_eq!(w.update(700.0, later(2000)), (640.0, true));
+        assert_eq!(w.update(700.0, later(2000) + RESIZE_SETTLE), (700.0, false));
+    }
+
+    /// Records the widths it was asked to typeset at; the image is that wide.
+    #[derive(Default)]
+    struct WidthRecorder(std::sync::Mutex<Vec<f32>>);
+
+    impl Typesetter for WidthRecorder {
+        fn render(
+            &self,
+            _text: &str,
+            _spans: &[TintSpan],
+            width_pt: f32,
+            _size_pt: f32,
+            scale: f32,
+            _rgb: [u8; 3],
+        ) -> anyhow::Result<(image::RgbaImage, f32)> {
+            self.0.lock().unwrap().push(width_pt);
+            let w = (width_pt * scale) as u32;
+            Ok((image::RgbaImage::new(w, 10), scale))
+        }
+    }
+
+    #[test]
+    fn a_typeset_reading_fills_its_width_and_follows_it() {
+        let ctx = egui::Context::default();
+        let ts = WidthRecorder::default();
+        let t = Transcription {
+            backend: "test".into(),
+            readings: vec![Reading {
+                text: "$x$".into(),
+                count: 1,
+                truncated: false,
+                tokens: None,
+            }],
+            silent: 0,
+            samples: 1,
+            elapsed: Duration::ZERO,
+        };
+        let ui_cfg = UiConfig::default();
+        let mut cache = HashMap::new();
+        let mut show = |width: f32| {
+            let mut image_right = 0.0;
+            pass(&ctx, Default::default(), |ui| {
+                let left = ui.max_rect().left();
+                show_transcription(ui, &t, Some(&ts), &mut cache, width, 20.0, &ui_cfg);
+                image_right = ui.min_rect().right() - left;
+            });
+            image_right
+        };
+        let right = show(700.0);
+        show(700.0);
+        show(500.0);
+        let widths = ts.0.lock().unwrap().clone();
+        // Once per width, not per frame; beside the copy button, so a little less.
+        assert_eq!(widths.len(), 2, "{widths:?}");
+        assert!(widths[0] < 700.0 && widths[0] > 600.0, "{widths:?}");
+        assert_eq!(widths[0] - widths[1], 200.0, "{widths:?}");
+        // The image reaches the right edge rather than stopping at a fixed width.
+        assert!((right - 700.0).abs() <= 1.0, "right edge at {right}");
     }
 
     fn key_event(key: Key, modifiers: egui::Modifiers) -> egui::Event {
