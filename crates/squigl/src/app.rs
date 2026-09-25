@@ -523,6 +523,8 @@ pub struct App {
     /// Development aid: write a screenshot of the window to this path after the
     /// delay, then quit.
     screenshot: Option<(Duration, PathBuf, Instant)>,
+    /// Who has the keyboard: the app's shortcuts, or a text field / window.
+    key_focus: KeyFocus,
 }
 
 impl App {
@@ -585,6 +587,7 @@ impl App {
             dev_read_all: false,
             dev_zoom: None,
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
+            key_focus: KeyFocus::default(),
         };
         app.apply_config(config, true);
         app
@@ -1961,11 +1964,10 @@ impl App {
             });
     }
 
-    /// `typing`: a text field had the focus as the pass began (a single-line one
-    /// gives it up on the very enter that submits it).
-    fn handle_keys(&mut self, ctx: &egui::Context, typing: bool) {
-        // Typing into a text field (settings, prompts) is not a shortcut.
-        if typing || ctx.text_edit_focused() {
+    /// `live`: from [`KeyFocus::begin_pass`]. Keys typed into a text field or
+    /// used in the Settings window are not shortcuts.
+    fn handle_keys(&mut self, ctx: &egui::Context, live: bool) {
+        if !keys_are_shortcuts(ctx, live) {
             return;
         }
         let (space, esc, save, rot_cw, rot_ccw, enter, read_all) = ctx.input(|i| {
@@ -2123,12 +2125,12 @@ impl eframe::App for App {
             self.ctx = Some(ui.ctx().clone());
             ui.ctx().set_zoom_factor(self.config.ui.scale);
         }
-        let typing = keep_focus_off_widgets(ui.ctx());
+        let live = self.key_focus.begin_pass(ui.ctx());
         self.track_zoom(ui.ctx());
         self.settings_window(ui.ctx());
         self.history_window(ui.ctx());
         self.fps.tick(self.shared().frames());
-        self.handle_keys(ui.ctx(), typing);
+        self.handle_keys(ui.ctx(), live);
         self.handle_screenshot(ui.ctx());
         self.drop_stale_blocks();
         self.poll_read();
@@ -2218,23 +2220,52 @@ impl eframe::App for App {
     }
 }
 
-/// Keyboard focus is for text fields only. Everything else in the window is driven
-/// by global keys, several of which egui also reads as focus moves (tab walks the
-/// blocks, the arrows pan the box): left alone, those park focus on a widget such
-/// as Rotate, and enter or space then presses it instead of reading or capturing.
-/// Called before any widget is drawn, so this pass's focus move is cancelled too.
-/// Returns whether a text field has the focus (keys are typing, not shortcuts).
-fn keep_focus_off_widgets(ctx: &egui::Context) -> bool {
-    if ctx.text_edit_focused() {
-        return true;
-    }
-    ctx.memory_mut(|m| {
-        m.move_focus(egui::FocusDirection::None);
-        if let Some(id) = m.focused() {
-            m.surrender_focus(id);
+/// Who has the keyboard. The main window is driven by global keys, several of
+/// which egui also reads as focus moves (tab walks the blocks, the arrows pan the
+/// box): left alone, those park focus on a widget such as Rotate, and enter or
+/// space then presses it instead of reading or capturing. So on the main window
+/// focus is for text fields only. Windows (Settings, the history, popups) keep
+/// egui's own keyboard navigation, and while one of their widgets or any text
+/// field has the focus, keys are theirs, not shortcuts.
+#[derive(Debug, Default)]
+struct KeyFocus {
+    /// A text field or window widget had the focus at the start of the last pass.
+    owned_last_pass: bool,
+}
+
+impl KeyFocus {
+    /// Call before any widget is drawn, so a focus move this pass's keys asked for
+    /// on the main window is cancelled too. Returns whether keys may act as the
+    /// app's shortcuts this pass (see [`keys_are_shortcuts`]).
+    fn begin_pass(&mut self, ctx: &egui::Context) -> bool {
+        let owned = ctx.text_edit_focused()
+            || ctx.memory(|m| m.focused()).is_some_and(|id| {
+                // A widget not seen yet (focus asked for ahead of it) is left to egui.
+                ctx.read_response(id)
+                    .is_none_or(|r| r.layer_id.order != egui::Order::Background)
+            });
+        if !owned {
+            ctx.memory_mut(|m| {
+                m.move_focus(egui::FocusDirection::None);
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
         }
-    });
-    false
+        // egui drops a text field's focus on escape before the pass begins, and a
+        // single-line field its own on the enter that submits it: the key that
+        // leaves a field is still the field's.
+        let live = !owned && !self.owned_last_pass;
+        self.owned_last_pass = owned;
+        live
+    }
+}
+
+/// Whether this pass's keys are the app's shortcuts: `live` from
+/// [`KeyFocus::begin_pass`], and no text field took the focus since (a click into
+/// one while the windows were drawn).
+fn keys_are_shortcuts(ctx: &egui::Context, live: bool) -> bool {
+    live && !ctx.text_edit_focused()
 }
 
 /// Live enhancement controls: mode, and the knobs that shape it. Deliberately not a
@@ -2541,58 +2572,195 @@ mod tests {
         assert!(sizes[0].x <= PANEL_WIDTH, "wider than the panel: {sizes:?}");
     }
 
-    fn key(key: Key) -> egui::RawInput {
+    fn press(key: Key, modifiers: egui::Modifiers) -> egui::RawInput {
         egui::RawInput {
             events: vec![egui::Event::Key {
                 key,
                 physical_key: None,
                 pressed: true,
                 repeat: false,
-                modifiers: Default::default(),
+                modifiers,
             }],
             ..Default::default()
         }
     }
 
-    /// Tab (walking blocks) must not land keyboard focus on a button, whose click
-    /// enter would then fake instead of the read.
-    #[test]
-    fn tab_and_enter_never_press_a_button() {
-        let ctx = egui::Context::default();
-        let mut clicks = 0;
-        let mut frame = |input: egui::RawInput| {
-            pass(&ctx, input, |ui| {
-                keep_focus_off_widgets(ui.ctx());
-                if ui.button("Rotate right  [R]").clicked() {
-                    clicks += 1;
-                }
-            });
-        };
-        frame(Default::default());
-        for _ in 0..3 {
-            frame(key(Key::Tab));
-            frame(key(Key::Enter));
-            frame(key(Key::ArrowRight));
-            frame(key(Key::Space));
-        }
-        assert_eq!(clicks, 0);
-        assert_eq!(ctx.memory(|m| m.focused()), None);
+    fn key(key: Key) -> egui::RawInput {
+        press(key, egui::Modifiers::NONE)
     }
 
-    /// ... while a text field keeps its focus, and with it the keys typed into it.
+    /// A stand-in for the app: a Settings-like window (drawn first, as the real one
+    /// is) over a main panel with a Rotate button, the pass gated as `App::ui`
+    /// gates it. Counts the passes whose keys reached the shortcuts.
+    #[derive(Default)]
+    struct Harness {
+        ctx: egui::Context,
+        key_focus: KeyFocus,
+        name: String,
+        url: String,
+        key: String,
+        device: usize,
+        max_tokens: u32,
+        /// Ids of: name, device combo, url, max tokens, key.
+        ids: Vec<egui::Id>,
+        rotations: usize,
+        shortcuts: usize,
+        focus_next: Option<usize>,
+    }
+
+    impl Harness {
+        fn pass(&mut self, input: egui::RawInput) {
+            let ctx = self.ctx.clone();
+            let keys = !input.events.is_empty();
+            pass(&ctx, input, |ui| {
+                let live = self.key_focus.begin_pass(ui.ctx());
+                let mut ids = Vec::new();
+                egui::Window::new("Settings").show(ui.ctx(), |ui| {
+                    ids.push(ui.text_edit_singleline(&mut self.name).id);
+                    ids.push(
+                        ComboBox::from_id_salt("device")
+                            .selected_text(["WebGPU", "CPU"][self.device])
+                            .show_index(ui, &mut self.device, 2, |i| ["WebGPU", "CPU"][i])
+                            .id,
+                    );
+                    ids.push(ui.text_edit_singleline(&mut self.url).id);
+                    ids.push(ui.add(egui::DragValue::new(&mut self.max_tokens)).id);
+                    ids.push(ui.text_edit_singleline(&mut self.key).id);
+                });
+                if let Some(i) = self.focus_next.take() {
+                    ui.memory_mut(|m| m.request_focus(ids[i]));
+                }
+                if !ids.is_empty() {
+                    self.ids = ids;
+                }
+                egui::CentralPanel::default().show(ui, |ui| {
+                    if ui.button("Rotate right  [R]").clicked() {
+                        self.rotations += 1;
+                    }
+                });
+                if keys && keys_are_shortcuts(ui.ctx(), live) {
+                    self.shortcuts += 1;
+                }
+            });
+        }
+
+        fn idle(&mut self) {
+            self.pass(Default::default());
+        }
+
+        /// Settles the window, then puts the focus on field `i`.
+        fn focus(&mut self, i: usize) {
+            for _ in 0..3 {
+                self.idle();
+            }
+            self.focus_next = Some(i);
+            self.idle();
+            self.idle();
+            assert_eq!(self.focused(), Some(i));
+        }
+
+        fn focused(&self) -> Option<usize> {
+            let id = self.ctx.memory(|m| m.focused())?;
+            self.ids.iter().position(|i| *i == id)
+        }
+
+        /// A key, then a quiet pass: the focus it moved to must still be there.
+        fn tab(&mut self, back: bool) -> Option<usize> {
+            let modifiers = if back {
+                egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::NONE
+            };
+            self.pass(press(Key::Tab, modifiers));
+            self.idle();
+            self.idle();
+            self.focused()
+        }
+    }
+
+    /// Tab (walking blocks) must not land keyboard focus on a main-window button,
+    /// whose click enter would then fake instead of the read.
+    #[test]
+    fn tab_and_enter_never_press_a_button() {
+        let mut h = Harness::default();
+        h.idle();
+        for _ in 0..3 {
+            h.pass(key(Key::Tab));
+            h.pass(key(Key::Enter));
+            h.pass(key(Key::ArrowRight));
+            h.pass(key(Key::Space));
+        }
+        assert_eq!(h.rotations, 0);
+        assert_eq!(h.shortcuts, 12, "every key was a shortcut");
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.ctx.memory(|m| m.focused()), None);
+    }
+
+    /// In Settings, tab walks text field -> combo box -> text field -> an unedited
+    /// DragValue -> text field and back, the focus staying put between keys, and
+    /// none of it is a shortcut.
+    #[test]
+    fn settings_keep_egui_tab_navigation() {
+        let mut h = Harness::default();
+        h.focus(0);
+        assert_eq!(h.tab(false), Some(1), "name -> device");
+        assert_eq!(h.tab(false), Some(2), "device -> url");
+        assert_eq!(h.tab(false), Some(3), "url -> max tokens");
+        assert_eq!(h.tab(false), Some(4), "max tokens -> key");
+        assert_eq!(h.tab(true), Some(3), "key -> max tokens");
+        assert_eq!(h.tab(true), Some(2), "max tokens -> url");
+        assert_eq!(h.tab(true), Some(1), "url -> device");
+        assert_eq!(h.tab(true), Some(0), "device -> name");
+        assert_eq!(h.shortcuts, 0);
+        assert_eq!(h.rotations, 0);
+    }
+
+    #[test]
+    fn shift_tab_into_an_unedited_drag_value_keeps_it() {
+        let mut h = Harness::default();
+        h.focus(4);
+        assert_eq!(h.tab(true), Some(3));
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 0);
+    }
+
+    /// Enter submitting a single-line field, and escape leaving one, are the
+    /// field's keys: neither reads nor drops the box or the capture. The next key
+    /// is a shortcut again.
+    #[test]
+    fn keys_leaving_a_text_field_are_not_shortcuts() {
+        for leave in [Key::Enter, Key::Escape] {
+            let mut h = Harness::default();
+            h.focus(0);
+            h.pass(key(leave));
+            assert_eq!(h.focused(), None, "{leave:?} leaves the field");
+            assert_eq!(h.shortcuts, 0, "{leave:?} was a shortcut");
+            h.idle();
+            h.pass(key(Key::Enter));
+            assert_eq!(h.shortcuts, 1, "enter after {leave:?}");
+        }
+    }
+
+    /// ... while a main-window text field keeps its focus, and with it the keys
+    /// typed into it.
     #[test]
     fn a_text_field_keeps_keyboard_focus() {
         let ctx = egui::Context::default();
+        let mut key_focus = KeyFocus::default();
         let mut text = String::new();
         let mut id = None;
+        let mut shortcuts = 0;
         let mut frame = |input: egui::RawInput, focus: bool| {
             pass(&ctx, input, |ui| {
-                keep_focus_off_widgets(ui.ctx());
+                let live = key_focus.begin_pass(ui.ctx());
                 let r = ui.text_edit_multiline(&mut text);
                 if focus {
                     r.request_focus();
                 }
                 id = Some(r.id);
+                if keys_are_shortcuts(ui.ctx(), live) && ui.input(|i| !i.events.is_empty()) {
+                    shortcuts += 1;
+                }
             });
         };
         frame(Default::default(), true);
@@ -2602,6 +2770,7 @@ mod tests {
         assert!(ctx.text_edit_focused());
         assert_eq!(ctx.memory(|m| m.focused()), id);
         assert_eq!(text, "\n");
+        assert_eq!(shortcuts, 0);
     }
 
     /// A 6x4 source frame with luma = 16 + x + 10 y, so every pixel is identifiable.
