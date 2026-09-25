@@ -10,6 +10,7 @@ mod layout;
 mod local;
 #[cfg(feature = "math")]
 mod mathtext;
+mod panes;
 mod settings;
 mod stream;
 mod transcribe;
