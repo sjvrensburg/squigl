@@ -10,6 +10,7 @@ mod layout;
 mod local;
 #[cfg(feature = "math")]
 mod mathtext;
+mod panes;
 mod settings;
 mod stream;
 mod transcribe;
@@ -280,6 +281,14 @@ fn main() -> Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Squigl")
             .with_inner_size([1400.0, 800.0]),
+        // A detached pane is an immediate viewport, painted and swapped inside the
+        // main window's pass: with vsync every swap waits for a refresh, so each
+        // detached window divided the frame rate. egui only repaints on request (a
+        // camera frame, input), so without vsync it does not spin.
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: false,
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(

@@ -16,6 +16,7 @@
 use crate::enhance::{self, EnhanceConfig, EnhanceMode};
 use crate::history::{self, History};
 use crate::layout::{self, Block, BlockDetector, Quad, Role};
+use crate::panes::{Pane, Panes};
 use crate::settings;
 use crate::stream::{Shared, Status, Worker};
 use crate::transcribe::{
@@ -484,6 +485,8 @@ pub struct App {
     /// Every read of the session.
     history: History,
     history_open: bool,
+    /// Which pane is active and which, if any, is maximised.
+    panes: Panes,
     /// How many captures so far; history entries say which they came from.
     capture_seq: u32,
     typesetter: Option<Arc<dyn Typesetter>>,
@@ -525,6 +528,8 @@ pub struct App {
     screenshot: Option<(Duration, PathBuf, Instant)>,
     /// Whether the keys are the camera window's shortcuts or a window's.
     keys: KeyFocus,
+    /// The same, for each detached pane's window, indexed by [`Pane::index`].
+    detached_keys: [KeyFocus; 3],
 }
 
 impl App {
@@ -567,6 +572,7 @@ impl App {
             results: Vec::new(),
             history: History::default(),
             history_open: false,
+            panes: Panes::default(),
             capture_seq: 0,
             typesetter: typesetter.clone(),
             typeset_on: typesetter.is_some(),
@@ -588,6 +594,7 @@ impl App {
             dev_zoom: None,
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
             keys: KeyFocus::default(),
+            detached_keys: Default::default(),
         };
         app.apply_config(config, true);
         app
@@ -1737,18 +1744,122 @@ impl App {
             .map(|(i, _)| i)
     }
 
-    /// The crop at native pixels (decimated only if it is wider than the preview
-    /// budget), scaled to the panel: this is the zoom.
-    fn crop_panel(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
-        // The zoomed region on top, the reading controls and results below it.
-        let read_height = (ui.available_height() * 0.45).max(160.0);
-        egui::Panel::bottom("read")
-            .resizable(true)
-            .default_size(read_height)
-            .show(ui, |ui| self.read_section(ui));
-        egui::CentralPanel::default().show(ui, |ui| self.crop_image(ui, frame));
+    /// The right-hand column, the Zoom and Reading panes that are shown.
+    fn column(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>, zoom: bool, reading: bool) {
+        if zoom && reading {
+            // The zoomed region on top, the reading controls and results below it.
+            let read_height = (ui.available_height() * 0.45).max(160.0);
+            egui::Panel::bottom("read")
+                .resizable(true)
+                .default_size(read_height)
+                .show(ui, |ui| self.pane(ui, Pane::Reading, frame));
+            egui::CentralPanel::default().show(ui, |ui| self.pane(ui, Pane::Zoom, frame));
+        } else if zoom {
+            self.pane(ui, Pane::Zoom, frame);
+        } else if reading {
+            self.pane(ui, Pane::Reading, frame);
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("Every pane is detached: press D to bring the active one back.");
+            });
+        }
     }
 
+    /// One pane of the camera window: a header naming it with its buttons, then its body.
+    fn pane(&mut self, ui: &mut egui::Ui, pane: Pane, frame: &Arc<YuvFrame>) {
+        let rect = ui.max_rect();
+        ui.horizontal(|ui| {
+            if self.panes.active() == pane {
+                ui.strong(pane.title());
+            } else {
+                ui.weak(pane.title());
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.panes.is_detached(pane) {
+                    if ui.small_button("attach  [D]").clicked() {
+                        self.panes.toggle_detached(pane);
+                    }
+                } else {
+                    if ui.small_button("detach  [D]").clicked() {
+                        self.panes.toggle_detached(pane);
+                    }
+                    let label = if self.panes.maximised() == Some(pane) {
+                        "restore  [M]"
+                    } else {
+                        "maximise  [M]"
+                    };
+                    if ui.small_button(label).clicked() {
+                        self.panes.toggle_maximise(pane);
+                    }
+                }
+            });
+        });
+        ui.separator();
+        match pane {
+            Pane::Preview => self.preview_panel(ui, frame),
+            Pane::Zoom => self.crop_image(ui, frame),
+            Pane::Reading => self.read_section(ui),
+        }
+        if ui.input(|i| {
+            i.pointer.primary_pressed()
+                && i.pointer.press_origin().is_some_and(|p| rect.contains(p))
+        }) {
+            self.panes.set_active(pane);
+        }
+        let shown = Pane::ALL.iter().filter(|p| self.panes.shown(**p)).count();
+        if self.panes.active() == pane && !self.panes.is_detached(pane) && shown > 1 {
+            ui.painter().rect_stroke(
+                rect.shrink(1.0),
+                0.0,
+                ui.visuals().selection.stroke,
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
+
+    /// Each detached pane in its own native window; closing the window attaches it back.
+    fn detached_windows(&mut self, ctx: &egui::Context, frame: Option<&Arc<YuvFrame>>) {
+        for p in self.panes.detached() {
+            let closed = ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(("pane", p.title())),
+                egui::ViewportBuilder::default()
+                    .with_title(format!("Squigl: {}", p.title()))
+                    .with_inner_size([700.0, 500.0]),
+                |ui, _class| {
+                    // This window's keys are the camera window's shortcuts too, acting
+                    // on this pane: D attaches it back.
+                    let idx = p.index();
+                    let shortcuts = self.detached_keys[idx].begin_pass(ui.ctx(), &[]);
+                    let key_pressed = ui.input(|i| {
+                        i.viewport().focused.unwrap_or(false)
+                            && i.events
+                                .iter()
+                                .any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))
+                    });
+                    if shortcuts && key_pressed && !ui.ctx().text_edit_focused() {
+                        self.panes.set_active(p);
+                        self.handle_keys(ui.ctx());
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| match frame {
+                        Some(f) => self.pane(ui, p, f),
+                        None => {
+                            ui.centered_and_justified(|ui| {
+                                ui.label("waiting for the first frame…")
+                            });
+                        }
+                    });
+                    self.detached_keys[idx].end_pass(ui.ctx(), &[]);
+                    ui.input(|i| i.viewport().close_requested())
+                },
+            );
+            if closed {
+                self.panes.toggle_detached(p);
+            }
+        }
+    }
+
+    /// The crop at native pixels (decimated only if it is wider than the preview
+    /// budget), scaled to the panel: this is the zoom.
     fn crop_image(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
         let Some(selection) = self.selection() else {
             ui.vertical_centered(|ui| {
@@ -2006,6 +2117,15 @@ impl App {
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::H)) {
             self.history_open = !self.history_open;
         }
+        // M maximises the active pane, or restores the maximised one.
+        if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::M)) {
+            let pane = self.panes.maximised().unwrap_or(self.panes.active());
+            self.panes.toggle_maximise(pane);
+        }
+        // D detaches the active pane into its own window, or attaches it back.
+        if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::D)) {
+            self.panes.toggle_detached(self.panes.active());
+        }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::E)) {
             self.config.enhance.mode = self.config.enhance.mode.cycle();
             self.say(format!("enhancement: {}", self.config.enhance.mode.label()));
@@ -2171,6 +2291,7 @@ impl App {
 
         let frame = self.current_frame();
         let Some(frame) = frame else {
+            self.detached_windows(&ui.ctx().clone(), None);
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| ui.label("waiting for the first frame…"));
             });
@@ -2233,12 +2354,22 @@ impl App {
             self.read_all();
         }
 
+        let ctx = ui.ctx().clone();
+        self.detached_windows(&ctx, Some(&frame));
+
         let side = ui.available_width() * 0.4;
-        egui::Panel::right("crop")
-            .resizable(true)
-            .default_size(side)
-            .show(ui, |ui| self.crop_panel(ui, &frame));
-        egui::CentralPanel::default().show(ui, |ui| self.preview_panel(ui, &frame));
+        let [preview, zoom, reading] = Pane::ALL.map(|p| self.panes.shown(p));
+        if preview && (zoom || reading) {
+            egui::Panel::right("crop")
+                .resizable(true)
+                .default_size(side)
+                .show(ui, |ui| self.column(ui, &frame, zoom, reading));
+            egui::CentralPanel::default().show(ui, |ui| self.pane(ui, Pane::Preview, &frame));
+        } else if preview {
+            egui::CentralPanel::default().show(ui, |ui| self.pane(ui, Pane::Preview, &frame));
+        } else {
+            egui::CentralPanel::default().show(ui, |ui| self.column(ui, &frame, zoom, reading));
+        }
     }
 }
 
