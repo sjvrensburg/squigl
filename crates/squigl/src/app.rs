@@ -1755,6 +1755,10 @@ impl App {
             self.pane(ui, Pane::Zoom, frame);
         } else if reading {
             self.pane(ui, Pane::Reading, frame);
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label("Every pane is detached: press D to bring the active one back.");
+            });
         }
     }
 
@@ -1768,13 +1772,22 @@ impl App {
                 ui.weak(pane.title());
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = if self.panes.maximised() == Some(pane) {
-                    "restore  [M]"
+                if self.panes.is_detached(pane) {
+                    if ui.small_button("attach  [D]").clicked() {
+                        self.panes.toggle_detached(pane);
+                    }
                 } else {
-                    "maximise  [M]"
-                };
-                if ui.small_button(label).clicked() {
-                    self.panes.toggle_maximise(pane);
+                    if ui.small_button("detach  [D]").clicked() {
+                        self.panes.toggle_detached(pane);
+                    }
+                    let label = if self.panes.maximised() == Some(pane) {
+                        "restore  [M]"
+                    } else {
+                        "maximise  [M]"
+                    };
+                    if ui.small_button(label).clicked() {
+                        self.panes.toggle_maximise(pane);
+                    }
                 }
             });
         });
@@ -1791,13 +1804,39 @@ impl App {
             self.panes.set_active(pane);
         }
         let shown = Pane::ALL.iter().filter(|p| self.panes.shown(**p)).count();
-        if self.panes.active() == pane && shown > 1 {
+        if self.panes.active() == pane && !self.panes.is_detached(pane) && shown > 1 {
             ui.painter().rect_stroke(
                 rect.shrink(1.0),
                 0.0,
                 ui.visuals().selection.stroke,
                 egui::StrokeKind::Inside,
             );
+        }
+    }
+
+    /// Each detached pane in its own native window; closing the window attaches it back.
+    fn detached_windows(&mut self, ctx: &egui::Context, frame: Option<&Arc<YuvFrame>>) {
+        for p in self.panes.detached() {
+            let closed = ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of(("pane", p.title())),
+                egui::ViewportBuilder::default()
+                    .with_title(format!("Squigl: {}", p.title()))
+                    .with_inner_size([700.0, 500.0]),
+                |ui, _class| {
+                    egui::CentralPanel::default().show(ui, |ui| match frame {
+                        Some(f) => self.pane(ui, p, f),
+                        None => {
+                            ui.centered_and_justified(|ui| {
+                                ui.label("waiting for the first frame…")
+                            });
+                        }
+                    });
+                    ui.input(|i| i.viewport().close_requested())
+                },
+            );
+            if closed {
+                self.panes.toggle_detached(p);
+            }
         }
     }
 
@@ -2065,6 +2104,10 @@ impl App {
             let pane = self.panes.maximised().unwrap_or(self.panes.active());
             self.panes.toggle_maximise(pane);
         }
+        // D detaches the active pane into its own window, or attaches it back.
+        if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::D)) {
+            self.panes.toggle_detached(self.panes.active());
+        }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::E)) {
             self.config.enhance.mode = self.config.enhance.mode.cycle();
             self.say(format!("enhancement: {}", self.config.enhance.mode.label()));
@@ -2230,6 +2273,7 @@ impl App {
 
         let frame = self.current_frame();
         let Some(frame) = frame else {
+            self.detached_windows(&ui.ctx().clone(), None);
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.centered_and_justified(|ui| ui.label("waiting for the first frame…"));
             });
@@ -2291,6 +2335,9 @@ impl App {
             self.dev_read_all = false;
             self.read_all();
         }
+
+        let ctx = ui.ctx().clone();
+        self.detached_windows(&ctx, Some(&frame));
 
         let side = ui.available_width() * 0.4;
         let [preview, zoom, reading] = Pane::ALL.map(|p| self.panes.shown(p));
