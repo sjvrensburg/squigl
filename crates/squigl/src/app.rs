@@ -523,9 +523,8 @@ pub struct App {
     /// Development aid: write a screenshot of the window to this path after the
     /// delay, then quit.
     screenshot: Option<(Duration, PathBuf, Instant)>,
-    /// Who has the keyboard: the camera window's shortcuts, or a text field /
-    /// window / popup.
-    keys: KeyRouter,
+    /// Whether the keys are the camera window's shortcuts or a window's.
+    keys: KeyFocus,
 }
 
 impl App {
@@ -588,7 +587,7 @@ impl App {
             dev_read_all: false,
             dev_zoom: None,
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
-            keys: KeyRouter::default(),
+            keys: KeyFocus::default(),
         };
         app.apply_config(config, true);
         app
@@ -648,7 +647,8 @@ impl App {
         let mut save = false;
         let mut copy = false;
         let ui_cfg = self.config.ui.clone();
-        egui::Window::new("Readings this session")
+        egui::Window::new(HISTORY_TITLE)
+            .id(window_id(HISTORY_TITLE))
             .open(&mut open)
             .default_width(560.0)
             .resizable(true)
@@ -1966,7 +1966,7 @@ impl App {
     }
 
     /// The camera window's shortcuts. Only called while it owns the keyboard (see
-    /// [`KeyRouter`]).
+    /// [`KeyFocus`]).
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let (space, esc, save, rot_cw, rot_ccw, enter, read_all) = ctx.input(|i| {
             (
@@ -2118,13 +2118,10 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        self.keys.route(ctx, raw_input);
-    }
-
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.pass(ui);
-        self.keys.end_pass(ui.ctx());
+        let shortcuts = self.keys.begin_pass(ui.ctx(), &self.open_windows());
+        self.pass(ui, shortcuts);
+        self.keys.end_pass(ui.ctx(), &self.open_windows());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -2133,9 +2130,20 @@ impl eframe::App for App {
 }
 
 impl App {
-    /// One pass of the window: the windows first, then the shortcuts, then the
-    /// panels.
-    fn pass(&mut self, ui: &mut egui::Ui) {
+    /// Titles of the windows open over the camera window.
+    fn open_windows(&self) -> Vec<&'static str> {
+        [
+            (self.settings_open, settings::TITLE),
+            (self.history_open, HISTORY_TITLE),
+        ]
+        .into_iter()
+        .filter_map(|(open, title)| open.then_some(title))
+        .collect()
+    }
+
+    /// One pass of the window: the windows first, then the shortcuts (when
+    /// `shortcuts`, see [`KeyFocus::begin_pass`]), then the panels.
+    fn pass(&mut self, ui: &mut egui::Ui, shortcuts: bool) {
         if self.ctx.is_none() {
             self.ctx = Some(ui.ctx().clone());
             ui.ctx().set_zoom_factor(self.config.ui.scale);
@@ -2144,10 +2152,11 @@ impl App {
         self.settings_window(ui.ctx());
         self.history_window(ui.ctx());
         self.fps.tick(self.shared().frames());
-        if self.keys.begin_shortcuts(ui.ctx()) {
+        // A click into a text field while the windows were drawn makes the keys
+        // its already.
+        if shortcuts && !ui.ctx().text_edit_focused() {
             self.handle_keys(ui.ctx());
         }
-        self.keys.end_shortcuts(ui.ctx());
         self.handle_screenshot(ui.ctx());
         self.drop_stale_blocks();
         self.poll_read();
@@ -2233,110 +2242,79 @@ impl App {
     }
 }
 
-/// Who has the keyboard. The camera window is driven by global keys, several of
-/// which egui also acts on: tab and the arrows move the focus (and here they walk
-/// the blocks and pan the box), enter and space press a focused button. So while
-/// the camera window owns the keyboard, [`route`](Self::route) takes those keys
-/// out of the input before egui's pass begins -- no focus move, no button press --
-/// and they reach [`App::handle_keys`] alone, between the windows and the panels.
-///
-/// A text field, a window (Settings, the history) or a popup owns the keyboard
-/// while it has the focus, while it is open (a popup) or while the pointer is over
-/// it (a window); then egui gets every key, with its own navigation. Ownership is
-/// judged from the focus as the last pass left it -- after its widgets took or gave
-/// it up, before this pass's keys act -- so the escape or enter that leaves a field
-/// is still the field's, and the key after it is a shortcut again.
-#[derive(Debug, Default)]
-struct KeyRouter {
-    /// The widget with the focus at the end of the last pass, whether that made
-    /// the keyboard its (a text field or window widget), and whether a window or
-    /// popup was active (open popup, pointer over a window).
-    focus_seen: Option<egui::Id>,
-    focus_owns: bool,
-    window_active: bool,
-    /// The camera window owns the keyboard this pass.
-    camera_owns: bool,
-    /// Keys taken out of this pass's input for the shortcuts.
-    taken: Vec<egui::Event>,
+/// The history window's title.
+const HISTORY_TITLE: &str = "Readings this session";
+
+/// The id a window over the camera window is given, so [`KeyFocus`] can tell its
+/// area and widgets.
+pub fn window_id(title: &str) -> egui::Id {
+    egui::Id::new(("window", title))
 }
 
-impl KeyRouter {
-    /// Keys egui would act on itself while no text field has the focus.
-    fn is_egui_key(key: Key) -> bool {
-        matches!(
-            key,
-            Key::Tab
-                | Key::Enter
-                | Key::Space
-                | Key::ArrowUp
-                | Key::ArrowDown
-                | Key::ArrowLeft
-                | Key::ArrowRight
-        )
-    }
+/// Whether this pass's keys are the camera window's shortcuts or belong to a
+/// window. The camera window is driven by global keys, several of which egui also
+/// acts on: tab and the arrows move the focus (here they walk the blocks and pan
+/// the box), enter and space press the focused button -- left alone, tab parks
+/// the focus on Rotate and enter then presses it instead of reading. So the
+/// camera window's widgets never keep the focus, and while its keys are
+/// shortcuts, egui's focus move is cancelled.
+///
+/// A window (Settings, the history) or popup owns the keys while one of its
+/// widgets has the focus, while it is open (a popup) or while the pointer is over
+/// it (a window); then egui has them all, with its own navigation. The focus as
+/// the last pass left it counts too: egui drops a field's focus on escape before
+/// the pass begins, and that escape is still the field's.
+#[derive(Debug, Default)]
+struct KeyFocus {
+    /// A window or popup widget had the focus at the end of the last pass.
+    window_had_focus: bool,
+}
 
-    /// Whether the focus on `id` makes the keyboard a text field's or a window's.
-    fn focus_owns(ctx: &egui::Context, id: Option<egui::Id>) -> bool {
-        id.and_then(|id| ctx.read_response(id))
-            .is_some_and(|r| r.layer_id.order != egui::Order::Background || ctx.text_edit_focused())
-    }
-
-    /// Before the pass (`raw_input_hook`, ahead of egui's own reading of the
-    /// keys): decide who owns the keyboard and, for the camera window, take its
-    /// keys out.
-    fn route(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.taken.clear();
-        // Between passes egui may still move the focus (a shift+tab lands at the
-        // start of the next pass) or drop it (its widget is gone, e.g. Settings
-        // closed): judge a focus that changed since the last pass ended afresh.
-        let focused = ctx.memory(|m| m.focused());
-        let focus_owns = if focused == self.focus_seen {
-            self.focus_owns
-        } else {
-            Self::focus_owns(ctx, focused)
-        };
-        self.camera_owns = !(focus_owns || self.window_active);
-        if !self.camera_owns {
-            return;
+impl KeyFocus {
+    /// Before any widget of the pass: returns whether its keys are shortcuts.
+    /// `open_windows`: titles of the windows open now.
+    fn begin_pass(&self, ctx: &egui::Context, open_windows: &[&str]) -> bool {
+        if let Some(id) = ctx.memory(|m| m.focused()) {
+            let on_camera = ctx
+                .read_response(id)
+                .is_some_and(|r| r.layer_id.order == egui::Order::Background);
+            if on_camera && !ctx.text_edit_focused() {
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
         }
-        // The camera window's widgets never keep the focus (tab from a window's
-        // last widget lands on them).
-        if let Some(id) = focused {
-            ctx.memory_mut(|m| m.surrender_focus(id));
+        let over_window = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
+            open_windows.iter().any(|title| {
+                ctx.memory(|m| m.area_rect(window_id(title)))
+                    .is_some_and(|r| r.contains(pos))
+            })
+        });
+        let windows_have_keys = self.window_had_focus
+            || Self::window_has_focus(ctx, open_windows)
+            || over_window
+            || egui::Popup::is_any_open(ctx);
+        if !windows_have_keys {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
-        let (taken, rest) = std::mem::take(&mut raw.events)
-            .into_iter()
-            .partition(|e| matches!(e, egui::Event::Key { key, .. } if Self::is_egui_key(*key)));
-        self.taken = taken;
-        raw.events = rest;
-    }
-
-    /// Before the shortcuts: puts the taken keys back for them to read. Returns
-    /// whether the shortcuts may act this pass (not if a field was just clicked).
-    fn begin_shortcuts(&self, ctx: &egui::Context) -> bool {
-        if !self.camera_owns {
-            return false;
-        }
-        ctx.input_mut(|i| i.events.extend(self.taken.iter().cloned()));
-        !ctx.text_edit_focused()
-    }
-
-    /// After the shortcuts: the panels never see the taken keys.
-    fn end_shortcuts(&self, ctx: &egui::Context) {
-        if !self.taken.is_empty() {
-            ctx.input_mut(|i| i.events.retain(|e| !self.taken.contains(e)));
-        }
+        !windows_have_keys
     }
 
     /// After every widget of the pass, once they have taken or given up the focus.
-    fn end_pass(&mut self, ctx: &egui::Context) {
-        self.focus_seen = ctx.memory(|m| m.focused());
-        self.focus_owns = Self::focus_owns(ctx, self.focus_seen);
-        let over_window = ctx
-            .pointer_hover_pos()
-            .and_then(|pos| ctx.layer_id_at(pos))
-            .is_some_and(|layer| layer.order != egui::Order::Background);
-        self.window_active = over_window || egui::Popup::is_any_open(ctx);
+    fn end_pass(&mut self, ctx: &egui::Context, open_windows: &[&str]) {
+        self.window_had_focus = Self::window_has_focus(ctx, open_windows);
+    }
+
+    /// Whether a widget of an open window, or of a popup, has the focus.
+    fn window_has_focus(ctx: &egui::Context, open_windows: &[&str]) -> bool {
+        let focused = ctx.memory(|m| m.focused());
+        focused
+            .and_then(|id| ctx.read_response(id))
+            .is_some_and(|r| match r.layer_id.order {
+                egui::Order::Background => false,
+                egui::Order::Middle => open_windows
+                    .iter()
+                    .any(|title| r.layer_id.id == window_id(title)),
+                _ => true,
+            })
     }
 }
 
@@ -2666,6 +2644,16 @@ mod tests {
         vec![egui::Event::PointerMoved(pos)]
     }
 
+    fn release(key: Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
     fn click(pos: Pos2) -> Vec<egui::Event> {
         let button = |pressed| egui::Event::PointerButton {
             pos,
@@ -2685,13 +2673,13 @@ mod tests {
     /// Somewhere on the preview, away from every widget and window.
     const CANVAS: Pos2 = Pos2::new(150.0, 500.0);
 
-    /// A stand-in for the app, passed through exactly as `App` passes: the router
-    /// in the raw-input hook, then Settings and history windows, the shortcuts
-    /// (counted: any key they read), and the main panel with Rotate and the
-    /// enhance combo box, then the router's end of pass.
+    /// A stand-in for the app, passed through exactly as `App` passes: the key
+    /// focus's start of pass, then Settings and history windows, the shortcuts
+    /// (counting the presses they read), and the main panel with Rotate and the
+    /// enhance combo box, then the key focus's end of pass.
     struct Harness {
         ctx: egui::Context,
-        keys: KeyRouter,
+        keys: KeyFocus,
         settings_open: bool,
         history_open: bool,
         text: [String; 3],
@@ -2704,6 +2692,9 @@ mod tests {
         rects: Vec<egui::Rect>,
         rotations: usize,
         shortcuts: usize,
+        /// Passes run, and whether the next one asks egui for a second.
+        passes: usize,
+        discard: bool,
     }
 
     const ROTATE: usize = 5;
@@ -2714,7 +2705,7 @@ mod tests {
         fn new(settings_open: bool, history_open: bool) -> Self {
             let mut h = Self {
                 ctx: egui::Context::default(),
-                keys: KeyRouter::default(),
+                keys: KeyFocus::default(),
                 settings_open,
                 history_open,
                 text: Default::default(),
@@ -2725,6 +2716,8 @@ mod tests {
                 rects: vec![egui::Rect::NOTHING; 8],
                 rotations: 0,
                 shortcuts: 0,
+                passes: 0,
+                discard: false,
             };
             // Let the windows size themselves; no input yet.
             for _ in 0..3 {
@@ -2733,13 +2726,23 @@ mod tests {
             h
         }
 
+        fn open(&self) -> Vec<&'static str> {
+            [
+                (self.settings_open, settings::TITLE),
+                (self.history_open, HISTORY_TITLE),
+            ]
+            .into_iter()
+            .filter_map(|(open, title)| open.then_some(title))
+            .collect()
+        }
+
         fn at(&self, widget: usize) -> Pos2 {
             self.rects[widget].center()
         }
 
         fn pass(&mut self, events: Vec<egui::Event>) {
             let ctx = self.ctx.clone();
-            let mut raw = egui::RawInput {
+            let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     Pos2::ZERO,
                     Vec2::new(1200.0, 800.0),
@@ -2747,11 +2750,13 @@ mod tests {
                 events,
                 ..Default::default()
             };
-            self.keys.route(&ctx, &mut raw);
             pass(&ctx, raw, |ui| {
+                self.passes += 1;
+                let shortcuts = self.keys.begin_pass(ui.ctx(), &self.open());
                 let mut seen = Vec::new();
                 if self.settings_open {
-                    egui::Window::new("Settings")
+                    egui::Window::new(settings::TITLE)
+                        .id(window_id(settings::TITLE))
                         .default_pos([700.0, 40.0])
                         .show(ui.ctx(), |ui| {
                             let [name, url, api_key] = &mut self.text;
@@ -2771,7 +2776,8 @@ mod tests {
                         });
                 }
                 if self.history_open {
-                    if let Some(r) = egui::Window::new("Readings this session")
+                    if let Some(r) = egui::Window::new(HISTORY_TITLE)
+                        .id(window_id(HISTORY_TITLE))
                         .default_pos([700.0, 450.0])
                         .show(ui.ctx(), |ui| {
                             ui.label("1. x^2");
@@ -2781,8 +2787,8 @@ mod tests {
                         seen.push((HISTORY, r.response));
                     }
                 }
-                if self.keys.begin_shortcuts(ui.ctx()) {
-                    let read = ui.input(|i| {
+                if shortcuts && !ui.ctx().text_edit_focused() {
+                    self.shortcuts += ui.input(|i| {
                         [
                             Key::Enter,
                             Key::Space,
@@ -2791,11 +2797,10 @@ mod tests {
                             Key::ArrowRight,
                         ]
                         .iter()
-                        .any(|k| i.key_pressed(*k))
+                        .map(|k| i.num_presses(*k))
+                        .sum::<usize>()
                     });
-                    self.shortcuts += usize::from(read);
                 }
-                self.keys.end_shortcuts(ui.ctx());
                 egui::CentralPanel::default().show(ui, |ui| {
                     let rotate = ui.button("Rotate right  [R]");
                     if rotate.clicked() {
@@ -2809,7 +2814,10 @@ mod tests {
                             .show_index(ui, &mut self.enhance, 3, |i| ["Off", "Auto", "Ink"][i]),
                     ));
                 });
-                self.keys.end_pass(ui.ctx());
+                self.keys.end_pass(ui.ctx(), &self.open());
+                if std::mem::take(&mut self.discard) {
+                    ui.ctx().request_discard("test: lay out again");
+                }
                 for (i, r) in seen {
                     self.ids[i] = r.id;
                     self.rects[i] = r.rect;
@@ -2847,6 +2855,101 @@ mod tests {
         // The mouse still presses it.
         h.pass(click(h.at(ROTATE)));
         assert_eq!(h.rotations, 1);
+    }
+
+    /// egui can run a pass twice (a new grid lays out again); the second gets no
+    /// input, and no key acts twice.
+    #[test]
+    fn a_second_layout_pass_does_not_replay_keys() {
+        let mut h = Harness::new(true, false);
+        h.pass(move_to(CANVAS));
+        let before = h.passes;
+        h.discard = true;
+        h.pass(key(Key::Enter));
+        assert_eq!(h.passes, before + 2, "egui ran the pass twice");
+        assert_eq!(h.shortcuts, 1);
+        // ... nor does the escape leaving a field turn into a shortcut on the
+        // second pass.
+        h.click_field(NAME);
+        h.discard = true;
+        h.pass(key(Key::Escape));
+        assert_eq!(h.focused(), None);
+        assert_eq!(h.shortcuts, 1);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 2);
+    }
+
+    /// Presses and releases arrive as they happen, whoever has the keys: a
+    /// release after ownership changed is not lost (no key stays held), and the
+    /// next press is a fresh one.
+    #[test]
+    fn releases_reach_egui_across_ownership_changes() {
+        let mut h = Harness::new(true, false);
+        h.click_field(URL);
+        h.pass(key(Key::Enter));
+        assert_eq!(h.focused(), None, "enter submitted the field");
+        h.pass(vec![release(Key::Enter)]);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        h.pass(vec![
+            key_event(Key::Enter, egui::Modifiers::NONE),
+            release(Key::Enter),
+        ]);
+        assert_eq!(h.shortcuts, 1);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        // The other way: pressed as a shortcut, released inside a field.
+        h.pass(key(Key::Space));
+        h.pass(click(h.at(NAME)));
+        h.pass(vec![release(Key::Space)]);
+        assert!(h.ctx.input(|i| i.keys_down.is_empty()));
+        assert_eq!(h.shortcuts, 2);
+    }
+
+    /// A held arrow (press, repeats, release) pans on every repeat and never
+    /// moves the focus.
+    #[test]
+    fn held_arrow_repeats_are_shortcuts() {
+        let mut h = Harness::new(false, false);
+        h.pass(move_to(CANVAS));
+        h.pass(key(Key::ArrowRight));
+        for _ in 0..3 {
+            h.pass(vec![egui::Event::Key {
+                key: Key::ArrowRight,
+                physical_key: None,
+                pressed: true,
+                repeat: true,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(h.focused(), None);
+        }
+        h.pass(vec![release(Key::ArrowRight)]);
+        assert_eq!(h.shortcuts, 4);
+        assert_eq!(h.rotations, 0);
+    }
+
+    /// A pointer move in the same batch as a key decides where the key goes.
+    #[test]
+    fn a_pointer_move_in_the_same_batch_counts() {
+        let mut h = Harness::new(false, true);
+        h.pass(move_to(CANVAS));
+        let mut onto = move_to(h.at(HISTORY));
+        onto.extend(key(Key::Enter));
+        h.pass(onto);
+        assert_eq!(h.shortcuts, 0);
+        let mut off = move_to(CANVAS);
+        off.extend(key(Key::Enter));
+        h.pass(off);
+        assert_eq!(h.shortcuts, 1);
+    }
+
+    /// A window closed under the pointer does not keep the keys.
+    #[test]
+    fn a_closed_window_under_the_pointer_gives_the_keys_back() {
+        let mut h = Harness::new(true, false);
+        h.pass(click(h.at(NAME)));
+        h.settings_open = false;
+        h.pass(Vec::new());
+        h.pass(key(Key::Enter));
+        assert_eq!(h.shortcuts, 1);
     }
 
     /// In Settings, with the pointer elsewhere, tab walks text field -> combo box
@@ -2973,12 +3076,12 @@ mod tests {
     fn an_open_popup_takes_the_keys() {
         let mut h = Harness::new(false, false);
         h.pass(click(h.at(ENHANCE)));
-        assert!(h.keys.window_active, "the popup is open");
+        assert!(egui::Popup::is_any_open(&h.ctx), "the popup is open");
         h.pass(key(Key::ArrowDown));
         h.pass(key(Key::Enter));
         assert_eq!(h.shortcuts, 0);
         h.pass(click(CANVAS));
-        assert!(!h.keys.window_active, "the popup is closed");
+        assert!(!egui::Popup::is_any_open(&h.ctx), "the popup is closed");
         h.pass(key(Key::Enter));
         assert_eq!(h.shortcuts, 1);
         assert_eq!(h.rotations, 0);
