@@ -17,12 +17,19 @@ impl Pane {
             Pane::Reading => "Reading",
         }
     }
+
+    /// Its position in [`Pane::ALL`]: 0, 1, 2.
+    fn index(self) -> usize {
+        Pane::ALL.iter().position(|&p| p == self).unwrap_or(0)
+    }
 }
 
 #[derive(Debug)]
 pub struct Panes {
     active: Pane,
     maximised: Option<Pane>,
+    /// Per pane, indexed by [`Pane::index`]: shown in its own window.
+    detached: [bool; 3],
 }
 
 impl Default for Panes {
@@ -30,6 +37,7 @@ impl Default for Panes {
         Self {
             active: Pane::Preview,
             maximised: None,
+            detached: [false; 3],
         }
     }
 }
@@ -47,19 +55,47 @@ impl Panes {
         self.maximised
     }
 
-    /// Makes `pane` active; restores it if it is the maximised one, else maximises it.
+    /// Makes `pane` active; restores it if it is the maximised one, else maximises
+    /// it. A detached pane (shown in its own window) cannot be maximised here, so
+    /// it only becomes active.
     pub fn toggle_maximise(&mut self, pane: Pane) {
         self.active = pane;
+        if self.detached[pane.index()] {
+            return;
+        }
         match self.maximised {
             Some(p) if p == pane => self.maximised = None,
             _ => self.maximised = Some(pane),
         }
     }
 
-    /// Whether `pane` is drawn in the camera window: no pane is maximised, or it is
-    /// this one.
+    /// Whether `pane` is drawn in the camera window: it is not detached and no pane
+    /// is maximised, or it is this one.
     pub fn shown(&self, pane: Pane) -> bool {
-        self.maximised.is_none() || self.maximised == Some(pane)
+        !self.detached[pane.index()] && (self.maximised.is_none() || self.maximised == Some(pane))
+    }
+
+    /// Whether `pane` is drawn in its own window rather than in the camera window.
+    pub fn is_detached(&self, pane: Pane) -> bool {
+        self.detached[pane.index()]
+    }
+
+    /// Detaches `pane`, or attaches it back. Detaching the maximised pane restores
+    /// the layout.
+    pub fn toggle_detached(&mut self, pane: Pane) {
+        let i = pane.index();
+        self.detached[i] = !self.detached[i];
+        if self.detached[i] && self.maximised == Some(pane) {
+            self.maximised = None;
+        }
+    }
+
+    /// The detached panes, in [`Pane::ALL`] order.
+    pub fn detached(&self) -> Vec<Pane> {
+        Pane::ALL
+            .into_iter()
+            .filter(|p| self.detached[p.index()])
+            .collect()
     }
 }
 
@@ -109,5 +145,50 @@ mod tests {
         assert!(panes.shown(Pane::Reading));
         assert!(!panes.shown(Pane::Zoom));
         assert!(!panes.shown(Pane::Preview));
+    }
+
+    #[test]
+    fn detaching_zoom_hides_only_it() {
+        let mut panes = Panes::default();
+        panes.toggle_detached(Pane::Zoom);
+        assert!(panes.is_detached(Pane::Zoom));
+        assert!(!panes.shown(Pane::Zoom));
+        assert!(panes.shown(Pane::Preview));
+        assert!(panes.shown(Pane::Reading));
+        assert_eq!(panes.detached(), vec![Pane::Zoom]);
+    }
+
+    #[test]
+    fn detaching_maximised_pane_restores_layout() {
+        let mut panes = Panes::default();
+        panes.toggle_maximise(Pane::Zoom);
+        panes.toggle_detached(Pane::Zoom);
+        assert_eq!(panes.maximised(), None);
+        assert!(panes.shown(Pane::Preview));
+        assert!(panes.shown(Pane::Reading));
+        assert!(!panes.shown(Pane::Zoom));
+    }
+
+    #[test]
+    fn toggling_detached_twice_returns_to_all() {
+        let mut panes = Panes::default();
+        panes.toggle_detached(Pane::Zoom);
+        panes.toggle_detached(Pane::Zoom);
+        assert!(!panes.is_detached(Pane::Zoom));
+        assert!(panes.shown(Pane::Preview));
+        assert!(panes.shown(Pane::Zoom));
+        assert!(panes.shown(Pane::Reading));
+        assert!(panes.detached().is_empty());
+    }
+
+    #[test]
+    fn a_detached_pane_cannot_be_maximised() {
+        let mut panes = Panes::default();
+        panes.toggle_detached(Pane::Zoom);
+        panes.toggle_maximise(Pane::Zoom);
+        assert_eq!(panes.maximised(), None);
+        assert_eq!(panes.active(), Pane::Zoom);
+        assert!(panes.shown(Pane::Preview));
+        assert!(panes.shown(Pane::Reading));
     }
 }
