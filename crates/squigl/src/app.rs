@@ -530,6 +530,8 @@ pub struct App {
     /// Every read of the session.
     history: History,
     history_open: bool,
+    /// The Zoom pane's enhancement knobs are shown (collapsed, only the mode is).
+    enhance_open: bool,
     /// Which pane is active and which, if any, is maximised.
     panes: Panes,
     /// How many captures so far; history entries say which they came from.
@@ -619,6 +621,7 @@ impl App {
             results: Vec::new(),
             history: History::default(),
             history_open: false,
+            enhance_open: true,
             panes: Panes::default(),
             capture_seq: 0,
             typesetter: typesetter.clone(),
@@ -1452,6 +1455,14 @@ impl App {
             }
             self.zoom_control(ui);
             ui.separator();
+            let fullscreen = is_fullscreen(ui.ctx());
+            if ui
+                .add(egui::Button::selectable(fullscreen, "Full screen  [F11]"))
+                .clicked()
+            {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+            }
             if ui
                 .button("Settings  [ctrl+,]")
                 .on_hover_text("window scale, backends, prompts, block detector")
@@ -1933,7 +1944,7 @@ impl App {
             return;
         };
         let crop = selection.rect;
-        enhance_controls(ui, &mut self.config.enhance);
+        enhance_controls(ui, &mut self.config.enhance, &mut self.enhance_open);
         let step = crop.w.max(crop.h).div_ceil(PREVIEW_MAX_EDGE).max(1);
         let (tw, th) = self.crop_view.update(
             ui.ctx(),
@@ -1978,8 +1989,9 @@ impl App {
         let avail = ui.available_size();
         let scale = (avail.x / nw as f32).min(avail.y / nh as f32);
         let size = Vec2::new(nw as f32 * scale, nh as f32 * scale);
+        // Top-aligned: a short box's image sits under the controls, not mid-pane.
         let response = ui
-            .centered_and_justified(|ui| {
+            .vertical_centered(|ui| {
                 ui.add(
                     egui::Image::from_texture(texture)
                         .fit_to_exact_size(size)
@@ -2182,6 +2194,10 @@ impl App {
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::D)) {
             self.panes.toggle_detached(self.panes.active());
         }
+        // F11 (or F) toggles full screen: this window's, a detached pane's own.
+        if ctx.input(|i| i.key_pressed(Key::F11) || (!i.modifiers.any() && i.key_pressed(Key::F))) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen(ctx)));
+        }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::E)) {
             self.config.enhance.mode = self.config.enhance.mode.cycle();
             self.say(format!("enhancement: {}", self.config.enhance.mode.label()));
@@ -2241,11 +2257,13 @@ impl App {
             self.read_all();
         }
         if esc {
-            // Back out one level: the box first, then the capture.
+            // Back out one level: the box first, then the capture, then full screen.
             if self.crop.is_some() {
                 self.set_rect(None);
             } else if self.captured.is_some() {
                 self.capture();
+            } else if is_fullscreen(ctx) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             }
         }
         if save {
@@ -2508,13 +2526,34 @@ impl KeyFocus {
     }
 }
 
+/// Whether the viewport `ctx` is drawing (the camera window, or a detached pane's
+/// window while it is drawn) is full screen.
+fn is_fullscreen(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
+}
+
 /// Live enhancement controls: mode, and the knobs that shape it. Deliberately not a
 /// one-time tuned setting: light, angle and distance vary shot to shot, so the user
 /// drives these directly while looking at the result. Every control is always laid
 /// out -- disabled when the mode does not use it -- in a fixed grid, so switching the
 /// mode never changes the size of anything around them.
-fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig) {
+///
+/// `open`: the knobs are shown; collapsed, only the mode is, on one row.
+fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig, open: &mut bool) {
     ui.horizontal(|ui| {
+        // egui's own collapsing triangle, on a toggle of our own: the mode stays
+        // on the header row either way.
+        let (_, toggle) =
+            ui.allocate_exact_size(Vec2::splat(ui.spacing().icon_width), Sense::click());
+        egui::collapsing_header::paint_default_icon(ui, if *open { 1.0 } else { 0.0 }, &toggle);
+        let hint = if *open {
+            "hide the enhancement knobs"
+        } else {
+            "show the enhancement knobs"
+        };
+        if toggle.on_hover_text(hint).clicked() {
+            *open = !*open;
+        }
         ui.label("Enhance [E]");
         ComboBox::from_id_salt("enhance-mode")
             .selected_text(cfg.mode.label())
@@ -2523,6 +2562,9 @@ fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig) {
                     ui.selectable_value(&mut cfg.mode, mode, mode.label());
                 }
             });
+        if !*open {
+            return;
+        }
         ui.add_enabled_ui(cfg.mode == EnhanceMode::Ink, |ui| {
             ComboBox::from_id_salt("enhance-channel")
                 .selected_text(cfg.channel.label())
@@ -2533,6 +2575,9 @@ fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig) {
                 });
         });
     });
+    if !*open {
+        return;
+    }
     ui.add_enabled_ui(cfg.mode != EnhanceMode::Off, |ui| {
         // Two knobs a row: the row of four is wider than a narrow panel, and a
         // slider does not wrap.
@@ -2808,15 +2853,37 @@ mod tests {
                 };
                 // Twice: the first pass only measures the text.
                 laid_out(&ctx, Default::default(), |ui| {
-                    enhance_controls(ui, &mut cfg)
+                    enhance_controls(ui, &mut cfg, &mut true)
                 });
                 laid_out(&ctx, Default::default(), |ui| {
-                    enhance_controls(ui, &mut cfg)
+                    enhance_controls(ui, &mut cfg, &mut true)
                 })
             })
             .collect();
         assert!(sizes.iter().all(|s| *s == sizes[0]), "{sizes:?}");
         assert!(sizes[0].x <= PANEL_WIDTH, "wider than the panel: {sizes:?}");
+    }
+
+    #[test]
+    fn collapsed_enhancement_is_one_row() {
+        let ctx = egui::Context::default();
+        let mut cfg = EnhanceConfig {
+            mode: EnhanceMode::Ink,
+            ..EnhanceConfig::default()
+        };
+        let mut measure = |open: bool| {
+            let mut open = open;
+            laid_out(&ctx, Default::default(), |ui| {
+                enhance_controls(ui, &mut cfg, &mut open)
+            });
+            laid_out(&ctx, Default::default(), |ui| {
+                enhance_controls(ui, &mut cfg, &mut open)
+            })
+        };
+        let (open, collapsed) = (measure(true), measure(false));
+        let row = ctx.global_style().spacing.interact_size.y;
+        assert!(collapsed.y <= row + 1.0, "{collapsed:?}");
+        assert!(collapsed.y < open.y, "{collapsed:?} vs {open:?}");
     }
 
     #[test]
