@@ -219,10 +219,12 @@ window. Reads and detection are refused until the model is ready.
 
 Keys: `space` capture/retake, `enter` read, `L` block mode on/off, `tab`/`shift+tab`
 next/previous block, `ctrl+enter` read all blocks, `esc` clear the region (then
-retake), `R`/`shift+R` rotate, `ctrl+S` save (to `~/Pictures/squigl/`, or `--save-dir`),
+retake, then leave full screen), `R`/`shift+R` rotate, `ctrl+S` save (to `~/Pictures/squigl/`, or `--save-dir`),
 `shift+enter` second opinion, `ctrl+,` settings, `H` reading history,
 `M` maximise/restore the active pane (the one last clicked), `D` detach it into its
-own window or attach it back (closing that window also re-attaches it),
+own window or attach it back (closing that window also re-attaches it), `F11` or `F`
+full screen (a detached pane's window on its own), `E` cycle the zoomed view's
+enhancement (its knobs fold away under the triangle beside it),
 `ctrl+plus`/`ctrl+minus`/`ctrl+0` window scale.
 Phone zoom: the slider, the wheel over the preview, `+`/`-`, `0` to reset. The
 region: drag inside it to move it, drag a corner handle to reshape it, arrow keys to
