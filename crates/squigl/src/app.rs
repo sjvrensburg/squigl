@@ -1460,8 +1460,7 @@ impl App {
                 .add(egui::Button::selectable(fullscreen, "Full screen  [F11]"))
                 .clicked()
             {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
+                toggle_fullscreen(ui.ctx());
             }
             if ui
                 .button("Settings  [ctrl+,]")
@@ -2195,8 +2194,8 @@ impl App {
             self.panes.toggle_detached(self.panes.active());
         }
         // F11 (or F) toggles full screen: this window's, a detached pane's own.
-        if ctx.input(|i| i.key_pressed(Key::F11) || (!i.modifiers.any() && i.key_pressed(Key::F))) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen(ctx)));
+        if ctx.input(|i| !i.modifiers.any() && (i.key_pressed(Key::F11) || i.key_pressed(Key::F))) {
+            toggle_fullscreen(ctx);
         }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::E)) {
             self.config.enhance.mode = self.config.enhance.mode.cycle();
@@ -2532,11 +2531,17 @@ fn is_fullscreen(ctx: &egui::Context) -> bool {
     ctx.input(|i| i.viewport().fullscreen.unwrap_or(false))
 }
 
+/// Toggle full screen on the viewport `ctx` is drawing.
+fn toggle_fullscreen(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!is_fullscreen(ctx)));
+}
+
 /// Live enhancement controls: mode, and the knobs that shape it. Deliberately not a
 /// one-time tuned setting: light, angle and distance vary shot to shot, so the user
-/// drives these directly while looking at the result. Every control is always laid
-/// out -- disabled when the mode does not use it -- in a fixed grid, so switching the
-/// mode never changes the size of anything around them.
+/// drives these directly while looking at the result. While open, every control is
+/// always laid out -- disabled when the mode does not use it -- in a fixed grid, so
+/// switching the mode never changes the size of anything around them; collapsed,
+/// only the mode stays, on one row.
 ///
 /// `open`: the knobs are shown; collapsed, only the mode is, on one row.
 fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig, open: &mut bool) {
@@ -2562,18 +2567,17 @@ fn enhance_controls(ui: &mut egui::Ui, cfg: &mut EnhanceConfig, open: &mut bool)
                     ui.selectable_value(&mut cfg.mode, mode, mode.label());
                 }
             });
-        if !*open {
-            return;
+        if *open {
+            ui.add_enabled_ui(cfg.mode == EnhanceMode::Ink, |ui| {
+                ComboBox::from_id_salt("enhance-channel")
+                    .selected_text(cfg.channel.label())
+                    .show_ui(ui, |ui| {
+                        for channel in enhance::Channel::ALL {
+                            ui.selectable_value(&mut cfg.channel, channel, channel.label());
+                        }
+                    });
+            });
         }
-        ui.add_enabled_ui(cfg.mode == EnhanceMode::Ink, |ui| {
-            ComboBox::from_id_salt("enhance-channel")
-                .selected_text(cfg.channel.label())
-                .show_ui(ui, |ui| {
-                    for channel in enhance::Channel::ALL {
-                        ui.selectable_value(&mut cfg.channel, channel, channel.label());
-                    }
-                });
-        });
     });
     if !*open {
         return;
