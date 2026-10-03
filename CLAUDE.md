@@ -176,7 +176,12 @@ crate and evaluated inside MiTeX's Typst scope (vendored under `assets/mitex/`, 
 reading that fails to compile is shown as text. The `mitex`
 crate's built-in spec predates Typst 0.15's symbol renames (`diff`→`partial`,
 `sect`→`inter`, `plus.circle`→`plus.o`, …), so `modernise` rewrites its output by
-the `RENAMES` table -- extend it when a reading fails with "unknown variable";
+the `RENAMES` table -- extend it when a renamed symbol renders wrong. A command
+nothing defines (models invent `\softmax`, `\Var`) is not a failure: MiTeX's
+`unknown command` makes `convert_math` retry it as `\operatorname{…}`, and a name
+MiTeX passes through that Typst lacks (`unknown variable`) makes `Renderer::render`
+recompile with it defined as `math.op`; `argmax`/`argmin` are defined in the
+template's `compat` scope (with limits);
 `local/`: the
 built-in models --
 `local/glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`

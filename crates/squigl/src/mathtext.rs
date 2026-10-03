@@ -8,23 +8,35 @@ use crate::app::TintSpan;
 use anyhow::{anyhow, Result};
 use image::RgbaImage;
 use std::time::Instant;
-use typst::foundations::{Dict, IntoValue};
+use typst::foundations::{Array, Dict, IntoValue};
 use typst_as_lib::typst_kit_options::TypstKitFontOptions;
-use typst_as_lib::{TypstEngine, TypstTemplateCollection};
+use typst_as_lib::{TypstAsLibError, TypstEngine, TypstTemplateCollection};
 use typst_layout::PagedDocument;
 
 /// The page: as wide as asked, as tall as needed, no background, text in the
 /// window's colour, and the reading evaluated as markup inside MiTeX's scope so the
-/// converted commands (`operatorname`, …) resolve.
+/// converted commands (`operatorname`, …) resolve. `compat` adds what the models
+/// write that is not LaTeX proper but every paper defines (`\argmax`), and `ops`
+/// the names a first compile found undefined, each as an upright operator name --
+/// how an undefined `\foo` reads (see [`Renderer::render`]).
 const TEMPLATE: &str = r#"
 #import sys: inputs
 #import "specs/mod.typ": mitex-scope
 #set page(width: inputs.width * 1pt, height: auto, margin: 3pt, fill: none)
 #set text(size: inputs.size * 1pt, fill: rgb(inputs.color))
 #set par(leading: 0.5em)
-#let compat = (hbar: symbol("ℏ"))
-#eval(inputs.src, mode: "markup", scope: mitex-scope + compat)
+#let compat = (
+  hbar: symbol("ℏ"),
+  argmax: math.op("arg\u{2009}max", limits: true),
+  argmin: math.op("arg\u{2009}min", limits: true),
+)
+#let ops = inputs.ops.map(n => (n, math.op(n))).to-dict()
+#eval(inputs.src, mode: "markup", scope: mitex-scope + compat + ops)
 "#;
+
+/// How many undefined names one reading (or one maths segment, for MiTeX) may have
+/// before it is shown as text: each costs a reconversion or a recompile.
+const MAX_UNKNOWN_NAMES: usize = 8;
 
 /// Symbol names the `mitex` crate's built-in spec (older than Typst 0.15) emits
 /// that Typst has since renamed, with what they are called now. Applied to whole
@@ -132,8 +144,10 @@ impl Renderer {
     }
 
     /// Typesets `text` `width_pt` points wide at `size_pt`, `scale` pixels per
-    /// point, in colour `rgb`, tinting `spans` by hesitation. Errors when the text
-    /// does not compile.
+    /// point, in colour `rgb`, tinting `spans` by hesitation. A name the maths uses
+    /// that nothing defines (a macro the model made up, `\softmax`) is retried as an
+    /// upright operator name rather than failing the whole reading. Errors when the
+    /// text does not compile otherwise.
     pub fn render(
         &self,
         text: &str,
@@ -153,11 +167,27 @@ impl Renderer {
             "color".into(),
             format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]).into_value(),
         );
-        let doc: PagedDocument = self
-            .engine
-            .compile_with_input("main.typ", inputs)
-            .output
-            .map_err(|e| anyhow!("{e:?}"))?;
+        let mut ops: Vec<String> = Vec::new();
+        let doc: PagedDocument = loop {
+            let mut with_ops = inputs.clone();
+            with_ops.insert(
+                "ops".into(),
+                ops.iter()
+                    .map(|n| n.as_str().into_value())
+                    .collect::<Array>()
+                    .into_value(),
+            );
+            match self.engine.compile_with_input("main.typ", with_ops).output {
+                Ok(doc) => break doc,
+                Err(e) => match unknown_name(&e) {
+                    Some(name) if !ops.contains(&name) && ops.len() < MAX_UNKNOWN_NAMES => {
+                        log::debug!("typesetting {name:?} as an operator name");
+                        ops.push(name);
+                    }
+                    _ => return Err(anyhow!("{e:?}")),
+                },
+            }
+        };
         let page = doc.pages().first().ok_or_else(|| anyhow!("no page"))?;
         let pix = typst_render::render(
             page,
@@ -187,6 +217,66 @@ impl Renderer {
     }
 }
 
+/// MiTeX's conversion, with each command it does not know (a macro the model made
+/// up, `\softmax`, `\Var`) taken as an operator name, `\operatorname{softmax}`,
+/// which is how an undefined command reads in a paper.
+fn convert_math(tex: &str) -> Result<String, String> {
+    let mut tex = tex.to_string();
+    for _ in 0..MAX_UNKNOWN_NAMES {
+        let err = match mitex::convert_math(&tex, None) {
+            Ok(math) => return Ok(math),
+            Err(e) => e,
+        };
+        let name: String = err
+            .split("unknown command: \\")
+            .nth(1)
+            .map(|rest| {
+                rest.chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if name.is_empty() {
+            return Err(err);
+        }
+        tex = as_operator_name(&tex, &name);
+    }
+    mitex::convert_math(&tex, None)
+}
+
+/// `tex` with every `\name` command (not a longer one it prefixes) written as
+/// `\operatorname{name}`.
+fn as_operator_name(tex: &str, name: &str) -> String {
+    let command = format!("\\{name}");
+    let mut out = String::with_capacity(tex.len());
+    let mut rest = tex;
+    while let Some(i) = rest.find(&command) {
+        let after = &rest[i + command.len()..];
+        out.push_str(&rest[..i]);
+        if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            out.push_str(&command);
+        } else {
+            out.push_str(&format!("\\operatorname{{{name}}}"));
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The name in an "unknown variable" error, when that is what failed and the name is
+/// a plain identifier (all a converted command can be).
+fn unknown_name(e: &TypstAsLibError) -> Option<String> {
+    let TypstAsLibError::TypstSource(diags) = e else {
+        return None;
+    };
+    diags.iter().find_map(|d| {
+        let name = d.message.strip_prefix("unknown variable: ")?;
+        (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric()))
+            .then(|| name.to_string())
+    })
+}
+
 /// The reading as Typst markup: maths converted (a `$$` block may span lines), the
 /// rest escaped with its line breaks kept. `spans` tints hesitant/wavering tokens:
 /// plain text with `#highlight`, a maths segment as a whole by its worst
@@ -212,7 +302,7 @@ fn to_typst(text: &str, spans: &[TintSpan]) -> String {
                 let seg = &rest[start..start + open.len() + end + close.len()];
                 let tex = &after[..end];
                 // Newlines inside the converted maths are only layout.
-                let converted = mitex::convert_math(tex, None).map(|m| {
+                let converted = convert_math(tex).map(|m| {
                     modernise(&m)
                         .split_whitespace()
                         .collect::<Vec<_>>()
@@ -467,6 +557,43 @@ mod tests {
         let r = Renderer::new();
         let out = r.render(text, &[], 300.0, 12.0, 1.0, [0, 0, 0]).unwrap();
         assert!(out.image.height() > 40);
+    }
+
+    #[test]
+    fn argmax_and_made_up_commands_typeset() {
+        let r = Renderer::new();
+        // The reading that failed: `\argmax` is no LaTeX command, but every paper
+        // defines it.
+        let text = "But, multiplication is bad...\n\n$$y_i = \\argmax_{y_i} \\left\\{ P(y_i) \\prod P(y_i) \\right\\}$$\n\n$$= \\argmax \\left\\{ \\log P(y_i) \\right\\}$$";
+        r.render(text, &[], 300.0, 12.0, 1.0, [0, 0, 0]).unwrap();
+        // Commands nothing defines become operator names, several in one segment --
+        // typeset as maths, not shown as their source.
+        let made_up = "$\\softmax(z) + \\relu(x) + \\Var[X]$ and $\\argmin_x f$";
+        let src = to_typst(made_up, &[]);
+        assert!(
+            !src.contains("\\softmax") && !src.contains("\\Var"),
+            "{src}"
+        );
+        r.render(made_up, &[], 300.0, 12.0, 1.0, [0, 0, 0]).unwrap();
+    }
+
+    #[test]
+    fn only_the_unknown_command_itself_becomes_an_operator_name() {
+        assert_eq!(
+            as_operator_name("\\Var[X] + \\Variance + \\Var", "Var"),
+            "\\operatorname{Var}[X] + \\Variance + \\operatorname{Var}"
+        );
+    }
+
+    #[test]
+    fn errors_other_than_an_unknown_name_still_fail() {
+        let r = Renderer::new();
+        // Unbalanced braces: no name to define, so no retry -- the reading is shown
+        // as text by the caller.
+        assert!(r
+            .render("$\\frac{a$", &[], 300.0, 12.0, 1.0, [0, 0, 0])
+            .is_err());
+        assert!(unknown_name(&TypstAsLibError::TypstSource(Default::default())).is_none());
     }
 
     #[test]
