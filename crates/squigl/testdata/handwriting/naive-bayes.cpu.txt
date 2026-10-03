@@ -1,0 +1,5 @@
+Naire Bayer:
+Bayes Theorem.
+$$
+\begin{array}{l} P (A | B) = \frac {P (A \cap B)}{P (B)} \\ P (A \cap B) = P (A | B) P (B) \\ \end{array}
+$$

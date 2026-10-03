@@ -21,6 +21,7 @@ cargo build --release --features ffmpeg   # + system libavcodec decoder (needs f
 cargo build --release -p squigl --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
 cargo test --workspace                 # unit tests (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
 cargo test -p phone-cam4linux protocol::tests::parses_codec_meta   # single test
+cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --workspace --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 ```
@@ -198,7 +199,10 @@ holds the GPU), so blocks follow zoom and aim; a fresh detection hands the selec
 to the new block with the highest IoU (`follow_selection`, so tab keeps its place and
 an untouched crop tracks its block); "read all" captures first, waits for the
 capture's own detection, then drains a snapshot queue one read at a time. `ort` is pinned to a git commit because the published rc.13 has a different
-API; its `download-binaries` fetches pyke's prebuilt ONNX Runtime at build time, and
+API (the pin carries ONNX Runtime 1.30; after moving it, run `glmocr_handwriting`, which
+reads `crates/squigl/testdata/handwriting/` on WebGPU and CPU against the readings
+recorded there -- a near-tie can flip on a kernel change, so re-record with
+`SQUIGL_BLESS=1` only after looking at the diff); its `download-binaries` fetches pyke's prebuilt ONNX Runtime at build time, and
 the WebGPU provider is a separate `libwebgpu_dawn.so` that lands next to the binary
 (as a symlink into `~/.cache/dfbin` -- copy the real file into a release tarball),
 found via the `$ORIGIN` rpath from `build.rs`. `--no-default-features` builds without

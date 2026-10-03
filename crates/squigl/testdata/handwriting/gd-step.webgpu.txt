@@ -1,0 +1,2 @@
+3) I.e., the gd step is:
+$$ w_{i e} = w_{i} + M \operatorname{sign} ( w x + b ) x ; $$

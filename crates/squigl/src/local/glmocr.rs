@@ -672,4 +672,77 @@ mod tests {
         assert_eq!(max_pos, 4);
         assert!(position_ids(&[img, img, img], (1, 4, 4), 2, img).is_err());
     }
+
+    /// GLM-OCR on the handwriting samples in `testdata/handwriting/`, against the
+    /// readings recorded beside them -- the check to run when `ort` (and with it ONNX
+    /// Runtime) is bumped:
+    ///
+    /// ```text
+    /// cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture
+    /// ```
+    ///
+    /// Each `NAME.png` is read as the window reads a crop (`formula-*` with the
+    /// formula prompt, `page-*` with the page prompt; default budgets) on WebGPU and
+    /// on the CPU, and compared with `NAME.webgpu.txt` / `NAME.cpu.txt`.
+    /// `SQUIGL_BLESS=1` records this run's readings instead. The model is found or
+    /// downloaded as the window does.
+    #[test]
+    #[ignore = "needs the GLM-OCR model (~650 MB) and runs it"]
+    fn glmocr_handwriting() {
+        use crate::transcribe::{CROP_PROMPT, FORMULA_PROMPT, PAGE_PROMPT};
+
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/handwriting");
+        let mut samples: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.ok()?.path();
+                (p.extension()? == "png").then_some(p)
+            })
+            .collect();
+        samples.sort();
+        assert!(!samples.is_empty(), "no samples in {}", dir.display());
+        let bless = std::env::var_os("SQUIGL_BLESS").is_some();
+        let model_dir = crate::local::models::GLM_OCR
+            .ensure(&|s| println!("{s}"))
+            .unwrap();
+
+        let mut failures = Vec::new();
+        for device in [Device::WebGpu, Device::Cpu] {
+            let mut model = Model::load(&model_dir, crate::local::VARIANT, device, 2048).unwrap();
+            for png in &samples {
+                let stem = png.file_stem().unwrap().to_string_lossy();
+                let prompt = if stem.starts_with("formula-") {
+                    FORMULA_PROMPT
+                } else if stem.starts_with("page-") {
+                    PAGE_PROMPT
+                } else {
+                    CROP_PROMPT
+                };
+                let img = image::open(png).unwrap().to_rgb8();
+                let text = model.generate(&img, prompt, 1024).unwrap().text;
+                let expected = png.with_extension(format!("{}.txt", device.name().to_lowercase()));
+                if bless {
+                    std::fs::write(&expected, format!("{text}\n")).unwrap();
+                    println!("recorded {}: {text:?}", expected.display());
+                    continue;
+                }
+                match std::fs::read_to_string(&expected) {
+                    Ok(want) if want.strip_suffix('\n').unwrap_or(&want) == text => {
+                        println!("same {stem} on {}", device.name());
+                    }
+                    Ok(want) => failures.push(format!(
+                        "{stem} on {}:\n  expected {:?}\n  got      {text:?}",
+                        device.name(),
+                        want.trim_end()
+                    )),
+                    Err(e) => failures.push(format!("{}: {e}", expected.display())),
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{}\n(SQUIGL_BLESS=1 records this run's readings)",
+            failures.join("\n")
+        );
+    }
 }
