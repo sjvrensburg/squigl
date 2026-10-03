@@ -136,7 +136,15 @@ endpoint at `POST /whip` (one session at a time; a second POST while one is acti
 
 `crates/squigl` is the egui document-camera window (`stream.rs`: worker thread with
 the reconnect loop, publishing the latest `YuvFrame`; `app.rs`: preview, crop in
-*view* (rotated) coordinates mapped back to the source frame, capture, save;
+*view* (rotated) coordinates mapped back to the source frame, capture, save, and
+hand erasures (`App::erased`, view-space `erase::Stroke`s -- path plus radius --
+painted with a brush over the Zoom pane, whose size is in screen points, each point
+mapped back through the rectification by `zoom_to_view`; `render_selection` paints
+them before rectifying and enhancing, so reads, saves and both views agree, while
+live block detection stays raw; a retake, zoom or rotation drops them; ctrl+wheel is
+egui's `zoom_delta`, so it never reaches the box-resizing wheel);
+`erase.rs`: the fill -- everything within the radius of the path, one flat colour
+per stroke from the 75th-percentile-bright pixel of a ring around it, no inpainting;
 `transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and halo-workbench
 `/hint/read` backends, and the `~/.config/squigl/gui.toml` `Config` (backend list,
 `[layout]`, `[prompts]`, `[ui] scale`) -- the default prompts are verbatim from
@@ -207,7 +215,7 @@ the WebGPU provider is a separate `libwebgpu_dawn.so` that lands next to the bin
 (as a symlink into `~/.cache/dfbin` -- copy the real file into a release tarball),
 found via the `$ORIGIN` rpath from `build.rs`. `--no-default-features` builds without
 any of this. The hidden `--screenshot-after SECS --screenshot-path FILE`,
-`--dev-crop X,Y,W,H`, `--dev-read [--dev-second]`, `--dev-detect`, `--dev-read-all` and `--dev-settings` flags let you
+`--dev-crop X,Y,W,H`, `--dev-erase X1,Y1,X2,Y2,R` (a stroke; repeatable; captures first), `--dev-read [--dev-second]`, `--dev-detect`, `--dev-read-all` and `--dev-settings` flags let you
 drive it from a script (GNOME blocks external screenshots of the window);
 `XDG_CONFIG_HOME` points it at a scratch backend config.
 

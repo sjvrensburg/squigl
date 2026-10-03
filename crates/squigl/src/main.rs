@@ -4,6 +4,7 @@
 
 mod app;
 mod enhance;
+mod erase;
 mod history;
 mod layout;
 #[cfg(feature = "local-model")]
@@ -76,6 +77,12 @@ struct Args {
     /// Development aid: start with this crop selected, in view pixels.
     #[arg(long, hide = true, value_name = "X,Y,W,H")]
     dev_crop: Option<String>,
+
+    /// Development aid: capture the first frame and erase a straight brush stroke on
+    /// it, from X1,Y1 to X2,Y2 with radius R, in view pixels, as painting over the
+    /// Zoom pane does. Repeatable.
+    #[arg(long, hide = true, value_name = "X1,Y1,X2,Y2,R")]
+    dev_erase: Vec<String>,
 
     /// Download the built-in models (transcription and block detection) into
     /// DIR/<model name>/ (verified against the checksums compiled into this binary)
@@ -225,23 +232,19 @@ fn main() -> Result<()> {
         "270" => Rotation::Cw270,
         _ => Rotation::None,
     };
-    let dev_crop = args
-        .dev_crop
-        .as_deref()
+    let dev_crop = args.dev_crop.as_deref().map(parse_crop).transpose()?;
+    let dev_erase = args
+        .dev_erase
+        .iter()
         .map(|s| {
-            let v: Vec<usize> = s
+            let v: Vec<f32> = s
                 .split(',')
                 .map(|n| n.trim().parse())
                 .collect::<Result<_, _>>()?;
-            anyhow::ensure!(v.len() == 4, "--dev-crop wants X,Y,W,H");
-            Ok(app::Crop {
-                x: v[0],
-                y: v[1],
-                w: v[2],
-                h: v[3],
-            })
+            anyhow::ensure!(v.len() == 5, "--dev-erase wants X1,Y1,X2,Y2,R, got {s:?}");
+            Ok(erase::Stroke::line([v[0], v[1]], [v[2], v[3]], v[4]))
         })
-        .transpose()?;
+        .collect::<anyhow::Result<Vec<_>>>()?;
     let dev_read = args.dev_read;
     let dev_second = args.dev_second;
     let dev_detect = args.dev_detect;
@@ -307,6 +310,7 @@ fn main() -> Result<()> {
             );
             app.set_rotation(rotation);
             app.set_crop(dev_crop);
+            app.set_dev_erase(dev_erase);
             app.set_dev_read(dev_read, dev_second);
             app.set_dev_detect(dev_detect, dev_read_all);
             app.set_settings_open(dev_settings);
@@ -315,4 +319,19 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// `X,Y,W,H` in view pixels, for the development flags.
+fn parse_crop(s: &str) -> anyhow::Result<app::Crop> {
+    let v: Vec<usize> = s
+        .split(',')
+        .map(|n| n.trim().parse())
+        .collect::<Result<_, _>>()?;
+    anyhow::ensure!(v.len() == 4, "wanted X,Y,W,H, got {s:?}");
+    Ok(app::Crop {
+        x: v[0],
+        y: v[1],
+        w: v[2],
+        h: v[3],
+    })
 }
