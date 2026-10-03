@@ -229,7 +229,12 @@ enhancement (its knobs fold away under the triangle beside it),
 Phone zoom: the slider, the wheel over the preview, `+`/`-`, `0` to reset. The
 region: drag inside it to move it, drag a corner handle to reshape it, arrow keys to
 nudge (`shift` for one pixel), `[`/`]` or the wheel over the zoomed view to shrink/grow
-it. `--resolution` defaults to
+it. Erasing: paint over the zoomed view with the brush (drag; a click is a dot) to
+cover what is under it with the paper around it before anything reads it -- for a
+lightly struck-out word the model would otherwise read through. `ctrl+wheel` over
+the zoomed view or the "Erase brush" slider sizes the brush; `ctrl+Z` takes back the
+last stroke. Painting captures the frame if it is live; strokes apply to every read
+and save of that capture (tinted red on the preview) and go with a retake. `--resolution` defaults to
 `max`; `--facing`, `--connect`, `--serial`, `--bitrate`, `--fps` and `--decoder`
 are as for `squigl-cli`. It reconnects with backoff like the CLI.
 

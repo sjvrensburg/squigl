@@ -745,4 +745,44 @@ mod tests {
             failures.join("\n")
         );
     }
+
+    /// An erased line is not read: `sklearn-code` with its middle line
+    /// (`model = linear_model.LinearRegression()`) painted over with one brush
+    /// stroke reads as the other two lines on both devices.
+    ///
+    /// ```text
+    /// cargo test -p squigl --release glmocr_skips_an_erased_line -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs the GLM-OCR model (~650 MB) and runs it"]
+    fn glmocr_skips_an_erased_line() {
+        let png =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/handwriting/sklearn-code.png");
+        let mut img = image::open(png).unwrap().to_rgba8();
+        let w = img.width() as f32;
+        // A brush stroke along row 136, radius 38: rows 98..174, the gap above the
+        // middle line to the gap below it.
+        crate::erase::erase(
+            &mut img,
+            &[crate::erase::Stroke::line([0.0, 136.0], [w, 136.0], 38.0)],
+        );
+        let img = image::DynamicImage::ImageRgba8(img).to_rgb8();
+        let model_dir = crate::local::models::GLM_OCR
+            .ensure(&|s| println!("{s}"))
+            .unwrap();
+        for device in [Device::WebGpu, Device::Cpu] {
+            let mut model = Model::load(&model_dir, crate::local::VARIANT, device, 2048).unwrap();
+            let text = model
+                .generate(&img, crate::transcribe::CROP_PROMPT, 1024)
+                .unwrap()
+                .text;
+            println!("{}: {text:?}", device.name());
+            // Line 3's reading may shift without line 2 as context (`model.fit`
+            // reads as `model .fib`, closer to the ink); what must hold is two lines,
+            // the first intact, and nothing of the erased one.
+            assert_eq!(text.lines().count(), 2, "{text:?}");
+            assert!(text.contains("sklearn"), "{text:?}");
+            assert!(!text.contains("Regression"), "{text:?}");
+        }
+    }
 }
