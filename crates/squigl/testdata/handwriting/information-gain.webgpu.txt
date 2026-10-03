@@ -1,0 +1,1 @@
+IG= E (parallel node) $ \sum_{i} E (child i) $ I.e. we split data in a were their minimum uncertainty

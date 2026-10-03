@@ -1,0 +1,2 @@
+The entropy is $ E=-\sum_{i=1}^{k} p_{i} \log_{2} p_{i} $ BASE
+Entropy is greater if $ k > 2 $
