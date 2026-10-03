@@ -1,0 +1,1 @@
+Supervised Learning We have labelled training data and we predict the labels of the new data.

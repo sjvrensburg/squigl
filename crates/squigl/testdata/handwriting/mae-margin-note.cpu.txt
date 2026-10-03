@@ -1,0 +1,1 @@
+Since MAE only baker into account the verbal distance, shifting a line up or down does not change the MAE... b is not identified ?
