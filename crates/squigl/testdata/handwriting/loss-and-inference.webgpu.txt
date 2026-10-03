@@ -1,0 +1,3 @@
+(Ardocummed by some law function)
+Learning = tuning parameter to improve a hypothesis.
+Imfume = Making a prediction

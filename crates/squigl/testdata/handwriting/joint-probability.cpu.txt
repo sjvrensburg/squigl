@@ -1,0 +1,5 @@
+But it is difficult to calculate the joint prob. over all features...
+Assume that
+$$ P(x|y_i) = P(x_1x_2x_3\dots x_k|y_i) $$
+$$ = P(x_1|y_i)P(x_2|y_i)\dots P(x_k|y_i) $$
+the features are conditionally independent

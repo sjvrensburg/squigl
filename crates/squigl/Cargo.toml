@@ -31,7 +31,7 @@ toml = "1"
 base64 = "0.22"
 # local-model: bundled GLM-OCR and PP-DocLayoutV3 on ONNX Runtime (WebGPU/Vulkan or CPU).
 # HEAD of pykeio/ort as read on 2026-09-12; its API differs from the published rc.13.
-ort = { git = "https://github.com/pykeio/ort", rev = "bc79f5947d9193244bacfc357556de0b69bb99ea", features = ["half", "webgpu"], optional = true }
+ort = { git = "https://github.com/pykeio/ort", rev = "085eb2af3d55fa2f4eacceb6ef43825dbf1b771c", features = ["half", "webgpu"], optional = true }
 half = { version = "2", optional = true }
 ndarray = { version = "0.17", optional = true }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"], optional = true }

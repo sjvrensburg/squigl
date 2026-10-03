@@ -1,0 +1,4 @@
+The perception algorithm is based on:
+1) Only updating for cases when $ \hat{y}_i + y_i $
+2) An absolute value loss function,
+$$ l = |wx+b| $$
