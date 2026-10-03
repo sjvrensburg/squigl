@@ -14,6 +14,7 @@
 //! crop's corners can be dragged, so a block is a starting point, not a verdict.
 
 use crate::enhance::{self, EnhanceConfig, EnhanceMode};
+use crate::erase;
 use crate::history::{self, History};
 use crate::layout::{self, Block, BlockDetector, Quad, Role};
 use crate::panes::{Pane, Panes};
@@ -48,6 +49,13 @@ const HANDLE_PX: f32 = 10.0;
 /// Drags smaller than this are a click, which clears the crop.
 const MIN_CROP_PX: usize = 8;
 const SELECTED_COLOUR: Color32 = Color32::from_rgb(255, 196, 0);
+/// Hand-erased strokes on the preview, and the brush on the Zoom pane.
+const ERASED_COLOUR: Color32 = Color32::from_rgb(255, 90, 90);
+/// The erasing brush's diameter, in screen points on the Zoom pane: its range and
+/// where it starts.
+const BRUSH_MIN_PX: f32 = 4.0;
+const BRUSH_MAX_PX: f32 = 160.0;
+const BRUSH_DEFAULT_PX: f32 = 24.0;
 /// Block outlines by role: text orange, formulas violet, figures blue, furniture grey.
 fn role_colour(role: Role) -> Color32 {
     match role {
@@ -166,6 +174,11 @@ impl Crop {
 }
 
 /// Turns smoothed scroll deltas into whole wheel notches (positive = up/away).
+/// "1 stroke", "3 strokes".
+fn strokes(n: usize) -> String {
+    format!("{n} stroke{}", if n == 1 { "" } else { "s" })
+}
+
 fn wheel_notches(accum: &mut f32, delta: f32) -> i32 {
     const NOTCH: f32 = 40.0;
     *accum += delta;
@@ -357,45 +370,49 @@ pub struct Selection {
 }
 
 /// The pixels of a selection (or the whole view when there is none) at every
-/// `step`-th pixel, rotated as shown and, for a quad, rectified. `enhance`, when
-/// given, is applied last -- this is the crop the model reads and/or the crop panel
-/// shows; the preview and live block detection call [`render_region`] directly and
-/// stay raw. Returns the pixels and their size.
+/// `step`-th pixel, rotated as shown, with the `erased` regions (view space) painted
+/// over and, for a quad, rectified. `enhance`, when given, is applied last -- this is
+/// the crop the model reads and/or the crop panel shows; the preview passes none and
+/// live block detection calls [`render_region`] directly, raw. Returns the pixels and
+/// their size.
 fn render_selection(
     frame: &YuvFrame,
     rotation: Rotation,
     selection: Option<Selection>,
     step: usize,
+    erased: &[erase::Stroke],
     enhance: Option<&EnhanceConfig>,
 ) -> (Vec<u8>, usize, usize) {
     let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
-    let (rgba, w, h) = match selection {
-        None => render_region(frame, rotation, Crop::whole(vw, vh), step),
-        Some(sel) => {
-            let (rgba, w, h) = render_region(frame, rotation, sel.rect, step);
-            match sel.quad {
-                None => (rgba, w, h),
-                Some(quad) => {
-                    // The quad in the rendered region's own pixels.
-                    let local: Quad = quad.map(|[x, y]| {
-                        [
-                            (x - sel.rect.x as f32) / step as f32,
-                            (y - sel.rect.y as f32) / step as f32,
-                        ]
-                    });
-                    let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
-                        .expect("buffer matches size");
-                    match layout::rectify(&img, &local) {
-                        Some(out) => {
-                            let (ow, oh) = (out.width() as usize, out.height() as usize);
-                            (out.into_raw(), ow, oh)
-                        }
-                        None => {
-                            let (w, h) = (img.width() as usize, img.height() as usize);
-                            (img.into_raw(), w, h)
-                        }
-                    }
+    let region = selection.map_or(Crop::whole(vw, vh), |sel| sel.rect);
+    let (mut rgba, w, h) = render_region(frame, rotation, region, step);
+    if !erased.is_empty() {
+        let mut img =
+            image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer matches size");
+        erase::erase(
+            &mut img,
+            &erase::to_region(erased, (region.x, region.y), step),
+        );
+        rgba = img.into_raw();
+    }
+    let (rgba, w, h) = match selection.and_then(|sel| sel.quad) {
+        None => (rgba, w, h),
+        Some(quad) => {
+            // The quad in the rendered region's own pixels.
+            let local = quad.map(|[x, y]| {
+                [
+                    (x - region.x as f32) / step as f32,
+                    (y - region.y as f32) / step as f32,
+                ]
+            });
+            let img =
+                image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer matches size");
+            match layout::rectify(&img, &local) {
+                Some(out) => {
+                    let (ow, oh) = (out.width() as usize, out.height() as usize);
+                    (out.into_raw(), ow, oh)
                 }
+                None => (img.into_raw(), w, h),
             }
         }
     };
@@ -407,6 +424,22 @@ fn render_selection(
             (out.into_raw(), w, h)
         }
         _ => (rgba, w, h),
+    }
+}
+
+/// A point given as a fraction of the Zoom pane's image of `selection` (rectified,
+/// for a quad), in view space. `None` for a quad too degenerate to invert.
+fn zoom_to_view(selection: Selection, [fx, fy]: [f32; 2]) -> Option<[f32; 2]> {
+    let rect = selection.rect;
+    let (ox, oy) = (rect.x as f32, rect.y as f32);
+    match selection.quad {
+        None => Some([ox + fx * rect.w as f32, oy + fy * rect.h as f32]),
+        Some(quad) => {
+            let local = quad.map(|[x, y]| [x - ox, y - oy]);
+            let (w, h) = layout::rectified_size(&local);
+            let [x, y] = layout::unrectify(&local, [fx * w as f32, fy * h as f32])?;
+            Some([ox + x, oy + y])
+        }
     }
 }
 
@@ -426,6 +459,7 @@ type ViewKey = (
     Option<Selection>,
     usize,
     Rotation,
+    Vec<erase::Stroke>,
     Option<EnhanceConfig>,
     (usize, usize),
 );
@@ -450,6 +484,7 @@ impl View {
 
     /// `selection` is `None` for the whole view. `enhance` is `None` for a view that
     /// stays raw (the preview).
+    #[allow(clippy::too_many_arguments)]
     fn update(
         &mut self,
         ctx: &egui::Context,
@@ -457,19 +492,22 @@ impl View {
         selection: Option<Selection>,
         step: usize,
         rotation: Rotation,
+        erased: &[erase::Stroke],
         enhance: Option<EnhanceConfig>,
     ) -> (usize, usize) {
-        if let Some((f, r, s, rot, e, size)) = &self.key {
+        if let Some((f, r, s, rot, er, e, size)) = &self.key {
             if Arc::ptr_eq(f, frame)
                 && *r == selection
                 && *s == step
                 && *rot == rotation
+                && er.as_slice() == erased
                 && *e == enhance
             {
                 return *size;
             }
         }
-        let (rgba, w, h) = render_selection(frame, rotation, selection, step, enhance.as_ref());
+        let (rgba, w, h) =
+            render_selection(frame, rotation, selection, step, erased, enhance.as_ref());
         let image = ColorImage::from_rgba_unmultiplied([w, h], &rgba);
         match &mut self.texture {
             Some(t) => t.set(image, TextureOptions::LINEAR),
@@ -480,6 +518,7 @@ impl View {
             selection,
             step,
             rotation,
+            erased.to_vec(),
             enhance,
             (w, h),
         ));
@@ -502,6 +541,14 @@ pub struct App {
     /// What the crop is, when it came from a block: picks the prompt.
     crop_role: Option<Role>,
     drag: Option<Drag>,
+    /// Brush strokes painted over with paper before anything reads the capture (a
+    /// light scratch-out the model would read through), in view space, oldest first.
+    /// They belong to the capture: a retake, a zoom or a rotation drops them.
+    erased: Vec<erase::Stroke>,
+    /// A stroke is being painted: the last of `erased` grows with the pointer.
+    painting: bool,
+    /// The brush's diameter in screen points on the Zoom pane.
+    brush_px: f32,
     /// Scroll accumulators (egui smooths wheel input over frames).
     wheel_preview: f32,
     wheel_crop: f32,
@@ -572,6 +619,8 @@ pub struct App {
     dev_read_all: bool,
     /// Development aid: a zoom to apply live, and when the first frame was seen.
     dev_zoom: Option<(f32, Option<Instant>)>,
+    /// Development aid: regions to erase on the first frame, which is captured.
+    dev_erase: Vec<erase::Stroke>,
     /// Development aid: write a screenshot of the window to this path after the
     /// delay, then quit.
     screenshot: Option<(Duration, PathBuf, Instant)>,
@@ -600,6 +649,9 @@ impl App {
             quad: None,
             crop_role: None,
             drag: None,
+            erased: Vec::new(),
+            painting: false,
+            brush_px: BRUSH_DEFAULT_PX,
             wheel_preview: 0.0,
             wheel_crop: 0.0,
             save_dir,
@@ -643,6 +695,7 @@ impl App {
             dev_read_retries: 0,
             dev_read_all: false,
             dev_zoom: None,
+            dev_erase: Vec::new(),
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
             keys: KeyFocus::default(),
             detached_keys: Default::default(),
@@ -825,6 +878,10 @@ impl App {
         self.dev_zoom = zoom.map(|z| (z, None));
     }
 
+    pub fn set_dev_erase(&mut self, strokes: Vec<erase::Stroke>) {
+        self.dev_erase = strokes;
+    }
+
     pub fn set_dev_read(&mut self, on: bool, second: bool) {
         self.dev_read = on;
         self.dev_second = second;
@@ -919,11 +976,29 @@ impl App {
         self.captured.clone().or_else(|| self.shared().latest())
     }
 
+    /// The erasures that apply to `frame`: the capture's, none on a live frame.
+    fn erased_on(&self, frame: &Arc<YuvFrame>) -> Vec<erase::Stroke> {
+        match &self.captured {
+            Some(c) if Arc::ptr_eq(c, frame) => self.erased.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// ctrl+Z: takes back the last stroke.
+    fn undo_erase(&mut self) {
+        self.painting = false;
+        match self.erased.pop() {
+            Some(_) => self.say(format!("{} erased", strokes(self.erased.len()))),
+            None => self.say("nothing to undo"),
+        }
+    }
+
     fn say(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), Instant::now()));
     }
 
     fn capture(&mut self) {
+        self.erased.clear();
         if self.captured.is_some() {
             self.captured = None;
             self.say("live again");
@@ -1082,6 +1157,7 @@ impl App {
             self.rotation,
             selection,
             1,
+            &self.erased,
             Some(&self.config.enhance),
         );
         let mut png = Vec::new();
@@ -1364,6 +1440,7 @@ impl App {
     fn go_live(&mut self) {
         if self.captured.is_some() {
             self.captured = None;
+            self.erased.clear();
             self.say("live again (zoom changed)");
         }
     }
@@ -1371,8 +1448,10 @@ impl App {
     fn rotate(&mut self, rotation: Rotation) {
         if rotation != self.rotation {
             self.rotation = rotation;
-            // The crop is in view space; rather than spin it, start over.
+            // The crop and erasures are in view space; rather than spin them, start
+            // over.
             self.set_rect(None);
+            self.erased.clear();
         }
     }
 
@@ -1382,7 +1461,9 @@ impl App {
             self.say("nothing to save yet");
             return;
         };
-        let (rgba, w, h) = render_selection(&frame, self.rotation, self.selection(), 1, None);
+        let erased = self.erased_on(&frame);
+        let (rgba, w, h) =
+            render_selection(&frame, self.rotation, self.selection(), 1, &erased, None);
         let path = self.save_dir.join(format!(
             "squigl-{}.png",
             chrono::Local::now().format("%Y%m%d-%H%M%S")
@@ -1590,8 +1671,9 @@ impl App {
     fn preview_panel(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
         let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
         let step = vw.max(vh).div_ceil(PREVIEW_MAX_EDGE).max(1);
+        let erased = self.erased_on(frame);
         self.preview
-            .update(ui.ctx(), frame, None, step, self.rotation, None);
+            .update(ui.ctx(), frame, None, step, self.rotation, &erased, None);
         let Some(texture) = &self.preview.texture else {
             return;
         };
@@ -1710,6 +1792,19 @@ impl App {
             let bg = Rect::from_min_size(at, galley.size() + Vec2::splat(4.0));
             painter.rect_filled(bg, 2.0, colour);
             painter.galley(at + Vec2::splat(2.0), galley, Color32::BLACK);
+        }
+
+        // Erased strokes, tinted: their fill is meant to vanish into the page.
+        let tint = ERASED_COLOUR.gamma_multiply(0.45);
+        for st in &erased {
+            let width = (2.0 * st.radius * scale).max(1.0);
+            let points: Vec<Pos2> = st.points.iter().map(|[x, y]| to_screen(*x, *y)).collect();
+            for p in [points[0], points[points.len() - 1]] {
+                painter.circle_filled(p, width / 2.0, tint);
+            }
+            if points.len() > 1 {
+                painter.add(Shape::line(points, Stroke::new(width, tint)));
+            }
         }
 
         if let Some(crop) = self.crop {
@@ -1932,6 +2027,11 @@ impl App {
                     "Capture freezes the frame; Save writes the box (or the whole frame) \
                      as a PNG at full resolution; Read it sends it to the model.",
                 );
+                ui.label(
+                    "Paint over the zoomed box to erase what is under it (a lightly \
+                     struck-out word) before it is read; ctrl+wheel or the slider sizes the \
+                     brush, ctrl+Z takes back the last stroke.",
+                );
                 if self.detector.is_some() {
                     ui.label(
                         "Blocks [L] keeps finding the page's blocks in reading order as \
@@ -1944,13 +2044,27 @@ impl App {
         };
         let crop = selection.rect;
         enhance_controls(ui, &mut self.config.enhance, &mut self.enhance_open);
+        ui.horizontal(|ui| {
+            ui.label("Erase brush");
+            ui.add(
+                egui::Slider::new(&mut self.brush_px, BRUSH_MIN_PX..=BRUSH_MAX_PX)
+                    .logarithmic(true)
+                    .suffix(" px")
+                    .fixed_decimals(0),
+            )
+            .on_hover_text(
+                "paint over the zoomed box to erase; ctrl+wheel over it sizes the brush",
+            );
+        });
         let step = crop.w.max(crop.h).div_ceil(PREVIEW_MAX_EDGE).max(1);
+        let erased = self.erased_on(frame);
         let (tw, th) = self.crop_view.update(
             ui.ctx(),
             frame,
             Some(selection),
             step,
             self.rotation,
+            &erased,
             Some(self.config.enhance),
         );
         let Some(texture) = &self.crop_view.texture else {
@@ -1970,7 +2084,7 @@ impl App {
             })
             .unwrap_or_default();
         ui.label(format!(
-            "{nw}×{nh} px at ({}, {}){}{}{}",
+            "{nw}×{nh} px at ({}, {}){}{}{}{}",
             crop.x,
             crop.y,
             if selection.quad.is_some() {
@@ -1984,6 +2098,10 @@ impl App {
                 String::new()
             },
             block,
+            match erased.len() {
+                0 => String::new(),
+                n => format!(", {} erased (ctrl+Z undoes)", strokes(n)),
+            },
         ));
         let avail = ui.available_size();
         let scale = (avail.x / nw as f32).min(avail.y / nh as f32);
@@ -1994,10 +2112,11 @@ impl App {
                 ui.add(
                     egui::Image::from_texture(texture)
                         .fit_to_exact_size(size)
-                        .sense(Sense::hover()),
+                        .sense(Sense::drag()),
                 )
             })
             .inner;
+        self.erase_gesture(ui, &response, selection);
         // Wheel over the zoomed view: grow or shrink the box about its centre.
         if response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
@@ -2007,6 +2126,81 @@ impl App {
                 let factor = 1.1f32.powi(-notches);
                 self.set_rect(Some(crop.scaled(factor, vw, vh)));
             }
+        }
+    }
+
+    /// Painting over the zoomed box: a drag is a stroke (a click a dot) of the brush,
+    /// mapped back to view space (through the rectification, for a quad) as it goes;
+    /// ctrl+wheel sizes the brush, whose outline follows the pointer. Painting on a
+    /// live frame captures it first, as a read does.
+    fn erase_gesture(&mut self, ui: &egui::Ui, response: &egui::Response, selection: Selection) {
+        let rect = response.rect;
+        if response.hovered() {
+            let zoom = ui.input(|i| i.zoom_delta());
+            if zoom != 1.0 {
+                self.brush_px = (self.brush_px * zoom).clamp(BRUSH_MIN_PX, BRUSH_MAX_PX);
+            }
+            if let Some(p) = response.hover_pos() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                ui.painter_at(rect).circle_stroke(
+                    p,
+                    self.brush_px / 2.0,
+                    Stroke::new(1.5, ERASED_COLOUR),
+                );
+            }
+        }
+        let frac = |p: Pos2| {
+            [
+                ((p.x - rect.min.x) / rect.width()).clamp(0.0, 1.0),
+                ((p.y - rect.min.y) / rect.height()).clamp(0.0, 1.0),
+            ]
+        };
+        let to_view = |p: Pos2| zoom_to_view(selection, frac(p));
+        let pressed = response.drag_started() || response.clicked();
+        if pressed && !self.painting {
+            let Some(pos) = response.interact_pointer_pos() else {
+                return;
+            };
+            // The brush's radius in view pixels, measured where it lands (a
+            // rectified quad's scale varies across it).
+            let edge = pos + Vec2::new(self.brush_px / 2.0, 0.0);
+            let (Some(at), Some(off)) = (to_view(pos), to_view(edge)) else {
+                return;
+            };
+            let radius = ((off[0] - at[0]).powi(2) + (off[1] - at[1]).powi(2)).sqrt();
+            if self.captured.is_none() {
+                self.capture();
+            }
+            if self.captured.is_none() || radius <= 0.0 {
+                return;
+            }
+            self.erased.push(erase::Stroke {
+                points: vec![at],
+                radius,
+            });
+            self.painting = !response.clicked();
+        } else if self.painting && response.dragged() {
+            let (Some(pos), Some(stroke)) =
+                (response.interact_pointer_pos(), self.erased.last_mut())
+            else {
+                return;
+            };
+            if let Some(p) = to_view(pos) {
+                // A new point once the pointer has moved a third of the brush, so a
+                // long stroke stays a few dozen segments.
+                let last = stroke.points[stroke.points.len() - 1];
+                let moved = ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2)).sqrt();
+                if moved >= stroke.radius / 3.0 {
+                    stroke.points.push(p);
+                }
+            }
+        }
+        if response.clicked() || (self.painting && response.drag_stopped()) {
+            self.painting = false;
+            self.say(format!(
+                "{} erased (ctrl+Z takes back the last)",
+                strokes(self.erased.len())
+            ));
         }
     }
 
@@ -2180,6 +2374,9 @@ impl App {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(Key::Comma)) {
             self.toggle_settings();
+        }
+        if ctx.input(|i| i.modifiers.command && !i.modifiers.shift && i.key_pressed(Key::Z)) {
+            self.undo_erase();
         }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::H)) {
             self.history_open = !self.history_open;
@@ -2397,6 +2594,14 @@ impl App {
                 _ => {
                     ui.ctx().request_repaint_after(Duration::from_millis(200));
                 }
+            }
+        }
+        if !self.dev_erase.is_empty() {
+            if self.captured.is_none() {
+                self.capture();
+            }
+            if self.captured.is_some() {
+                self.erased = std::mem::take(&mut self.dev_erase);
             }
         }
         if self.dev_read && self.backend_ready() {
@@ -3559,5 +3764,76 @@ mod tests {
                 h: 15
             })
         );
+    }
+
+    #[test]
+    fn an_erased_region_is_flat_in_every_render_and_the_rest_is_untouched() {
+        let f = frame();
+        // Covers pixel centres (1..3, 1..3) and nothing else.
+        let erased = erase::Stroke::line([2.0, 1.5], [2.0, 2.5], 0.75);
+        let (raw, w, _) = render_selection(&f, Rotation::None, None, 1, &[], None);
+        let (out, _, _) = render_selection(
+            &f,
+            Rotation::None,
+            None,
+            1,
+            std::slice::from_ref(&erased),
+            None,
+        );
+        let inside = |x: usize, y: usize| (1..3).contains(&x) && (1..3).contains(&y);
+        let fill = at(&out, w, 1, 1);
+        for y in 0..4 {
+            for x in 0..6 {
+                if inside(x, y) {
+                    assert_eq!(at(&out, w, x, y), fill, "({x}, {y}) inside");
+                } else {
+                    assert_eq!(at(&out, w, x, y), at(&raw, w, x, y), "({x}, {y}) outside");
+                }
+            }
+        }
+        // A selection over part of it sees the erasure in its own pixels: flat, though
+        // its fill is sampled from the ring as far as this render reaches.
+        let sel = Selection {
+            rect: Crop {
+                x: 2,
+                y: 0,
+                w: 4,
+                h: 4,
+            },
+            quad: None,
+        };
+        let (part, pw, _) = render_selection(&f, Rotation::None, Some(sel), 1, &[erased], None);
+        assert_eq!(at(&part, pw, 0, 1), at(&part, pw, 0, 2));
+        assert_ne!(at(&part, pw, 0, 2), at(&raw, w, 2, 2));
+        assert_eq!(at(&part, pw, 1, 2), at(&raw, w, 3, 2));
+    }
+
+    #[test]
+    fn a_zoom_pane_point_maps_to_view_space() {
+        let rect = Crop {
+            x: 100,
+            y: 50,
+            w: 200,
+            h: 80,
+        };
+        let plain = Selection { rect, quad: None };
+        assert_eq!(zoom_to_view(plain, [0.25, 0.5]), Some([150.0, 90.0]));
+        assert_eq!(zoom_to_view(plain, [1.0, 1.0]), Some([300.0, 130.0]));
+        // For a quad the rectified image's corners are the quad's.
+        let quad: Quad = [[110.0, 55.0], [290.0, 70.0], [280.0, 128.0], [105.0, 110.0]];
+        let tilted = Selection {
+            rect,
+            quad: Some(quad),
+        };
+        for (corner, want) in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            .iter()
+            .zip(quad)
+        {
+            let got = zoom_to_view(tilted, *corner).unwrap();
+            assert!(
+                (got[0] - want[0]).abs() < 1e-2 && (got[1] - want[1]).abs() < 1e-2,
+                "{got:?} != {want:?}"
+            );
+        }
     }
 }
