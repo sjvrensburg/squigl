@@ -112,6 +112,26 @@ pub fn rectify(img: &RgbaImage, q: &Quad) -> Option<RgbaImage> {
     Some(out)
 }
 
+/// The inverse of [`rectify`] for one point: where `p`, in the rectified image of
+/// `q`, came from in `q`'s own space. `None` for a degenerate quad.
+pub fn unrectify(q: &Quad, p: [f32; 2]) -> Option<[f32; 2]> {
+    let (w, h) = rectified_size(q);
+    let from = [
+        (0.0, 0.0),
+        (w as f32, 0.0),
+        (w as f32, h as f32),
+        (0.0, h as f32),
+    ];
+    let to = [
+        (q[0][0], q[0][1]),
+        (q[1][0], q[1][1]),
+        (q[2][0], q[2][1]),
+        (q[3][0], q[3][1]),
+    ];
+    let (x, y) = Projection::from_control_points(from, to)? * (p[0], p[1]);
+    Some([x, y])
+}
+
 /// Packed RGBA8 → RGB, for a detector.
 pub fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> RgbImage {
     let mut out = RgbImage::new(w as u32, h as u32);
@@ -124,6 +144,25 @@ pub fn rgba_to_rgb(rgba: &[u8], w: usize, h: usize) -> RgbImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrectify_takes_the_rectified_corners_back_to_the_quad() {
+        let q: Quad = [[10.0, 4.0], [50.0, 12.0], [46.0, 40.0], [6.0, 30.0]];
+        let (w, h) = rectified_size(&q);
+        let corners = [
+            [0.0, 0.0],
+            [w as f32, 0.0],
+            [w as f32, h as f32],
+            [0.0, h as f32],
+        ];
+        for (c, want) in corners.iter().zip(q) {
+            let got = unrectify(&q, *c).unwrap();
+            assert!(
+                (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+                "{c:?} -> {got:?}, want {want:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_rectangle_rectifies_to_itself() {
