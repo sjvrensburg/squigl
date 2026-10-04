@@ -11,11 +11,11 @@
 //! caller binds to. A phone on a different network (cellular, guest Wi-Fi) won't reach
 //! this without a relay, which is out of scope -- see the crate README.
 //!
-//! H.264 only ([`accept_offer`] restricts the SDP negotiation to it), so the browser
-//! page must prefer/force H.264 in its `getUserMedia`/transceiver setup: str0m's H.264
-//! depacketizer hands back complete Annex-B access units (start-code delimited, exactly
-//! what [`crate::decode::Decoder::decode`] already expects from the scrcpy protocol
-//! path), so no format conversion is needed between the two sources.
+//! H.264 only ([`WebrtcSource::accept_offer`] restricts the SDP negotiation to it), so
+//! the browser page must prefer/force H.264 in its `getUserMedia`/transceiver setup:
+//! str0m's H.264 depacketizer hands back complete Annex-B access units (start-code
+//! delimited, exactly what [`crate::decode::Decoder::decode`] already expects from the
+//! scrcpy protocol path), so no format conversion is needed between the two sources.
 
 use crate::decode::{self, Decoder, YuvFrame};
 use crate::error::{Error, Result};
