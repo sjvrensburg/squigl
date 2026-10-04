@@ -12,7 +12,7 @@ description = "Squigl's UI-independent logic: the camera worker, selection geome
 squigl-core = { path = "../squigl-core" }
 anyhow.workspace = true
 log.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
 # Perspective warp for rectifying a detected block (no default features: they pull
 # every image format and a text renderer).
 imageproc = { version = "0.27", default-features = false, features = ["rayon"] }
