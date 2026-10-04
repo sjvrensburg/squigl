@@ -50,7 +50,7 @@ jobs:
             "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
 
       - name: Build
-        run: cargo build --release -p squigl-cli -p squigl
+        run: cargo build --release -p squigl-cli -p squigl-egui
 
       - name: Package binaries
         id: pkg

@@ -3,10 +3,6 @@
 //! the `squigl-core` library; this crate is the window and the reconnect policy.
 
 mod app;
-#[cfg(feature = "local-model")]
-mod local;
-#[cfg(feature = "math")]
-mod mathtext;
 mod panes;
 mod settings;
 
@@ -171,7 +167,7 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "local-model")]
     if let Some(dir) = &args.fetch_model {
-        for spec in local::models::ALL {
+        for spec in squigl_models::models::ALL {
             let target = dir.join(spec.name);
             spec.download_into(&target, &|s| eprintln!("{s}"))?;
             println!("{}", target.display());
@@ -272,7 +268,7 @@ fn main() -> Result<()> {
             device,
             max_tokens,
             max_image_tokens,
-        } => Some(Box::new(local::LocalBackend::new(
+        } => Some(Box::new(squigl_models::LocalBackend::new(
             name.clone(),
             *device,
             *max_tokens,
@@ -288,7 +284,7 @@ fn main() -> Result<()> {
     #[cfg(feature = "local-model")]
     let detector_factory: app::DetectorFactory = Box::new(|layout| {
         layout.enabled.then(|| {
-            std::sync::Arc::new(local::layout::LayoutService::new(
+            std::sync::Arc::new(squigl_models::layout::LayoutService::new(
                 layout.device,
                 layout.threshold,
             )) as _
@@ -298,7 +294,7 @@ fn main() -> Result<()> {
     let detector_factory: app::DetectorFactory = Box::new(|_| None);
     #[cfg(feature = "math")]
     let typesetter: Option<std::sync::Arc<dyn squigl_engine::typeset::Typesetter>> =
-        Some(std::sync::Arc::new(mathtext::Renderer::new()));
+        Some(std::sync::Arc::new(squigl_math::Renderer::new()));
     #[cfg(not(feature = "math"))]
     let typesetter: Option<std::sync::Arc<dyn squigl_engine::typeset::Typesetter>> = None;
 

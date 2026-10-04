@@ -78,4 +78,4 @@ jobs:
         run: cargo test --workspace ${{ matrix.args }}
 
       - name: Build release binaries
-        run: cargo build --release -p squigl-cli -p squigl ${{ matrix.args }}
+        run: cargo build --release -p squigl-cli -p squigl-egui ${{ matrix.args }}

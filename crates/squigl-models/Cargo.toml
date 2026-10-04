@@ -1,0 +1,29 @@
+[package]
+name = "squigl-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Squigl's built-in models: GLM-OCR for reading and PP-DocLayoutV3 for block detection, on ONNX Runtime"
+
+# GLM-OCR (onnx-community q4f16 export) as a Transcriber and PP-DocLayoutV3 as a
+# BlockDetector, run through ONNX Runtime, WebGPU (Vulkan on Linux) with CPU
+# fallback. Downloads pyke's prebuilt ONNX Runtime at build time and the models
+# (~650 MB + ~130 MB) on first use.
+[dependencies]
+squigl-engine = { path = "../squigl-engine" }
+anyhow.workspace = true
+log.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Contours/min-area-rect for the block detector (no default features: they pull
+# every image format and a text renderer).
+imageproc = { version = "0.27", default-features = false, features = ["rayon"] }
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HEAD of pykeio/ort as read on 2026-09-12; its API differs from the published rc.13.
+ort = { git = "https://github.com/pykeio/ort", rev = "085eb2af3d55fa2f4eacceb6ef43825dbf1b771c", features = ["half", "webgpu"] }
+half = "2"
+ndarray = "0.17"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+sha2 = "0.10"

@@ -1,0 +1,19 @@
+[package]
+name = "squigl-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Squigl's readings typeset: LaTeX maths converted by MiTeX, rendered by Typst"
+
+# Adds ~40 MB to a binary (Typst and its embedded fonts).
+[dependencies]
+squigl-engine = { path = "../squigl-engine" }
+anyhow.workspace = true
+log.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+typst-as-lib = { version = "0.16", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
+typst = "0.15"
+typst-layout = "0.15"
+typst-render = "0.15"
+mitex = "0.2"
