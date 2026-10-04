@@ -59,6 +59,8 @@ No frame was corrupted in any run. Frames arrived out of order only with `scheme
 - **The WebSocket.** It is the only transport that passes at 12 MB (a 4000x3000 frame), and it costs about half the CPU of the others at every size. That is the roadmap's default; nothing here argues for opening no port instead.
 - **The custom scheme and IPC** are fine up to about 5 MB, which is enough for a decimated magnifier view. They spend about 3 times the CPU of the WebSocket per byte.
 
+**Software rendering (llvmpipe, a first S3 data point).** With `LIBGL_ALWAYS_SOFTWARE=1`, WebGL2 still works. The WebSocket at 3 MB holds 30 fps (p95 5.5 ms), but costs 3.4 cores, against 0.21 on the GPU. A machine with no working GPU driver therefore needs smaller frames (a bigger step) or the Canvas2D path.
+
 ### Still to run
 
 - **The Ubuntu box with the Nvidia GPU.** This is the most likely WebKitGTK trouble spot. Run `./run.sh` there and bring back `results-<host>.jsonl`.
