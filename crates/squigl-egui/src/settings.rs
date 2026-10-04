@@ -4,7 +4,8 @@
 //! Save writes the file and applies it, Cancel drops the draft.
 
 use egui::{ComboBox, DragValue, Slider, TextEdit};
-use squigl_engine::transcribe::{BackendConfig, Config, LocalDevice, Mode};
+use squigl_engine::config::Config;
+use squigl_engine::transcribe::{BackendConfig, LocalDevice, Mode};
 
 /// What the window asked for this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

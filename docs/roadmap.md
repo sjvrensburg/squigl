@@ -209,6 +209,16 @@ crates/
 - **egui:** `--open FILE`, drag-and-drop of an image or `.sqrec`, and "Use phone" are done; the camera controls follow `Capabilities`.
   - Pasting an image moves to Phase 4. egui-winit takes ctrl+V for itself and passes on only text, so an image-only clipboard never reaches the app. The webview's own paste event handles images.
 - **`squigl_engine::paths` (`directories`):** done. It covers the config, the model cache and the pictures folder; the Linux paths are unchanged, and a test holds that.
+- **The engine API, `squigl_engine::engine`:** done.
+  - It has `Engine`, `Command`, `Reply`, `Event`, the versioned slices in `EngineState` (the reading ones defined and empty until Phase 7), the waker and `pump`.
+  - **Pulled forward from Phase 7:** the engine owns the backends and the detector, with `apply_config`'s diffing as `Command::SetConfig`. `PrepareModel` and the models slice need them.
+- **Display and planes:** `display::lut`, `view::{Viewport, ViewRequest, render_planes}` and `convert::i420_region_planes` are done.
+  - Parity is tested exactly for every rotation, region origin and step against `render_region`.
+- **Config:** the `[display]` and `[magnifier]` sections are done, with a round-trip test.
+- **Models:** `ModelPhase` with `PhaseCell` coalescing, lazy `PrepareModel`, and `CancelModelDownload` are done (`squigl_models::lifecycle`). egui stays eager (`EngineOptions::eager_models`).
+- **egui on the engine:** done for the stream, sources, camera controls, capture, rotation, config and backends. Reads, crop and blocks stay in `app.rs` (Phase 7).
+
+**Phase 2 is complete.**
 
 **Exit criteria:**
 

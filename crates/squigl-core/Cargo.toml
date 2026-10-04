@@ -10,6 +10,7 @@ description = "An Android phone's camera as decoded frames: scrcpy-server over A
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
+serde = { version = "1", features = ["derive"] }
 openh264 = { workspace = true, features = ["source"] }
 ffmpeg-next = { workspace = true, optional = true }
 str0m = { version = "0.23.1", default-features = false, features = ["rust-crypto"] }

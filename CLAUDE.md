@@ -162,7 +162,29 @@ endpoint at `POST /whip` (one session at a time; a second POST while one is acti
 
 `crates/squigl-engine` is the window's UI-independent half -- no egui, ONNX Runtime or
 Typst (`cargo tree -p squigl-engine` must show none: the built-in models and the
-typesetter implement its traits from outside, so a second front end can sit on it):
+typesetter implement its traits from outside, so a second front end can sit on it).
+`engine.rs` is its API: `Engine::new(config, stream, EngineDeps { backends, detector },
+EngineOptions { eager_models, config_file }, waker)`; `handle(Command)` (serde-tagged:
+freeze/live, rotation, source, facing/zoom/torch/reconnect, `SetConfig` -- which
+keeps unchanged backends, rebuilds the detector on a `[layout]` change and saves --
+and `PrepareModel`/`CancelModelDownload`); `pump(now)` returns the `Event`s since the
+last call: every versioned slice in `EngineState` (stream, capture, blocks, reading,
+models, config) whose version moved since it was last sent (commands refresh slices
+too, so `pump` tracks sent versions, not "changed this time"), `Frame { seq }`, and
+`Notice`s. The blocks/reading slices and the result/history events are defined but
+not filled yet -- reads still run in `app.rs` (roadmap Phase 7). `render_planes`
+answers a `view::ViewRequest` (from `view::Viewport::request`: the visible region and
+the largest step keeping >= 1 sent pixel per device pixel) with raw planes
+(`convert::i420_region_planes`, unrotated, chroma sampled where
+`i420_region_to_rgba` would) and a `PlaneHeader`; `display.rs` turns `[display]`
+into a 256-entry `Lut` (`Tone` per RGB channel, or `Luma` from the limited-range Y
+byte to an ink-to-paper colour) with contrast/brightness/gamma/threshold baked in;
+`model.rs`: `ModelPhase` (tagged, `describe()` for people), `ModelContext { eager,
+notify }` the factories get, and `PhaseCell`, which coalesces notifications (every
+change of kind, download progress per whole per cent or 250 ms); `config.rs`: the
+`gui.toml` `Config` (moved from `transcribe.rs`; `[display]` and `[magnifier]` are
+new, `every_section_round_trips` guards against one front end dropping another's
+fields);
 `stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`
 from the `SourceSpec` in `StreamConfig::source` -- `Phone` (the ADB session, per the
 config's `options`/`resolution`, which are kept while another source is in use),
@@ -179,9 +201,8 @@ raw; `erase.rs`: the fill -- everything within the radius of the path, one flat
 colour per stroke from the 75th-percentile-bright pixel of a ring around it, no
 inpainting; `transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and
 halo-workbench `/hint/read` backends (`BackendConfig::build` builds only these; the
-window's `BackendFactory` adds the built-in model), and the
-`~/.config/squigl/gui.toml` `Config` (backend list, `[layout]`, `[prompts]`,
-`[ui] scale`; `LocalDevice` lives here so every build reads the same file) -- the
+front end's `BackendFactory` adds the built-in model), and the backend entries of
+the config (`LocalDevice` lives here so every build reads the same file) -- the
 default prompts are verbatim from halo-workbench's `handwriting.py` and travel with
 each read (`Transcriber::read` takes the prompt; the hint API ignores it),
 readings are grouped and counted, never merged; `layout.rs`: the `BlockDetector`
@@ -196,7 +217,11 @@ front end's); `paths.rs`: the config, cache and pictures directories per OS via 
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
 Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
 
-`crates/squigl-egui` is the egui document-camera window (`app.rs`: preview, crop,
+`crates/squigl-egui` is the egui document-camera window, on an `Engine` (eager
+models; it pumps once per pass, shows `Notice`s in its status line, and reads the
+capture, rotation, config and backends from the engine; erasures follow the
+engine's capture number, so the engine going live on a zoom or a new source drops
+them) (`app.rs`: preview, crop,
 capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path
 plus radius -- painted with a brush over the Zoom pane, whose size is in screen
 points, each point mapped back through the rectification by `zoom_to_view`; a
@@ -206,11 +231,12 @@ of Preview/Zoom/Reading is active, maximised or detached (`App::pane` draws one 
 its header; a detached pane is an egui immediate viewport, `App::detached_windows`,
 which runs the same shortcuts as the main window while that pane's own window has
 focus); `settings.rs`: the Settings window editing
-a draft `Config`, applied by `App::apply_config` (backends whose entry is unchanged
-are kept, so the local model is not reloaded; the detector is rebuilt through the
-`DetectorFactory` main.rs passes in, backends through its `BackendFactory`; the scale is egui's zoom factor and the value
+a draft `Config`, applied by `App::apply_config` through `Command::SetConfig` (the
+engine keeps unchanged backends and saves; the window follows the selected backend
+by name); the scale is egui's zoom factor and the value
 in force is authoritative -- `track_zoom` writes any change into config and draft
-and saves it at once, so Save/Cancel never touch it). `crates/squigl-math` (the GUI's
+and saves it at once, so Save/Cancel never touch it; the enhancement knobs edit
+`App::enhance`, written into the config once no pointer button is held). `crates/squigl-math` (the GUI's
 `math` feature): readings typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
 crate and evaluated inside MiTeX's Typst scope (vendored under `assets/mitex/`, so
 `\operatorname` and friends resolve), the rest escaped as markup, rasterised by
@@ -239,14 +265,19 @@ times), `models.rs` finds or downloads
 each model's files (pinned HF revision + sha256 manifest; `$SQUIGL_MODEL_DIR/<name>/`,
 `models/<name>/` beside `$APPIMAGE`, exe-adjacent `models/<name>/`, then
 `~/.cache/squigl/models/<name>/`), and
+`lifecycle.rs` is both models' life (`Lifecycle<T>`: idle, preparing on a thread --
+`ModelSpec::ensure` then the loader --, ready or failed, with the phase in a
+`PhaseCell` and a cancel flag the download checks per file and per chunk; eager or
+on `prepare()`, per the `ModelContext`), and
 `lib.rs` holds the one process-wide `ort` environment (`ort` refuses a second)
-and wraps GLM-OCR as a `Transcriber` that prepares on a thread, plus `RUNTIME`, the
+and wraps GLM-OCR as a `Transcriber` (`phase`/`prepare`/`cancel_prepare` from the
+lifecycle), plus `RUNTIME`, the
 one lock every session load and run takes: the WebGPU EP segfaults on concurrent
 `run` across sessions (microsoft/onnxruntime#32561, open) -- keep it until the
 pinned runtime has the fix; and `GPU_LOST`, set by `note_gpu_loss` when a run fails
 with a lost device (with IO binding the loss surfaces as an ORT error, not a
 segfault), after which `attempts()` yields the CPU only and both services drop their
-model and `prepare()` again. In `app.rs` the crop
+model and reload (`Lifecycle::reload`, phase `Reloading`). In `app.rs` the crop
 is a rectangle plus an optional quad (`Selection`); any hand edit of the crop drops
 the quad (`set_rect`) except dragging a quad corner, which moves that corner and
 refits the rectangle. Block mode (`block_mode`) re-runs the detector whenever the
