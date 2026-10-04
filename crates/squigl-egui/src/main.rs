@@ -237,12 +237,9 @@ fn main() -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         tee_device: None,
     };
-    let save_dir = args.save_dir.unwrap_or_else(|| {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        home.join("Pictures").join("squigl")
-    });
+    let save_dir = args
+        .save_dir
+        .unwrap_or_else(squigl_engine::paths::pictures_dir);
 
     let rotation = match args.rotate.as_str() {
         "90" => Rotation::Cw90,

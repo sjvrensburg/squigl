@@ -206,7 +206,9 @@ crates/
   - `Phone` reads the config's ADB options, which are kept while another source is in use.
   - `Webrtc` is added in Phase 5, with the pairing server.
   - `squigl_core::TestPattern` replaces the CLI's own pattern.
-- **egui:** `--open FILE`, drag-and-drop of an image or `.sqrec`, and "Use phone" are done; the camera controls follow `Capabilities`. Paste is still to do.
+- **egui:** `--open FILE`, drag-and-drop of an image or `.sqrec`, and "Use phone" are done; the camera controls follow `Capabilities`.
+  - Pasting an image moves to Phase 4. egui-winit takes ctrl+V for itself and passes on only text, so an image-only clipboard never reaches the app. The webview's own paste event handles images.
+- **`squigl_engine::paths` (`directories`):** done. It covers the config, the model cache and the pictures folder; the Linux paths are unchanged, and a test holds that.
 
 **Exit criteria:**
 

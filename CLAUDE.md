@@ -192,7 +192,9 @@ non-rectangular block goes through before it is shown or read; `history.rs`: eve
 finished read of the session (`App::history`, appended alongside `results`, which
 only ever drops its prefix -- "copy all" relies on that), Markdown export by capture;
 `typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
-front end's).
+front end's); `paths.rs`: the config, cache and pictures directories per OS via the
+`directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
+Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
 
 `crates/squigl-egui` is the egui document-camera window (`app.rs`: preview, crop,
 capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path

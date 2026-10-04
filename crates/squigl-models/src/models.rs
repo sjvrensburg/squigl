@@ -123,11 +123,7 @@ fn candidate_dirs(name: &str) -> Vec<PathBuf> {
 
 /// Where a download lands.
 fn cache_dir(name: &str) -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_default();
-    base.join("squigl").join("models").join(name)
+    squigl_engine::paths::cache_dir().join("models").join(name)
 }
 
 impl ModelSpec {
