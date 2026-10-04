@@ -33,7 +33,8 @@
   let capture = $state<CaptureSlice | null>(null);
   let config = $state<Config | null>(null);
   let view = $state<View>({ centre: [0.5, 0.5], magnification: 1 });
-  let notice = $state("Starting…");
+  // The status on the left says "Starting…"; this is for what happens after.
+  let notice = $state("");
   let failure = $state<string | null>(null);
   let settingsOpen = $state(false);
   let dropping = $state(false);

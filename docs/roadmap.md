@@ -162,6 +162,10 @@ crates/
   - **macOS arm64:** `libwebgpu_dawn.dylib`, next to the binary (found through `@executable_path`).
 
   On both, as on Linux, they are symlinks into ort's cache, so packaging copies the real files (Phase 6: all three DLLs on Windows).
+- **On Windows, the build needs the Visual Studio 2026 C++ Build Tools** (MSVC 14.5x, winget `Microsoft.VisualStudio.BuildTools`). With the 2022 tools (14.44), linking the pinned ONNX Runtime's prebuilt library fails on `__std_rotate`, `__std_max_element_8i` and similar. `windows-latest` has 2026.
+- **The Windows 11 VM (2026-10-04):**
+  - Both apps build there.
+  - `squigl-desktop` streams live from the phone over adb, with no extra USB driver needed for this Samsung on LineageOS.
 - Still open:
   - `glmocr_handwriting` on CPU on those runners, which needs the model download (a manual job);
   - whether the WebGPU provider actually runs there, which needs a real GPU *(tester)*;
