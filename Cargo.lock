@@ -7849,12 +7849,14 @@ dependencies = [
  "log",
  "ndarray",
  "ort",
+ "pollster",
  "serde",
  "serde_json",
  "sha2",
  "squigl-engine",
  "tokenizers",
  "ureq 3.4.1",
+ "wgpu",
 ]
 
 [[package]]
