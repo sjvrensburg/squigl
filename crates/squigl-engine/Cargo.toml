@@ -26,3 +26,6 @@ base64 = "0.22"
 # The camera worker's optional copy of the stream to a v4l2loopback device.
 [target.'cfg(target_os = "linux")'.dependencies]
 squigl-v4l2 = { path = "../squigl-v4l2" }
+
+[dev-dependencies]
+openh264.workspace = true

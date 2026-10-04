@@ -6117,6 +6117,7 @@ dependencies = [
  "image",
  "imageproc",
  "log",
+ "openh264",
  "serde",
  "serde_json",
  "squigl-core",

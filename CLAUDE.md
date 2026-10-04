@@ -50,6 +50,14 @@ Exercise the whole V4L2 sink path with **no phone attached**:
 ./target/release/squigl-cli --test-pattern --device /dev/video10
 ```
 
+Record the phone once, then run anything against the recording with **no phone**
+(`--record` keeps the first connection; ~500 KB/s at `--bitrate 4`):
+```
+./target/release/squigl-cli --resolution 1920x1080 --bitrate 4 --record desk.sqrec   # Ctrl-C to stop
+./target/release/squigl-cli --replay desk.sqrec --device /dev/video10                 # loops
+./target/release/squigl --replay desk.sqrec --rotate 90 --dev-detect --dev-read-all --screenshot-after 45 --screenshot-path /tmp/gui.png
+```
+
 Exercise the WebRTC source (no ADB, no phone -- any browser on the LAN works for
 testing, `--webrtc-bind 127.0.0.1` even lets you test from the same machine):
 ```
@@ -118,6 +126,14 @@ Linux-specific code; 7 in `crates/squigl-v4l2/src/`):
    `loopback.rs`, which auto-loads `v4l2loopback` via `pkexec modprobe` if the device
    node is missing. The GUI depends on it only on Linux (`--device` is cfg'd out
    elsewhere).
+
+**`replay.rs`** records a session (`CameraSession::record_to`, a tee of the packets
+`run` reads) and plays it back (`Replay::run`, same shape as `CameraSession::run`,
+paced by the recorded pts, optionally looping). The format is squigl's own (`SQGLREC1`
+magic, size, then pts/flags/length/Annex-B per packet), not scrcpy's wire format, so
+recordings outlive a scrcpy bump. The engine's stream worker plays one in place of the
+phone when `StreamConfig::replay` is set (`squigl --replay FILE`). Its tests encode
+synthetic recordings with openh264, so no binary fixture is checked in.
 
 **`webrtc_source.rs`** is a second, independent camera source alongside `session.rs`,
 for phones that stream over the network instead of ADB (there's no squigl-side app to
