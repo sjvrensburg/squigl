@@ -7,6 +7,8 @@
 //!   [`i420_region_to_rgba`]): packed RGBA8 for on-screen display (a GUI texture), whole,
 //!   a region at native pixels, or every n-th pixel for a cheap preview of a large frame.
 //! - [`rgba_to_i420`]: the other way, for a still image shown as a camera frame.
+//! - [`i420_region_planes`]: a region at a step as raw planes, unconverted, for a
+//!   front end that converts on the GPU.
 
 use crate::decode::YuvFrame;
 
@@ -120,8 +122,81 @@ fn convert_rgba(
     }
 }
 
+/// Which planes [`i420_region_planes`] returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlaneFormat {
+    /// Luma only: enough for every two-colour display mode, a third of the bytes.
+    Luma,
+    /// Luma plus 4:2:0 chroma at the output's own resolution.
+    #[default]
+    Yuv420,
+}
+
+/// Raw planes of a region (see [`i420_region_planes`]), in the frame's own
+/// orientation. Tightly packed: `y` is `width * height`, `u` and `v` are
+/// `width.div_ceil(2) * height.div_ceil(2)` (empty for [`PlaneFormat::Luma`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Planes {
+    pub width: usize,
+    pub height: usize,
+    pub y: Vec<u8>,
+    pub u: Vec<u8>,
+    pub v: Vec<u8>,
+}
+
+/// Every `step`-th pixel of the `w`x`h` region at (`x`, `y`) as raw planes, the way
+/// [`i420_region_to_rgba`] samples it but without converting: output luma `(c, r)`
+/// is the frame's at `(x + c * step, y + r * step)`, and output chroma `(c, r)` is
+/// what [`i420_region_to_rgba`] uses for output pixel `(2c, 2r)` -- so a GPU that
+/// samples the chroma planes at half the luma coordinates reproduces it exactly
+/// wherever chroma is constant over each 2x2 block of output pixels.
+pub fn i420_region_planes(
+    frame: &YuvFrame,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    step: usize,
+    format: PlaneFormat,
+) -> Planes {
+    assert!(
+        x + w <= frame.width && y + h <= frame.height,
+        "region outside frame"
+    );
+    let (ow, oh) = region_size(w, h, step);
+    let mut luma = Vec::with_capacity(ow * oh);
+    for row in 0..oh {
+        let src = &frame.y[(y + row * step) * frame.width..];
+        luma.extend((0..ow).map(|col| src[x + col * step]));
+    }
+    let (mut u, mut v) = (Vec::new(), Vec::new());
+    if format == PlaneFormat::Yuv420 {
+        let uv_w = frame.width / 2;
+        let (cw, ch) = (ow.div_ceil(2), oh.div_ceil(2));
+        u.reserve(cw * ch);
+        v.reserve(cw * ch);
+        for row in 0..ch {
+            let sy = (y + 2 * row * step) / 2;
+            for col in 0..cw {
+                let sx = (x + 2 * col * step) / 2;
+                u.push(frame.u[sy * uv_w + sx]);
+                v.push(frame.v[sy * uv_w + sx]);
+            }
+        }
+    }
+    Planes {
+        width: ow,
+        height: oh,
+        y: luma,
+        u,
+        v,
+    }
+}
+
 /// A quarter-turn rotation of an image for display, clockwise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Rotation {
     #[default]
     None,
@@ -278,6 +353,53 @@ mod tests {
         // Super-white / super-black input saturates instead of wrapping.
         assert_eq!(yuv_to_rgb(255, 128, 128), [255, 255, 255]);
         assert_eq!(yuv_to_rgb(0, 128, 128), [0, 0, 0]);
+    }
+
+    #[test]
+    fn region_planes_sample_where_the_rgba_conversion_does() {
+        // Luma 16 + col + 10 row; chroma 100 + c + 7 r, so every sample is unique.
+        let (w, h) = (12, 10);
+        let mut frame = gradient_frame(w, h);
+        let uv_w = w / 2;
+        for r in 0..h / 2 {
+            for c in 0..uv_w {
+                frame.u[r * uv_w + c] = (100 + c + 7 * r) as u8;
+                frame.v[r * uv_w + c] = (200 - c - 7 * r) as u8;
+            }
+        }
+        for (x, y, rw, rh, step) in [
+            (0, 0, 12, 10, 1),
+            (3, 1, 7, 8, 1),
+            (1, 3, 11, 7, 2),
+            (2, 0, 9, 9, 3),
+        ] {
+            let p = i420_region_planes(&frame, x, y, rw, rh, step, PlaneFormat::Yuv420);
+            assert_eq!((p.width, p.height), region_size(rw, rh, step));
+            for r in 0..p.height {
+                for c in 0..p.width {
+                    assert_eq!(
+                        p.y[r * p.width + c],
+                        frame.y[(y + r * step) * w + x + c * step]
+                    );
+                }
+            }
+            let cw = p.width.div_ceil(2);
+            assert_eq!(p.u.len(), cw * p.height.div_ceil(2));
+            for r in 0..p.height.div_ceil(2) {
+                for c in 0..cw {
+                    let (sx, sy) = ((x + 2 * c * step) / 2, (y + 2 * r * step) / 2);
+                    assert_eq!(
+                        p.u[r * cw + c],
+                        frame.u[sy * uv_w + sx],
+                        "({x},{y}) step {step}"
+                    );
+                    assert_eq!(p.v[r * cw + c], frame.v[sy * uv_w + sx]);
+                }
+            }
+            let luma = i420_region_planes(&frame, x, y, rw, rh, step, PlaneFormat::Luma);
+            assert_eq!(luma.y, p.y);
+            assert!(luma.u.is_empty() && luma.v.is_empty());
+        }
     }
 
     #[test]

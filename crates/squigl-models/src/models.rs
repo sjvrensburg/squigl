@@ -11,9 +11,23 @@
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
+use squigl_engine::model::ModelPhase;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+/// What a download stopped by its cancel flag fails with.
+#[derive(Debug)]
+pub struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("download cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
 
 pub struct ModelFile {
     pub path: &'static str,
@@ -140,24 +154,36 @@ impl ModelSpec {
             .all(|f| std::fs::metadata(dir.join(f.path)).is_ok_and(|m| m.len() == f.size))
     }
 
+    /// Where the model already is, if anywhere: no download.
+    pub fn locate(&self) -> Option<PathBuf> {
+        candidate_dirs(self.name)
+            .into_iter()
+            .find(|dir| self.is_complete(dir))
+    }
+
     /// Finds the model, downloading it into the cache if no candidate has it.
-    /// `progress` is told what is happening, for the window.
-    pub fn ensure(&self, progress: &dyn Fn(String)) -> Result<PathBuf> {
-        for dir in candidate_dirs(self.name) {
-            if self.is_complete(&dir) {
-                log::info!("{} found at {}", self.name, dir.display());
-                return Ok(dir);
-            }
+    /// `report` is told each phase; raising `cancel` stops a download with
+    /// [`Cancelled`].
+    pub fn ensure(&self, report: &dyn Fn(ModelPhase), cancel: &AtomicBool) -> Result<PathBuf> {
+        report(ModelPhase::Locating);
+        if let Some(dir) = self.locate() {
+            log::info!("{} found at {}", self.name, dir.display());
+            return Ok(dir);
         }
         let dir = cache_dir(self.name);
-        self.download_into(&dir, progress)?;
+        self.download_into(&dir, report, cancel)?;
         Ok(dir)
     }
 
     /// Downloads the model into `dir` (files already present at the right size are
     /// kept), verifying every file's SHA-256. `squigl --fetch-model DIR` for
     /// scripts and release packaging.
-    pub fn download_into(&self, dir: &Path, progress: &dyn Fn(String)) -> Result<()> {
+    pub fn download_into(
+        &self,
+        dir: &Path,
+        report: &dyn Fn(ModelPhase),
+        cancel: &AtomicBool,
+    ) -> Result<()> {
         log::info!(
             "downloading {} ({} MB) to {}",
             self.name,
@@ -171,6 +197,9 @@ impl ModelSpec {
         let mut done: u64 = 0;
         let total = self.total_size();
         for file in self.files {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Cancelled.into());
+            }
             let target = dir.join(file.path);
             if std::fs::metadata(&target).is_ok_and(|m| m.len() == file.size) {
                 done += file.size;
@@ -210,6 +239,11 @@ impl ModelSpec {
             let mut written: u64 = 0;
             let mut last_report = Instant::now();
             loop {
+                if cancel.load(Ordering::Relaxed) {
+                    drop(out);
+                    let _ = std::fs::remove_file(&part);
+                    return Err(Cancelled.into());
+                }
                 let n = reader.read(&mut buf)?;
                 if n == 0 {
                     break;
@@ -218,15 +252,15 @@ impl ModelSpec {
                 hasher.update(&buf[..n]);
                 written += n as u64;
                 if last_report.elapsed().as_millis() > 200 {
-                    progress(format!(
-                        "downloading {} {}%",
-                        self.name,
-                        (done + written) * 100 / total
-                    ));
+                    report(ModelPhase::Downloading {
+                        done: done + written,
+                        total,
+                    });
                     last_report = Instant::now();
                 }
             }
             drop(out);
+            report(ModelPhase::Verifying);
             let digest = format!("{:x}", hasher.finalize());
             if written != file.size || digest != file.sha256 {
                 let _ = std::fs::remove_file(&part);
@@ -257,5 +291,25 @@ mod tests {
             assert!(spec.files.iter().all(|f| f.sha256.len() == 64));
             assert!(!spec.is_complete(Path::new("/nonexistent")));
         }
+    }
+
+    #[test]
+    fn a_raised_cancel_flag_stops_a_download_before_any_request() {
+        let dir = std::env::temp_dir().join(format!("squigl-cancel-{}", std::process::id()));
+        let tiny = ModelSpec {
+            name: "tiny",
+            // Never contacted: the flag is checked before each file's request.
+            repo_url: "http://127.0.0.1:9",
+            files: &[ModelFile {
+                path: "f",
+                size: 1,
+                sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+            }],
+        };
+        let result = tiny.download_into(&dir, &|_| {}, &AtomicBool::new(true));
+        let _ = std::fs::remove_dir_all(&dir);
+        let err = result.unwrap_err();
+        assert!(err.is::<Cancelled>(), "{err:#}");
+        assert!(!dir.join("f").exists());
     }
 }

@@ -1,7 +1,8 @@
 //! Typesetting a reading: the [`Typesetter`] a front end may have (the egui window's
 //! is `squigl_math::Renderer`, on Typst), and the text and tint spans handed to it.
 
-use crate::transcribe::{Confidence, Reading, UiConfig};
+use crate::config::UiConfig;
+use crate::transcribe::{Confidence, Reading};
 
 /// A byte range of the text handed to [`Typesetter::render`], to be tinted by
 /// hesitation. Disjoint and given in byte order; `severity` breaks a tie when a

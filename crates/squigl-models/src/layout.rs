@@ -5,6 +5,7 @@
 //! follows a skewed block where the axis-aligned box would not. The post-processing
 //! (mask → polygon → quad) follows PaddleX's `layout_analysis` processors.
 
+use super::lifecycle::{Lifecycle, OnDevice, State};
 use super::{attempts, models, open_session, Device, DevicePref, GPU_LOST};
 use anyhow::{anyhow, bail, Result};
 use image::{GrayImage, RgbImage};
@@ -16,8 +17,9 @@ use ort::session::Session;
 use ort::value::Tensor;
 use squigl_engine::geometry::Crop;
 use squigl_engine::layout::{self, BlockDetector};
+use squigl_engine::model::{ModelContext, ModelPhase};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// The network's input edge; the image is stretched to it, not letterboxed.
@@ -278,105 +280,94 @@ pub fn order_quad(q: Quad) -> Quad {
 
 // ---------------------------------------------------------------------------
 
-enum State {
-    Preparing(String),
-    Ready(Box<Detector>),
-    Failed(String),
+impl OnDevice for Detector {
+    fn device(&self) -> Device {
+        Detector::device(self)
+    }
 }
 
-/// The detector as the window uses it: preparation (download + load) starts on
-/// construction, on a thread; `detect` refuses with the current status until it is
-/// done.
+/// The detector as the window uses it: prepared (found, downloaded if need be,
+/// loaded) on a thread, at once when built eagerly, else on
+/// [`BlockDetector::prepare`]; `detect` refuses until it is ready.
 pub struct LayoutService {
-    state: Arc<Mutex<State>>,
+    life: Arc<Lifecycle<Detector>>,
     threshold: f32,
-    device: DevicePref,
 }
 
 impl LayoutService {
-    pub fn new(device: DevicePref, threshold: f32) -> Self {
-        let service = Self {
-            state: Arc::new(Mutex::new(State::Preparing("locating model".into()))),
-            threshold,
-            device,
-        };
-        service.prepare();
-        service
-    }
-
-    /// Finds, downloads and loads the model on a thread; the state says how far.
-    fn prepare(&self) {
-        let worker_state = Arc::clone(&self.state);
-        let device = self.device;
-        std::thread::Builder::new()
-            .name("squigl-layout".into())
-            .spawn(move || {
-                let set = |s: String| {
-                    *worker_state.lock().unwrap() = State::Preparing(s);
-                };
-                let result = models::DOC_LAYOUT.ensure(&set).and_then(|dir| {
-                    let mut last = None;
-                    for &d in attempts(device) {
-                        set(format!("loading on {}", d.name()));
-                        match Detector::load(&dir, d) {
-                            Ok(m) => return Ok(m),
-                            Err(e) => {
-                                log::warn!("PP-DocLayoutV3 on {}: {e:#}", d.name());
-                                last = Some(e);
-                            }
+    pub fn new(device: DevicePref, threshold: f32, ctx: &ModelContext) -> Self {
+        let life = Lifecycle::new(
+            &models::DOC_LAYOUT,
+            "PP-DocLayoutV3",
+            ctx,
+            move |dir, report| {
+                let mut last = None;
+                for &d in attempts(device) {
+                    report(ModelPhase::Loading {
+                        device: d.name().to_string(),
+                    });
+                    match Detector::load(dir, d) {
+                        Ok(m) => return Ok(m),
+                        Err(e) => {
+                            log::warn!("PP-DocLayoutV3 on {}: {e:#}", d.name());
+                            last = Some(e);
                         }
                     }
-                    Err(last.unwrap_or_else(|| anyhow!("no device to try")))
-                });
-                *worker_state.lock().unwrap() = match result {
-                    Ok(d) => {
-                        log::info!("PP-DocLayoutV3 ready on {}", d.device().name());
-                        State::Ready(Box::new(d))
-                    }
-                    Err(e) => {
-                        log::error!("block detector unavailable: {e:#}");
-                        State::Failed(format!("{e:#}"))
-                    }
-                };
-            })
-            .expect("spawning layout thread");
+                }
+                Err(last.unwrap_or_else(|| anyhow!("no device to try")))
+            },
+        );
+        Self { life, threshold }
     }
 }
 
 impl BlockDetector for LayoutService {
     fn status(&self) -> Option<String> {
-        match &*self.state.lock().unwrap() {
-            State::Preparing(s) => Some(format!("block detector: {s}")),
-            State::Ready(_) => None,
-            State::Failed(e) => Some(format!("block detector unavailable: {e}")),
+        let phase = self.life.phase.get();
+        match phase {
+            ModelPhase::Ready { .. } => None,
+            ModelPhase::Failed { error } => Some(format!("block detector unavailable: {error}")),
+            other => Some(format!("block detector: {}", other.describe())),
         }
     }
 
     fn ready(&self) -> bool {
-        matches!(&*self.state.lock().unwrap(), State::Ready(_))
+        matches!(&*self.life.state.lock().unwrap(), State::Ready(_))
+    }
+
+    fn phase(&self) -> Option<ModelPhase> {
+        Some(self.life.phase.get())
+    }
+
+    fn prepare(&self) {
+        self.life.prepare();
+    }
+
+    fn cancel_prepare(&self) {
+        self.life.cancel();
     }
 
     fn detect(&self, img: &RgbImage) -> Result<Vec<layout::Block>> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.life.state.lock().unwrap();
         let blocks = match &mut *state {
             State::Ready(d) => {
                 if d.device() == Device::WebGpu && GPU_LOST.load(Ordering::SeqCst) {
-                    *state = State::Preparing("GPU lost — reloading on the CPU".into());
-                    self.prepare();
+                    self.life.reload(&mut state);
                     bail!("the GPU was lost; the block detector is reloading on the CPU");
                 }
                 let _turn = super::runtime_turn();
                 match d.detect(img, self.threshold) {
                     Ok(blocks) => blocks,
                     Err(e) if super::note_gpu_loss(&e) => {
-                        *state = State::Preparing("GPU lost — reloading on the CPU".into());
-                        self.prepare();
+                        self.life.reload(&mut state);
                         bail!("the GPU was lost; the block detector is reloading on the CPU");
                     }
                     Err(e) => return Err(e),
                 }
             }
-            State::Preparing(s) => bail!("block detector not ready yet: {s}"),
+            State::Idle | State::Preparing => {
+                bail!("block detector not ready yet: {}", self.life.not_ready())
+            }
             State::Failed(e) => bail!("block detector unavailable: {e}"),
         };
         let (w, h) = (img.width() as usize, img.height() as usize);

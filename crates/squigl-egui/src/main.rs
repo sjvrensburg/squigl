@@ -12,10 +12,11 @@ use squigl_core::cameras::is_usable_size;
 use squigl_core::convert::Rotation;
 use squigl_core::decode::Backend;
 use squigl_core::{ConnectOptions, Facing};
+use squigl_engine::engine::{BackendFactory, DetectorFactory, Engine, EngineDeps, EngineOptions};
+use squigl_engine::erase;
 use squigl_engine::geometry::Crop;
-use squigl_engine::stream::{Resolution, SourceSpec, StreamConfig, Worker};
+use squigl_engine::stream::{Resolution, SourceSpec, StreamConfig};
 use squigl_engine::transcribe::BackendConfig;
-use squigl_engine::{erase, transcribe};
 use std::path::PathBuf;
 
 /// Live view, crop and capture an Android phone's camera.
@@ -183,7 +184,15 @@ fn main() -> Result<()> {
     if let Some(dir) = &args.fetch_model {
         for spec in squigl_models::models::ALL {
             let target = dir.join(spec.name);
-            spec.download_into(&target, &|s| eprintln!("{s}"))?;
+            // Each whole per cent once.
+            let last = std::cell::Cell::new(None);
+            let report = |p: squigl_engine::model::ModelPhase| {
+                let line = p.describe();
+                if last.replace(Some(line.clone())).as_ref() != Some(&line) {
+                    eprintln!("{}: {line}", spec.name);
+                }
+            };
+            spec.download_into(&target, &report, &Default::default())?;
             println!("{}", target.display());
         }
         return Ok(());
@@ -271,15 +280,15 @@ fn main() -> Result<()> {
         .zip(args.screenshot_path)
         .map(|(secs, path)| (std::time::Duration::from_secs_f32(secs), path));
 
-    let gui_config = transcribe::Config::load_or_create().unwrap_or_else(|e| {
+    let gui_config = squigl_engine::config::Config::load_or_create().unwrap_or_else(|e| {
         log::error!("{e:#}; no transcription backends available");
-        transcribe::Config {
+        squigl_engine::config::Config {
             backends: Vec::new(),
             ..Default::default()
         }
     });
     // The engine builds the HTTP backends; the built-in model is this binary's.
-    let backend_factory: app::BackendFactory = Box::new(|backend| match backend {
+    let backend_factory: BackendFactory = Box::new(|backend, ctx| match backend {
         #[cfg(feature = "local-model")]
         BackendConfig::Local {
             name,
@@ -291,25 +300,28 @@ fn main() -> Result<()> {
             *device,
             *max_tokens,
             *max_image_tokens,
+            ctx,
         ))),
         #[cfg(not(feature = "local-model"))]
         BackendConfig::Local { name, .. } => {
+            let _ = ctx; // what a built-in model would be prepared with
             log::warn!("backend {name:?} needs a build with the local-model feature");
             None
         }
         other => other.build(),
     });
     #[cfg(feature = "local-model")]
-    let detector_factory: app::DetectorFactory = Box::new(|layout| {
+    let detector_factory: DetectorFactory = Box::new(|layout, ctx| {
         layout.enabled.then(|| {
             std::sync::Arc::new(squigl_models::layout::LayoutService::new(
                 layout.device,
                 layout.threshold,
+                ctx,
             )) as _
         })
     });
     #[cfg(not(feature = "local-model"))]
-    let detector_factory: app::DetectorFactory = Box::new(|_| None);
+    let detector_factory: DetectorFactory = Box::new(|_, _| None);
     #[cfg(feature = "math")]
     let typesetter: Option<std::sync::Arc<dyn squigl_engine::typeset::Typesetter>> =
         Some(std::sync::Arc::new(squigl_math::Renderer::new()));
@@ -335,16 +347,21 @@ fn main() -> Result<()> {
         options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
-            let worker = Worker::start(config, move || ctx.request_repaint());
-            let mut app = app::App::new(
-                worker,
-                save_dir,
+            let engine = Engine::new(
                 gui_config,
-                backend_factory,
-                detector_factory,
-                typesetter,
-                screenshot,
+                config,
+                EngineDeps {
+                    backends: backend_factory,
+                    detector: detector_factory,
+                },
+                // The window loads the models at once, as it always has.
+                EngineOptions {
+                    eager_models: true,
+                    ..EngineOptions::default()
+                },
+                std::sync::Arc::new(move || ctx.request_repaint()),
             );
+            let mut app = app::App::new(engine, save_dir, typesetter, screenshot);
             app.set_rotation(rotation);
             app.set_crop(dev_crop);
             app.set_dev_erase(dev_erase);

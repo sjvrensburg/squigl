@@ -9,7 +9,7 @@ use squigl_core::convert::Rotation;
 pub const MIN_CROP_PX: usize = 8;
 
 /// A rectangle in pixels, in whichever space the context says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Crop {
     pub x: usize,
     pub y: usize,
