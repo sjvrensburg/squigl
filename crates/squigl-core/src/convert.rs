@@ -6,6 +6,7 @@
 //! - [`i420_to_rgba`], [`i420_crop_to_rgba`], [`i420_to_rgba_decimated`] (and the general
 //!   [`i420_region_to_rgba`]): packed RGBA8 for on-screen display (a GUI texture), whole,
 //!   a region at native pixels, or every n-th pixel for a cheap preview of a large frame.
+//! - [`rgba_to_i420`]: the other way, for a still image shown as a camera frame.
 
 use crate::decode::YuvFrame;
 
@@ -182,6 +183,52 @@ pub fn rotate_rgba(rgba: &[u8], w: usize, h: usize, rotation: Rotation) -> Vec<u
     out
 }
 
+/// Converts packed RGBA8 (alpha ignored) into an I420 frame, BT.601 limited range
+/// (the inverse of what [`i420_to_rgba`] does); each chroma sample is the mean of
+/// its 2x2 block. `width` and `height` must be even.
+pub fn rgba_to_i420(rgba: &[u8], width: usize, height: usize) -> YuvFrame {
+    assert!(
+        width.is_multiple_of(2) && height.is_multiple_of(2),
+        "{width}x{height} is not even"
+    );
+    assert_eq!(rgba.len(), width * height * 4);
+    let px = |x: usize, y: usize| -> [i32; 3] {
+        let p = &rgba[(y * width + x) * 4..][..3];
+        [p[0] as i32, p[1] as i32, p[2] as i32]
+    };
+    let mut y_plane = Vec::with_capacity(width * height);
+    for row in 0..height {
+        for col in 0..width {
+            let [r, g, b] = px(col, row);
+            y_plane.push((16 + ((66 * r + 129 * g + 25 * b + 128) >> 8)) as u8);
+        }
+    }
+    let (cw, ch) = (width / 2, height / 2);
+    let mut u_plane = Vec::with_capacity(cw * ch);
+    let mut v_plane = Vec::with_capacity(cw * ch);
+    for row in 0..ch {
+        for col in 0..cw {
+            let mut sum = [0i32; 3];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = px(col * 2 + dx, row * 2 + dy);
+                for c in 0..3 {
+                    sum[c] += p[c];
+                }
+            }
+            let [r, g, b] = sum.map(|c| (c + 2) / 4);
+            u_plane.push((128 + ((-38 * r - 74 * g + 112 * b + 128) >> 8)) as u8);
+            v_plane.push((128 + ((112 * r - 94 * g - 18 * b + 128) >> 8)) as u8);
+        }
+    }
+    YuvFrame {
+        width,
+        height,
+        y: y_plane,
+        u: u_plane,
+        v: v_plane,
+    }
+}
+
 /// BT.601 limited-range YCbCr -> RGB, fixed-point (x256):
 /// R = 1.164 (Y-16) + 1.596 (V-128); G = 1.164 (Y-16) - 0.813 (V-128) - 0.391 (U-128);
 /// B = 1.164 (Y-16) + 2.018 (U-128).
@@ -231,6 +278,31 @@ mod tests {
         // Super-white / super-black input saturates instead of wrapping.
         assert_eq!(yuv_to_rgb(255, 128, 128), [255, 255, 255]);
         assert_eq!(yuv_to_rgb(0, 128, 128), [0, 0, 0]);
+    }
+
+    #[test]
+    fn rgba_to_i420_round_trips_within_rounding() {
+        let colours: [[u8; 3]; 6] = [
+            [0, 0, 0],
+            [255, 255, 255],
+            [255, 0, 0],
+            [0, 160, 40],
+            [30, 60, 220],
+            [200, 190, 120],
+        ];
+        for c in colours {
+            let rgba: Vec<u8> = (0..4).flat_map(|_| [c[0], c[1], c[2], 255]).collect();
+            let frame = rgba_to_i420(&rgba, 2, 2);
+            let mut back = vec![0u8; 16];
+            i420_to_rgba(&frame, &mut back);
+            for (got, want) in back[..3].iter().zip(c) {
+                assert!(
+                    got.abs_diff(want) <= 3,
+                    "{c:?} came back as {:?}",
+                    &back[..3]
+                );
+            }
+        }
     }
 
     #[test]

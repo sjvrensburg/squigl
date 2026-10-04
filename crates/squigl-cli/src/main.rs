@@ -3,7 +3,7 @@ use clap::Parser;
 use squigl_core::adb::AdbDevice;
 use squigl_core::cameras::{is_usable_size, largest_usable_size};
 use squigl_core::decode::Backend;
-use squigl_core::{ConnectOptions, Facing, Replay};
+use squigl_core::{ConnectOptions, Facing, Replay, TestPattern};
 use squigl_v4l2::{loopback, V4l2Sink};
 use std::fs::File;
 use std::io::BufWriter;
@@ -83,7 +83,7 @@ struct Args {
     #[arg(long)]
     no_reconnect: bool,
 
-    /// Skip ADB/phone entirely and feed the V4L2 sink a synthetic color-bar pattern.
+    /// Skip ADB/phone entirely and feed the V4L2 sink a synthetic colour-bar pattern.
     /// Useful for testing the loopback/format/sink path without hardware attached.
     #[arg(long)]
     test_pattern: bool,
@@ -458,48 +458,15 @@ fn run_replay(
         .context("replaying to V4L2 device")
 }
 
-/// Drives the V4L2 sink with a synthetic, cycling color-bar frame -- exercises the
+/// Drives the V4L2 sink with synthetic, cycling colour bars -- exercises the
 /// loopback/format-negotiation/write path independently of ADB or a real phone.
 fn run_test_pattern(device: &std::path::Path, stop: &AtomicBool) -> Result<()> {
-    const WIDTH: u32 = 640;
-    const HEIGHT: u32 = 480;
-
-    let mut sink = V4l2Sink::open(device, WIDTH, HEIGHT).context("opening V4L2 sink")?;
-    let mut yuyv = vec![0u8; (WIDTH * HEIGHT * 2) as usize];
-
+    let mut pattern = TestPattern::new(640, 480);
+    let (w, h) = pattern.size();
+    let mut sink = V4l2Sink::open(device, w as u32, h as u32).context("opening V4L2 sink")?;
     log::info!(
-        "writing {WIDTH}x{HEIGHT} test pattern to {} (Ctrl-C to stop)",
+        "writing {w}x{h} test pattern to {} (Ctrl-C to stop)",
         device.display()
     );
-
-    let bars: [(u8, u8, u8); 8] = [
-        (235, 128, 128), // white
-        (210, 16, 146),  // yellow
-        (170, 166, 16),  // cyan
-        (145, 54, 34),   // green
-        (106, 202, 222), // magenta
-        (81, 90, 240),   // red
-        (41, 240, 110),  // blue
-        (16, 128, 128),  // black
-    ];
-
-    let mut frame_idx: usize = 0;
-    while !stop.load(Ordering::Relaxed) {
-        let shift = frame_idx / 8;
-        for row in 0..HEIGHT as usize {
-            for pair in 0..(WIDTH as usize / 2) {
-                let bar = ((pair * 2 * 8) / WIDTH as usize + shift) % bars.len();
-                let (y, u, v) = bars[bar];
-                let o = &mut yuyv[row * WIDTH as usize * 2 + pair * 4..][..4];
-                o[0] = y;
-                o[1] = u;
-                o[2] = y;
-                o[3] = v;
-            }
-        }
-        sink.write_frame(&yuyv).context("writing test frame")?;
-        frame_idx = frame_idx.wrapping_add(1);
-        std::thread::sleep(Duration::from_millis(1000 / 30));
-    }
-    Ok(())
+    pattern.run(&mut sink, stop).context("writing test frames")
 }
