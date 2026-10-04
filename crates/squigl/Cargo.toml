@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 squigl-core = { path = "../squigl-core" }
+squigl-engine = { path = "../squigl-engine" }
 anyhow.workspace = true
 clap.workspace = true
 log.workspace = true
@@ -20,15 +21,13 @@ env_logger.workspace = true
 eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 egui = "0.36"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# Perspective warp for rectifying a detected block; contours/min-area-rect for the
-# detector (no default features: they pull every image format and a text renderer).
+# Contours/min-area-rect for the block detector (no default features: they pull
+# every image format and a text renderer).
 imageproc = { version = "0.27", default-features = false, features = ["rayon"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ureq = { version = "3", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "1"
-base64 = "0.22"
 # local-model: bundled GLM-OCR and PP-DocLayoutV3 on ONNX Runtime (WebGPU/Vulkan or CPU).
 # HEAD of pykeio/ort as read on 2026-09-12; its API differs from the published rc.13.
 ort = { git = "https://github.com/pykeio/ort", rev = "085eb2af3d55fa2f4eacceb6ef43825dbf1b771c", features = ["half", "webgpu"], optional = true }
@@ -42,10 +41,6 @@ typst = { version = "0.15", optional = true }
 typst-layout = { version = "0.15", optional = true }
 typst-render = { version = "0.15", optional = true }
 mitex = { version = "0.2", optional = true }
-
-# --device: also write frames to a v4l2loopback device, so the stream is a webcam too.
-[target.'cfg(target_os = "linux")'.dependencies]
-squigl-v4l2 = { path = "../squigl-v4l2" }
 
 [features]
 default = ["local-model", "math"]

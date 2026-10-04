@@ -4,9 +4,9 @@
 //! compiled by Typst and rasterised. Anything that does not convert or compile is
 //! left as the text it was: a rendering is a convenience, the reading is the text.
 
-use crate::app::TintSpan;
 use anyhow::{anyhow, Result};
 use image::RgbaImage;
+use squigl_engine::typeset::TintSpan;
 use std::time::Instant;
 use typst::foundations::{Array, Dict, IntoValue};
 use typst_as_lib::typst_kit_options::TypstKitFontOptions;
@@ -492,7 +492,7 @@ fn typst_color(rgba: [u8; 4]) -> String {
     )
 }
 
-impl crate::app::Typesetter for Renderer {
+impl squigl_engine::typeset::Typesetter for Renderer {
     fn render(
         &self,
         text: &str,

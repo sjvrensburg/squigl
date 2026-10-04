@@ -7,13 +7,13 @@
 //! output; the graph interface (including the undocumented `num_logits_to_keep`
 //! input) was read off the export itself.
 
-use crate::transcribe::{Token, TokenAlt};
 use anyhow::{anyhow, bail, Context, Result};
 use image::{imageops::FilterType, RgbImage};
 use ndarray::{Array, ArrayD, IxDyn};
 use ort::memory::{AllocationDevice, AllocatorType, MemoryInfo, MemoryType};
 use ort::session::{Session, SessionInputValue};
 use ort::value::{DynValue, Tensor, TensorElementType, ValueType};
+use squigl_engine::transcribe::{Token, TokenAlt};
 use std::borrow::Cow;
 use std::path::Path;
 use std::time::Instant;
@@ -689,7 +689,7 @@ mod tests {
     #[test]
     #[ignore = "needs the GLM-OCR model (~650 MB) and runs it"]
     fn glmocr_handwriting() {
-        use crate::transcribe::{CROP_PROMPT, FORMULA_PROMPT, PAGE_PROMPT};
+        use squigl_engine::transcribe::{CROP_PROMPT, FORMULA_PROMPT, PAGE_PROMPT};
 
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/handwriting");
         let mut samples: Vec<_> = std::fs::read_dir(&dir)
@@ -762,9 +762,13 @@ mod tests {
         let w = img.width() as f32;
         // A brush stroke along row 136, radius 38: rows 98..174, the gap above the
         // middle line to the gap below it.
-        crate::erase::erase(
+        squigl_engine::erase::erase(
             &mut img,
-            &[crate::erase::Stroke::line([0.0, 136.0], [w, 136.0], 38.0)],
+            &[squigl_engine::erase::Stroke::line(
+                [0.0, 136.0],
+                [w, 136.0],
+                38.0,
+            )],
         );
         let img = image::DynamicImage::ImageRgba8(img).to_rgb8();
         let model_dir = crate::local::models::GLM_OCR
@@ -773,7 +777,7 @@ mod tests {
         for device in [Device::WebGpu, Device::Cpu] {
             let mut model = Model::load(&model_dir, crate::local::VARIANT, device, 2048).unwrap();
             let text = model
-                .generate(&img, crate::transcribe::CROP_PROMPT, 1024)
+                .generate(&img, squigl_engine::transcribe::CROP_PROMPT, 1024)
                 .unwrap()
                 .text;
             println!("{}: {text:?}", device.name());

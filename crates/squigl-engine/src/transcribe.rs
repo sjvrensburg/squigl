@@ -211,14 +211,12 @@ pub enum BackendConfig {
     },
 }
 
-#[cfg(feature = "local-model")]
-pub type LocalDevice = crate::local::DevicePref;
-
-/// Accepted and ignored when the feature is off, so one config file serves both builds.
-#[cfg(not(feature = "local-model"))]
+/// Which device the built-in models try. Part of the config whether or not the
+/// front end was built with them, so one config file serves every build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LocalDevice {
+    /// WebGPU, falling back to CPU if the provider cannot be set up.
     #[default]
     Auto,
     Webgpu,
@@ -242,7 +240,9 @@ fn default_max_image_tokens() -> u32 {
 }
 
 impl BackendConfig {
-    /// `None` for a backend this build cannot provide.
+    /// Builds the backends that are plain HTTP clients. `None` for
+    /// [`BackendConfig::Local`]: the built-in model lives outside this crate, so a
+    /// front end builds that one itself (and says why when it was built without it).
     pub fn build(&self) -> Option<Box<dyn Transcriber>> {
         Some(match self.clone() {
             BackendConfig::OpenAi {
@@ -274,23 +274,7 @@ impl BackendConfig {
                 member,
                 samples: samples.max(1),
             }),
-            #[cfg(feature = "local-model")]
-            BackendConfig::Local {
-                name,
-                device,
-                max_tokens,
-                max_image_tokens,
-            } => Box::new(crate::local::LocalBackend::new(
-                name,
-                device,
-                max_tokens,
-                max_image_tokens,
-            )),
-            #[cfg(not(feature = "local-model"))]
-            BackendConfig::Local { name, .. } => {
-                log::warn!("backend {name:?} needs a build with the local-model feature");
-                return None;
-            }
+            BackendConfig::Local { .. } => return None,
         })
     }
 }

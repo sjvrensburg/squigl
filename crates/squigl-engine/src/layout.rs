@@ -2,7 +2,7 @@
 //! to use it -- independent of which detector (the built-in PP-DocLayoutV3 lives in
 //! `local::layout`) so the window compiles without one.
 
-use crate::app::Crop;
+use crate::geometry::Crop;
 use anyhow::Result;
 use image::{Rgb, RgbImage, RgbaImage};
 use imageproc::geometric_transformations::{warp_into, Border, Interpolation, Projection};
@@ -67,7 +67,6 @@ pub fn rect_quad(r: Crop) -> Quad {
 }
 
 /// Whether a quad is (within a pixel) just its bounding rectangle.
-#[cfg_attr(not(feature = "local-model"), allow(dead_code))]
 pub fn is_rectangular(q: &Quad, r: Crop) -> bool {
     rect_quad(r)
         .iter()
