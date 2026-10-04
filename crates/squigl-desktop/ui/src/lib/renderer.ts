@@ -86,7 +86,28 @@ class Plane {
   }
 }
 
-export class Renderer {
+/** What draws frames: WebGL2 ([`Renderer`]) or, without it, Canvas2D. */
+export interface FrameRenderer {
+  readonly wantsLumaOnly: boolean;
+  setLut(table: LutReply): void;
+  setSmooth(smooth: boolean): void;
+  show(frame: Frame): void;
+  draw(): void;
+}
+
+/** The screen rectangle (device pixels) a frame's region is drawn into. */
+export function screenRect(frame: Frame): { left: number; top: number; width: number; height: number } {
+  const { view_region: r, placement } = frame.header;
+  const s = placement.scale;
+  return {
+    left: (r.x - placement.origin[0]) * s,
+    top: (r.y - placement.origin[1]) * s,
+    width: r.w * s,
+    height: r.h * s,
+  };
+}
+
+export class Renderer implements FrameRenderer {
   private gl: WebGL2RenderingContext;
   private prog: WebGLProgram;
   private planes: [Plane, Plane, Plane];
@@ -155,13 +176,11 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT);
     const frame = this.frame;
     if (!frame) return;
-    const { view_region: r, placement, rotation, format } = frame.header;
+    const { rotation, format } = frame.header;
     // The region's corners in device pixels, then in clip space.
-    const s = placement.scale;
-    const left = (r.x - placement.origin[0]) * s;
-    const top = (r.y - placement.origin[1]) * s;
-    const right = left + r.w * s;
-    const bottom = top + r.h * s;
+    const { left, top, width, height } = screenRect(frame);
+    const right = left + width;
+    const bottom = top + height;
     const clipX = (x: number) => (x / canvas.width) * 2 - 1;
     const clipY = (y: number) => 1 - (y / canvas.height) * 2;
     const corners = [

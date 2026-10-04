@@ -60,6 +60,10 @@ struct Args {
     /// Development aid: the page logs the frames it drew every 5 s.
     #[arg(long, hide = true)]
     dev_stats: bool,
+
+    /// Development aid: draw with the Canvas2D fallback even where WebGL2 works.
+    #[arg(long, hide = true)]
+    dev_canvas2d: bool,
 }
 
 /// The development aids the page acts on.
@@ -68,6 +72,7 @@ struct DevOptions {
     keys: Vec<String>,
     snapshot_after_ms: Option<u64>,
     stats: bool,
+    canvas2d: bool,
     #[serde(skip)]
     snapshot_path: Option<PathBuf>,
 }
@@ -85,6 +90,28 @@ fn subscribe(host: State<'_, Host>, channel: Channel<Event>) {
 #[tauri::command]
 fn endpoint(endpoint: State<'_, Endpoint>) -> Endpoint {
     endpoint.inner().clone()
+}
+
+/// An image the page has as bytes (pasted, or picked with a file input, which gives
+/// no path): written to the cache -- replacing the last one -- and shown.
+#[tauri::command]
+fn open_image(host: State<'_, Host>, request: tauri::ipc::Request<'_>) -> Result<Reply, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("the image must come as raw bytes".into());
+    };
+    let dir = squigl_engine::paths::cache_dir().join("opened");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
+    for old in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let _ = std::fs::remove_file(old.path());
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let path = dir.join(format!("{stamp}.img"));
+    std::fs::write(&path, bytes).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    host.command(Command::UseSource {
+        source: SourceSpec::Image(path),
+    })
 }
 
 /// The page's errors and warnings, into the app's log (the web inspector is not at
@@ -136,6 +163,7 @@ fn main() -> anyhow::Result<()> {
             .unwrap_or_default(),
         snapshot_after_ms: args.dev_snapshot_after.map(|s| (s * 1000.0) as u64),
         stats: args.dev_stats,
+        canvas2d: args.dev_canvas2d,
         snapshot_path: args.dev_snapshot_path,
     };
     let source = match (args.open, args.replay) {
@@ -187,6 +215,7 @@ fn main() -> anyhow::Result<()> {
             subscribe,
             endpoint,
             lut,
+            open_image,
             page_log,
             dev_options,
             dev_save_snapshot

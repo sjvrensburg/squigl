@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     dispatch,
     endpoint,
     lut,
+    openImage,
     subscribe,
     type CaptureSlice,
     type Config,
@@ -14,27 +16,28 @@
     type StreamSlice,
   } from "./lib/engine";
   import { FrameClient, type Viewport } from "./lib/frames";
-  import { Renderer } from "./lib/renderer";
+  import { MODES, modeLabel } from "./lib/modes";
+  import { Renderer, type FrameRenderer } from "./lib/renderer";
+  import { Renderer2D } from "./lib/renderer2d";
+  import { keyFor, keyLabel, table, type Action } from "./lib/shortcuts";
   import { pan, turn, zoom, type View } from "./lib/viewport";
+  import Settings from "./Settings.svelte";
 
-  const MODES: [DisplayMode, string][] = [
-    ["normal", "Normal colours"],
-    ["grey", "Black on white"],
-    ["inverted", "Inverted colours"],
-    ["yellow-on-black", "Yellow on black"],
-    ["white-on-black", "White on black"],
-    ["black-on-yellow", "Black on yellow"],
-  ];
+  // The modes the toolbar cycles through; "custom" is reached in Settings.
+  const QUICK_MODES = MODES.filter(([m]) => m !== "custom");
 
   let canvas: HTMLCanvasElement;
+  let fileInput: HTMLInputElement;
   let stream = $state<StreamSlice | null>(null);
   let capture = $state<CaptureSlice | null>(null);
   let config = $state<Config | null>(null);
   let view = $state<View>({ centre: [0.5, 0.5], magnification: 1 });
   let notice = $state("Starting…");
   let failure = $state<string | null>(null);
+  let settingsOpen = $state(false);
+  let dropping = $state(false);
 
-  let renderer: Renderer | null = null;
+  let renderer: FrameRenderer | null = null;
   let client: FrameClient | null = null;
   // A frame is wanted (something changed) while one is being fetched.
   let wanted = false;
@@ -42,39 +45,14 @@
   // Frames drawn so far (for --dev-stats).
   let drawn = 0;
 
-  /** Development aids (hidden flags): press keys, then save the picture and quit. */
-  async function runDevOptions() {
-    const dev = await invoke<{ keys: string[]; snapshot_after_ms: number | null; stats: boolean }>(
-      "dev_options",
-    );
-    if (dev.stats) {
-      let last = drawn;
-      setInterval(() => {
-        const rate = (drawn - last) / 5;
-        last = drawn;
-        invoke("page_log", { level: "info", message: `drew ${rate.toFixed(1)} frames/s` });
-      }, 5000);
-    }
-    if (dev.keys.length === 0 && dev.snapshot_after_ms === null) return;
-    const started = performance.now();
-    await new Promise<void>((ok) => (firstFrame = ok));
-    for (const key of dev.keys) {
-      await new Promise((ok) => setTimeout(ok, 500));
-      const name = key === "Space" ? " " : key;
-      canvas.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true, shiftKey: name.length === 1 && name !== name.toLowerCase() }));
-    }
-    if (dev.snapshot_after_ms === null) return;
-    const left = dev.snapshot_after_ms - (performance.now() - started);
-    await new Promise((ok) => setTimeout(ok, Math.max(left, 0)));
-    // Drawn and read in one task, so the drawing buffer still holds the picture.
-    renderer?.draw();
-    const base64 = canvas.toDataURL("image/png").split(",")[1] ?? "";
-    const png = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    await invoke("dev_save_snapshot", png);
-  }
-
   const maxMagnification = $derived(config?.magnifier.max_magnification ?? 30);
   const frozen = $derived(capture?.frozen != null);
+  const keys = $derived(config ? table(config.desktop) : new Map<string, Action>());
+  const shortcut = (action: Action) => {
+    if (!config) return "";
+    const key = keyFor(action, config.desktop);
+    return key && keys.get(key) === action ? keyLabel(key) : "";
+  };
 
   const statusText = $derived.by(() => {
     const s = stream?.status;
@@ -90,6 +68,14 @@
         return "Stopped";
     }
   });
+
+  $effect(() => {
+    document.documentElement.dataset.theme = config?.desktop.theme ?? "dark";
+  });
+
+  function say(text: string) {
+    notice = text;
+  }
 
   function viewport(): Viewport {
     return {
@@ -144,7 +130,7 @@
         if (!frozen) fetchFrame();
         break;
       case "notice":
-        notice = event.data.text;
+        say(event.data.text);
         break;
     }
   }
@@ -157,9 +143,9 @@
   async function toggleFreeze() {
     try {
       await dispatch({ type: frozen ? "live" : "freeze" });
-      notice = frozen ? "Live" : "Frozen";
+      say(frozen ? "Live" : "Frozen");
     } catch (e) {
-      notice = String(e);
+      say(String(e));
     }
   }
 
@@ -167,13 +153,28 @@
     const rotation = turn(capture?.rotation ?? "none", quarterTurns);
     await dispatch({ type: "set-rotation", rotation });
     setView({ ...view, centre: [0.5, 0.5] });
+    say(`Turned ${quarterTurns > 0 ? "right" : "left"}`);
+  }
+
+  async function setConfig(next: Config) {
+    try {
+      await dispatch({ type: "set-config", config: next });
+    } catch (e) {
+      say(`Could not save the settings: ${e}`);
+    }
   }
 
   async function setMode(mode: DisplayMode) {
     if (!config) return;
-    const next = { ...config, display: { ...config.display, mode } };
-    await dispatch({ type: "set-config", config: next });
-    notice = MODES.find(([m]) => m === mode)?.[1] ?? mode;
+    await setConfig({ ...config, display: { ...config.display, mode } });
+    say(modeLabel(mode));
+  }
+
+  async function toggleReadingLine() {
+    if (!config) return;
+    const on = !config.magnifier.reading_line;
+    await setConfig({ ...config, magnifier: { ...config.magnifier, reading_line: on } });
+    say(on ? "Reading line on" : "Reading line off");
   }
 
   async function toggleFullscreen() {
@@ -181,67 +182,137 @@
     await w.setFullscreen(!(await w.isFullscreen()));
   }
 
+  async function openBytes(bytes: Uint8Array, what: string) {
+    try {
+      await openImage(bytes);
+      setView({ centre: [0.5, 0.5], magnification: 1 });
+    } catch (e) {
+      say(`Could not open ${what}: ${e}`);
+    }
+  }
+
+  async function onFilePicked() {
+    const file = fileInput.files?.[0];
+    if (file) await openBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+    fileInput.value = "";
+  }
+
+  async function onPaste(e: ClipboardEvent) {
+    const item = [...(e.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"));
+    const file = item?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    await openBytes(new Uint8Array(await file.arrayBuffer()), "the pasted image");
+  }
+
+  const FINE_PAN: Partial<Record<Action, [number, number]>> = {
+    "pan-left": [-0.1, 0],
+    "pan-right": [0.1, 0],
+    "pan-up": [0, -0.1],
+    "pan-down": [0, 0.1],
+  };
+
+  function run(action: Action) {
+    const step = 0.25;
+    switch (action) {
+      case "freeze":
+        return toggleFreeze();
+      case "rotate-cw":
+        return rotate(1);
+      case "rotate-ccw":
+        return rotate(-1);
+      case "zoom-in":
+        return setView(zoom(view, 1, maxMagnification));
+      case "zoom-out":
+        return setView(zoom(view, -1, maxMagnification));
+      case "zoom-reset":
+        return setView({ centre: [0.5, 0.5], magnification: 1 });
+      case "pan-left":
+        return setView(pan(view, -step, 0));
+      case "pan-right":
+        return setView(pan(view, step, 0));
+      case "pan-up":
+        return setView(pan(view, 0, -step));
+      case "pan-down":
+        return setView(pan(view, 0, step));
+      case "next-mode": {
+        const i = QUICK_MODES.findIndex(([m]) => m === config?.display.mode);
+        return setMode(QUICK_MODES[(i + 1) % QUICK_MODES.length]![0]);
+      }
+      case "reading-line":
+        return toggleReadingLine();
+      case "fullscreen":
+        return toggleFullscreen();
+      case "settings":
+        settingsOpen = true;
+        return;
+    }
+  }
+
   function onKey(e: KeyboardEvent) {
-    // Keys belong to a focused control; the shortcuts are for the picture.
+    // Keys belong to a focused control or an open dialog; the shortcuts are for
+    // the picture.
     const target = e.target as HTMLElement;
-    if (target.closest("input, select, textarea, button") || e.ctrlKey || e.altKey || e.metaKey) {
+    if (settingsOpen || target.closest("input, select, textarea, button, dialog")) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const action = keys.get(e.key);
+    if (!action) return;
+    e.preventDefault();
+    // Shift with a move is a finer step of it.
+    const fine = FINE_PAN[action];
+    if (e.shiftKey && fine) {
+      setView(pan(view, fine[0], fine[1]));
       return;
     }
-    const step = e.shiftKey ? 0.1 : 0.25;
-    const handled = (() => {
-      switch (e.key) {
-        case " ":
-          toggleFreeze();
-          return true;
-        case "r":
-          rotate(1);
-          return true;
-        case "R":
-          rotate(-1);
-          return true;
-        case "+":
-        case "=":
-          setView(zoom(view, 1, maxMagnification));
-          return true;
-        case "-":
-          setView(zoom(view, -1, maxMagnification));
-          return true;
-        case "0":
-          setView({ centre: [0.5, 0.5], magnification: 1 });
-          return true;
-        case "ArrowLeft":
-          setView(pan(view, -step, 0));
-          return true;
-        case "ArrowRight":
-          setView(pan(view, step, 0));
-          return true;
-        case "ArrowUp":
-          setView(pan(view, 0, -step));
-          return true;
-        case "ArrowDown":
-          setView(pan(view, 0, step));
-          return true;
-        case "m": {
-          const i = MODES.findIndex(([m]) => m === config?.display.mode);
-          setMode(MODES[(i + 1) % MODES.length]![0]);
-          return true;
-        }
-        case "f":
-          toggleFullscreen();
-          return true;
+    run(action);
+  }
+
+  /** Development aids (hidden flags): press keys, report the frame rate, then save the picture and quit. */
+  async function runDevOptions() {
+    const dev = await invoke<{ keys: string[]; snapshot_after_ms: number | null; stats: boolean }>(
+      "dev_options",
+    );
+    if (dev.stats) {
+      let last = drawn;
+      setInterval(() => {
+        const rate = (drawn - last) / 5;
+        last = drawn;
+        invoke("page_log", { level: "info", message: `drew ${rate.toFixed(1)} frames/s` });
+      }, 5000);
+    }
+    if (dev.keys.length === 0 && dev.snapshot_after_ms === null) return;
+    const started = performance.now();
+    await new Promise<void>((ok) => (firstFrame = ok));
+    for (const key of dev.keys) {
+      await new Promise((ok) => setTimeout(ok, 500));
+      const name = key === "Space" ? " " : key;
+      canvas.dispatchEvent(new KeyboardEvent("keydown", { key: name, bubbles: true }));
+    }
+    if (dev.snapshot_after_ms === null) return;
+    const left = dev.snapshot_after_ms - (performance.now() - started);
+    await new Promise((ok) => setTimeout(ok, Math.max(left, 0)));
+    // Drawn and read in one task, so the drawing buffer still holds the picture.
+    renderer?.draw();
+    const base64 = canvas.toDataURL("image/png").split(",")[1] ?? "";
+    const png = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    await invoke("dev_save_snapshot", png);
+  }
+
+  /** WebGL2 if there is one (and --dev-canvas2d is not given), else Canvas2D. */
+  async function makeRenderer(): Promise<FrameRenderer> {
+    const dev = await invoke<{ canvas2d: boolean }>("dev_options");
+    if (!dev.canvas2d) {
+      try {
+        return new Renderer(canvas);
+      } catch (e) {
+        console.warn(`WebGL2 unavailable, drawing with Canvas2D: ${e}`);
       }
-      return false;
-    })();
-    if (handled) e.preventDefault();
+    }
+    say("Using the slower drawing: this computer's graphics offer no WebGL2");
+    return new Renderer2D(canvas);
   }
 
   onMount(() => {
-    try {
-      renderer = new Renderer(canvas);
-    } catch (e) {
-      failure = String(e);
-      return;
-    }
     const resize = () => {
       canvas.width = Math.round(canvas.clientWidth * window.devicePixelRatio);
       canvas.height = Math.round(canvas.clientHeight * window.devicePixelRatio);
@@ -254,7 +325,38 @@
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     window.addEventListener("resize", resize);
+    // A lost WebGL context comes back by itself if asked; the renderer is then rebuilt.
+    canvas.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      say("The graphics were reset; restoring the picture…");
+    });
+    canvas.addEventListener("webglcontextrestored", async () => {
+      renderer = new Renderer(canvas);
+      if (config) {
+        renderer.setSmooth(config.magnifier.smooth);
+        renderer.setLut(await lut());
+      }
+      fetchFrame();
+    });
+    // A file dropped on the window: an image is shown, a recording played.
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const p = event.payload;
+      if (p.type === "enter" || p.type === "over") dropping = true;
+      else if (p.type === "leave") dropping = false;
+      else if (p.type === "drop") {
+        dropping = false;
+        const path = p.paths[0];
+        if (path) {
+          const source = path.toLowerCase().endsWith(".sqrec")
+            ? ({ kind: "replay", path } as const)
+            : ({ kind: "image", path } as const);
+          dispatch({ type: "use-source", source }).catch((e) => say(String(e)));
+          setView({ centre: [0.5, 0.5], magnification: 1 });
+        }
+      }
+    });
     (async () => {
+      renderer = await makeRenderer();
       client = new FrameClient(await endpoint());
       await subscribe(onEvent);
       fetchFrame();
@@ -263,19 +365,20 @@
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", resize);
+      unlisten.then((f) => f());
     };
   });
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onpaste={onPaste} />
 
 <main>
   <header>
     <button onclick={toggleFreeze} aria-pressed={frozen}>
-      {frozen ? "Live" : "Freeze"} <kbd>Space</kbd>
+      {frozen ? "Live" : "Freeze"} <kbd>{shortcut("freeze")}</kbd>
     </button>
-    <button onclick={() => rotate(-1)}>Rotate left <kbd>Shift+R</kbd></button>
-    <button onclick={() => rotate(1)}>Rotate right <kbd>R</kbd></button>
+    <button onclick={() => rotate(-1)}>Rotate left <kbd>{shortcut("rotate-ccw")}</kbd></button>
+    <button onclick={() => rotate(1)}>Rotate right <kbd>{shortcut("rotate-cw")}</kbd></button>
     <label>
       Magnification
       <input
@@ -299,10 +402,34 @@
         {/each}
       </select>
     </label>
-    <button onclick={toggleFullscreen}>Full screen <kbd>F</kbd></button>
+    <label class="button">
+      Open image…
+      <input
+        bind:this={fileInput}
+        type="file"
+        accept="image/*"
+        class="hidden"
+        onchange={onFilePicked}
+      />
+    </label>
+    {#if stream && stream.source.kind !== "phone"}
+      <button onclick={() => dispatch({ type: "use-source", source: { kind: "phone" } })}>
+        Use phone
+      </button>
+    {/if}
+    <button onclick={() => (settingsOpen = true)}>Settings <kbd>{shortcut("settings")}</kbd></button>
+    <button onclick={toggleFullscreen}>Full screen <kbd>{shortcut("fullscreen")}</kbd></button>
   </header>
 
-  <canvas bind:this={canvas} tabindex="0" aria-label="Magnified camera picture"></canvas>
+  <div class="picture">
+    <canvas bind:this={canvas} tabindex="0" aria-label="Magnified camera picture"></canvas>
+    {#if config?.magnifier.reading_line}
+      <div class="reading-line" aria-hidden="true"></div>
+    {/if}
+    {#if dropping}
+      <div class="drop" aria-hidden="true">Drop an image or a recording to open it</div>
+    {/if}
+  </div>
 
   <footer>
     <span>{statusText}</span>
@@ -314,12 +441,53 @@
   {/if}
 </main>
 
+{#if config}
+  <Settings {config} bind:open={settingsOpen} onnotice={say} />
+{/if}
+
 <style>
+  /* Themes: every colour comes from these. */
+  :global(:root) {
+    --bg: #000;
+    --panel: #161616;
+    --text: #fff;
+    --control: #262626;
+    --edge: #8a8a8a;
+    --focus: #ffd400;
+    --line: #ffd400;
+  }
+  :global(:root[data-theme="light"]) {
+    --bg: #fff;
+    --panel: #f2f2f2;
+    --text: #000;
+    --control: #fff;
+    --edge: #555;
+    --focus: #0050c8;
+    --line: #c00000;
+  }
+  :global(:root[data-theme="high-contrast-yellow"]) {
+    --bg: #000;
+    --panel: #000;
+    --text: #ffff00;
+    --control: #000;
+    --edge: #ffff00;
+    --focus: #00ffff;
+    --line: #ffff00;
+  }
+  :global(:root[data-theme="high-contrast-white"]) {
+    --bg: #000;
+    --panel: #000;
+    --text: #fff;
+    --control: #000;
+    --edge: #fff;
+    --focus: #ffff00;
+    --line: #fff;
+  }
   :global(html, body) {
     margin: 0;
     height: 100%;
-    background: #000;
-    color: #fff;
+    background: var(--bg);
+    color: var(--text);
     font: 1.125rem/1.4 system-ui, sans-serif;
   }
   main {
@@ -334,37 +502,77 @@
     gap: 0.5rem 1rem;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    background: #111;
+    background: var(--panel);
   }
   footer {
     justify-content: space-between;
   }
-  button,
-  select,
-  input {
+  :global(button, select, input) {
     font: inherit;
+    color: var(--text);
   }
-  button,
-  select {
+  :global(button),
+  :global(select),
+  .button {
     padding: 0.35rem 0.75rem;
-    border: 2px solid #888;
+    border: 0.15rem solid var(--edge);
     border-radius: 0.35rem;
-    background: #222;
-    color: #fff;
+    background: var(--control);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .button:focus-within {
+    outline: 0.2rem solid var(--focus);
+    outline-offset: 0.15rem;
   }
   kbd {
     font-size: 0.8em;
-    opacity: 0.8;
+    opacity: 0.85;
+  }
+  kbd:empty {
+    display: none;
   }
   :global(:focus-visible) {
-    outline: 0.2rem solid #ffd400;
+    outline: 0.2rem solid var(--focus);
     outline-offset: 0.15rem;
+  }
+  .picture {
+    position: relative;
+    min-height: 0;
+    background: #000;
   }
   canvas {
     width: 100%;
     height: 100%;
     display: block;
-    min-height: 0;
+  }
+  .reading-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 0.25rem;
+    margin-top: -0.125rem;
+    background: var(--line);
+    box-shadow: 0 0 0 0.1rem #000;
+    pointer-events: none;
+  }
+  .drop {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: 2rem;
+    background: rgb(0 0 0 / 0.75);
+    color: #fff;
+    pointer-events: none;
+  }
+  .hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
   }
   .failure {
     position: fixed;
@@ -372,6 +580,7 @@
     margin: 0;
     padding: 1rem;
     background: #600;
-    border: 2px solid #f88;
+    color: #fff;
+    border: 0.15rem solid #f88;
   }
 </style>

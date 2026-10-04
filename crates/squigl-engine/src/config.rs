@@ -10,6 +10,7 @@ use crate::transcribe::{
 };
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// The built-in block detector (PP-DocLayoutV3; needs the `local-model` build
@@ -110,6 +111,8 @@ pub struct Config {
     pub display: DisplayConfig,
     #[serde(default)]
     pub magnifier: MagnifierConfig,
+    #[serde(default)]
+    pub desktop: DesktopConfig,
 }
 
 impl Config {
@@ -162,7 +165,8 @@ impl Config {
             "# squigl settings: edit here or in the window's Settings. Each [[backends]]\n\
              # entry is one choice in the window; the first is selected at startup.\n\
              # [layout] is the block detector, [prompts] what the models are asked,\n\
-             # [ui] the window, [display] and [magnifier] the magnifier's view.\n\n{}",
+             # [ui] the egui window, [display] and [magnifier] the magnifier's view,\n\
+             # [desktop] the desktop app.\n\n{}",
             toml::to_string_pretty(self).expect("config serialises")
         )
     }
@@ -200,6 +204,7 @@ impl Default for Config {
             enhance: crate::enhance::EnhanceConfig::default(),
             display: DisplayConfig::default(),
             magnifier: MagnifierConfig::default(),
+            desktop: DesktopConfig::default(),
         }
     }
 }
@@ -226,6 +231,42 @@ impl Default for MagnifierConfig {
             max_magnification: 30.0,
             smooth: true,
             reading_line: false,
+        }
+    }
+}
+
+/// The desktop app's look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+    /// Yellow text and outlines on black.
+    HighContrastYellow,
+    /// White text and outlines on black.
+    HighContrastWhite,
+}
+
+/// The `[desktop]` section: the desktop app's own settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopConfig {
+    pub theme: Theme,
+    /// Shortcuts that are a single key with no modifier (Space, R, +). They can be
+    /// turned off, for someone who presses keys by accident or uses speech input.
+    pub single_key_shortcuts: bool,
+    /// Keys moved from their defaults: action name to key (the `KeyboardEvent.key`
+    /// value). The app knows the actions and their default keys.
+    pub shortcuts: BTreeMap<String, String>,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            single_key_shortcuts: true,
+            shortcuts: BTreeMap::new(),
         }
     }
 }
@@ -279,6 +320,11 @@ mod tests {
             max_magnification: 16.0,
             smooth: false,
             reading_line: true,
+        };
+        cfg.desktop = DesktopConfig {
+            theme: Theme::HighContrastYellow,
+            single_key_shortcuts: false,
+            shortcuts: [("freeze".to_string(), "Enter".to_string())].into(),
         };
         let parsed: Config = toml::from_str(&cfg.text()).unwrap();
         assert_eq!(parsed, cfg);
