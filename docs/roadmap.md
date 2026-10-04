@@ -48,7 +48,7 @@ crates/
                    webrtc_source, sink (FrameSink trait only), error, + test_pattern (from CLI)
                    + replay (H.264 Annex-B file source for CI/demos). Keeps the scrcpy-jar build.rs.
                    No `v4l` dependency.
-  squigl-v4l2/     Linux-only: V4l2Sink, loopback (pkexec/modprobe), run_to_v4l2 helpers
+  squigl-v4l2/     Linux-only: V4l2Sink, LazyV4l2Sink, loopback (pkexec/modprobe)
   squigl-pairing/  HTTPS/WHIP server + webrtc_capture.html (from squigl-cli/webrtc_server.rs),
                    detect_lan_ip, QR code (SVG), persisted cert, per-session token
   squigl-engine/   UI-agnostic app logic: geometry, render, stream, config, enhance, erase,
@@ -140,7 +140,7 @@ crates/
 - **1b. Split out `squigl-v4l2`.**
   - Move `sink::V4l2Sink`, `loopback.rs`, `CameraSession::run_to_v4l2` (`session.rs:~257`), `WebrtcSource::run_to_v4l2` (`webrtc_source.rs:~114`) and `examples/control.rs` there.
   - Core's `Error::Sink` becomes generic; `Error::Loopback` moves to the v4l2 crate.
-  - In the GUI, the `--device` tee (`crates/squigl/src/stream.rs:8,290,334,387`) goes behind a Linux-only `v4l2-tee` feature.
+  - In the GUI, the `--device` tee (`crates/squigl/src/stream.rs:8,290,334,387`) becomes Linux-only by target cfg (done that way rather than as a cargo feature: same behaviour on Linux, nothing to remember to enable).
 - **1c. Create `squigl-engine` from the egui-free modules:** enhance, erase, history, layout, stream, transcribe (including `Config`).
   - New `geometry` module: `Crop`, `Selection`, `zoom_to_view`, `wheel_notches`, from `app.rs:73-188,367-444`.
   - New `render` module: `render_region` and `render_selection`, from `app.rs:349-428`.

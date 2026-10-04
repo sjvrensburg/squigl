@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 squigl-core = { path = "../squigl-core" }
+squigl-v4l2 = { path = "../squigl-v4l2" }
 anyhow.workspace = true
 clap.workspace = true
 log.workspace = true

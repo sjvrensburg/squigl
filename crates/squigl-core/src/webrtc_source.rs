@@ -20,9 +20,8 @@
 use crate::decode::{self, Decoder, YuvFrame};
 use crate::error::{Error, Result};
 use crate::session::STALL_TIMEOUT;
-use crate::sink::{FrameSink, V4l2Sink};
+use crate::sink::FrameSink;
 use std::net::{IpAddr, UdpSocket};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use str0m::change::{SdpAnswer, SdpOffer};
@@ -50,8 +49,7 @@ impl WebrtcSource {
     /// Accepts a browser's SDP offer (the WHIP POST body), binds a UDP socket on
     /// `bind_addr` for the media itself, and returns the session plus the SDP answer
     /// to send back (the WHIP response body). Media only starts flowing once the
-    /// caller drives [`Self::run`]/[`Self::run_to_v4l2`] -- ICE and DTLS complete
-    /// there, not here.
+    /// caller drives [`Self::run`] -- ICE and DTLS complete there, not here.
     pub fn accept_offer(
         offer_sdp: &str,
         bind_addr: IpAddr,
@@ -101,22 +99,6 @@ impl WebrtcSource {
     ///   established -> [`Error::StreamStalled`];
     /// - any other error.
     pub fn run<S: FrameSink + ?Sized>(&mut self, sink: &mut S, stop: &AtomicBool) -> Result<()> {
-        while let Some(frame) = self.next_frame(stop)? {
-            sink.frame(&frame)?;
-        }
-        Ok(())
-    }
-
-    /// Like [`Self::run`], but opens the V4L2 sink itself once the first frame's size
-    /// is known -- unlike [`crate::CameraSession`], there's no upfront "session meta"
-    /// telling us the size before the stream starts (the browser's `getUserMedia`
-    /// resolution isn't announced any other way).
-    pub fn run_to_v4l2(&mut self, device_path: &Path, stop: &AtomicBool) -> Result<()> {
-        let Some(first) = self.next_frame(stop)? else {
-            return Ok(());
-        };
-        let mut sink = V4l2Sink::open(device_path, first.width as u32, first.height as u32)?;
-        sink.frame(&first)?;
         while let Some(frame) = self.next_frame(stop)? {
             sink.frame(&frame)?;
         }

@@ -10,7 +10,8 @@ Use an Android phone as a document camera on Linux, without the full `scrcpy` cl
   model (GLM-OCR on your GPU) or any OpenAI-compatible vision endpoint.
 - **`squigl-cli`** -- a headless CLI that streams the phone's camera into a V4L2
   (`/dev/videoN`) device, so browsers, OBS and any webcam app can use it too.
-- **`squigl-core`** (`crates/squigl-core`) -- the Rust library both are built on.
+- **`squigl-core`** (`crates/squigl-core`) -- the Rust library both are built on, and
+  **`squigl-v4l2`** -- its Linux-only V4L2 output.
 
 Linux only (V4L2 is Linux; the GUI is Linux-first). Android 12+ on the phone.
 

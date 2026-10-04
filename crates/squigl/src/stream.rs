@@ -5,11 +5,11 @@
 use anyhow::{Context, Result};
 use squigl_core::cameras::is_usable_size;
 use squigl_core::decode::YuvFrame;
-use squigl_core::sink::{FrameSink, V4l2Sink};
+use squigl_core::sink::FrameSink;
 use squigl_core::{
     adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, ZOOM_STEP,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
@@ -44,7 +44,8 @@ pub enum Resolution {
 pub struct StreamConfig {
     pub options: ConnectOptions,
     pub resolution: Resolution,
-    /// Also write frames to this v4l2loopback device.
+    /// Also write frames to this v4l2loopback device (Linux only; always `None`
+    /// elsewhere).
     pub tee_device: Option<PathBuf>,
 }
 
@@ -287,7 +288,7 @@ fn run_loop(shared: &Arc<Shared>, wake: &dyn Fn()) {
     const RESTART_GRACE: Duration = Duration::from_millis(1500);
 
     let mut backoff = MIN_BACKOFF;
-    let mut tee: Option<V4l2Sink> = None;
+    let mut tee: Option<Tee> = None;
     while !shared.stop.load(Ordering::Relaxed) {
         shared.restart.store(false, Ordering::Relaxed);
         shared.set_status(Status::Connecting);
@@ -331,7 +332,7 @@ fn run_loop(shared: &Arc<Shared>, wake: &dyn Fn()) {
 fn run_session(
     shared: &Arc<Shared>,
     config: &StreamConfig,
-    tee: &mut Option<V4l2Sink>,
+    tee: &mut Option<Tee>,
     wake: &dyn Fn(),
     backoff: &mut Duration,
 ) -> Result<()> {
@@ -380,12 +381,7 @@ fn run_session(
     shared.zoom_changed.notify_all();
 
     if let Some(path) = &config.tee_device {
-        if tee.as_ref().is_some_and(|s| s.size() != (w, h)) {
-            *tee = None;
-        }
-        if tee.is_none() {
-            *tee = Some(V4l2Sink::open(path, w, h).context("opening V4L2 device")?);
-        }
+        open_tee(tee, path, w, h)?;
     }
 
     shared.set_status(Status::Streaming {
@@ -414,6 +410,38 @@ fn run_session(
         *backoff = Duration::from_secs(1);
     }
     result
+}
+
+/// The optional V4L2 copy of the stream ([`StreamConfig::tee_device`]).
+#[cfg(target_os = "linux")]
+type Tee = squigl_v4l2::V4l2Sink;
+
+/// Keeps `tee` open at `w`x`h`, reopening it if the stream changed size.
+#[cfg(target_os = "linux")]
+fn open_tee(tee: &mut Option<Tee>, path: &Path, w: u32, h: u32) -> Result<()> {
+    if tee.as_ref().is_some_and(|s| s.size() != (w, h)) {
+        *tee = None;
+    }
+    if tee.is_none() {
+        *tee = Some(Tee::open(path, w, h).context("opening V4L2 device")?);
+    }
+    Ok(())
+}
+
+/// V4L2 is Linux-only, so elsewhere there is never a tee to write to.
+#[cfg(not(target_os = "linux"))]
+enum Tee {}
+
+#[cfg(not(target_os = "linux"))]
+impl FrameSink for Tee {
+    fn frame(&mut self, _: &YuvFrame) -> squigl_core::Result<()> {
+        match *self {}
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_tee(_: &mut Option<Tee>, _: &Path, _: u32, _: u32) -> Result<()> {
+    anyhow::bail!("writing to a V4L2 device is only possible on Linux")
 }
 
 fn select_device(options: &ConnectOptions) -> Result<AdbDevice> {

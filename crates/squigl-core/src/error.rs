@@ -23,11 +23,9 @@ pub enum Error {
     #[error("H.264 decode error: {0}")]
     Decode(String),
 
-    #[error("V4L2 sink error: {0}")]
+    /// A [`crate::sink::FrameSink`] failed; the message names the sink.
+    #[error("{0}")]
     Sink(String),
-
-    #[error("failed to load v4l2loopback module: {0}")]
-    Loopback(String),
 
     #[error(transparent)]
     Io(#[from] io::Error),
