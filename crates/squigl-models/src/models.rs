@@ -4,10 +4,11 @@
 //! relink them on every build and put them in git); each model is looked up, in
 //! order, in `$SQUIGL_MODEL_DIR/<name>/`, a `models/<name>/` directory next to the
 //! AppImage (when running as one) or next to the executable (how a release tarball
-//! ships them), and
-//! `$XDG_CACHE_HOME/squigl/models/<name>/`. If none has it, it is downloaded into the
-//! cache from a pinned Hugging Face revision, each file checked against the sha256
-//! recorded here before it is used.
+//! ships them), and the cache's `models/<name>/` (see `squigl_engine::paths`;
+//! `~/.cache/squigl/models/<name>/` on Linux). If none has it, it is downloaded from a
+//! pinned Hugging Face revision -- into `$SQUIGL_MODEL_DIR` when that is set, else
+//! into the cache -- each file checked against the sha256 recorded here before it is
+//! used.
 
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
@@ -131,13 +132,16 @@ fn candidate_dirs(name: &str) -> Vec<PathBuf> {
     {
         dirs.push(exe_dir.join("models").join(name));
     }
-    dirs.push(cache_dir(name));
+    dirs.push(squigl_engine::paths::cache_dir().join("models").join(name));
     dirs
 }
 
-/// Where a download lands.
-fn cache_dir(name: &str) -> PathBuf {
-    squigl_engine::paths::cache_dir().join("models").join(name)
+/// Where a download lands: the directory the user named, else the cache.
+fn download_dir(name: &str) -> PathBuf {
+    match std::env::var_os("SQUIGL_MODEL_DIR").filter(|d| !d.is_empty()) {
+        Some(d) => PathBuf::from(d).join(name),
+        None => squigl_engine::paths::cache_dir().join("models").join(name),
+    }
 }
 
 impl ModelSpec {
@@ -170,7 +174,7 @@ impl ModelSpec {
             log::info!("{} found at {}", self.name, dir.display());
             return Ok(dir);
         }
-        let dir = cache_dir(self.name);
+        let dir = download_dir(self.name);
         self.download_into(&dir, report, cancel)?;
         Ok(dir)
     }

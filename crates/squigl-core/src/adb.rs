@@ -10,7 +10,9 @@
 //! this is how effectively every scrcpy-like tool works.
 
 use crate::error::{Error, Result};
+use std::ffi::OsString;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 const DEVICE_SERVER_PATH: &str = "/data/local/tmp/scrcpy-server.jar";
@@ -174,31 +176,78 @@ fn server_command(server_args: &[String]) -> String {
     )
 }
 
-fn adb_binary() -> Result<&'static str> {
-    static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let ok = *CHECKED.get_or_init(|| {
-        Command::new("adb")
-            .arg("version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    });
-    if ok {
-        Ok("adb")
-    } else {
-        Err(Error::AdbNotFound)
+/// The adb executable's file name on this OS.
+const ADB_EXE: &str = if cfg!(windows) { "adb.exe" } else { "adb" };
+
+/// Where to look for adb, in order: `$SQUIGL_ADB`; next to the running executable
+/// (where an installer puts the one it ships); `platform-tools` under
+/// `$ANDROID_HOME` and `$ANDROID_SDK_ROOT` (an Android SDK); then plain `adb`, found
+/// on `PATH`. `env` reads an environment variable.
+fn candidates(env: impl Fn(&str) -> Option<OsString>, exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if let Some(p) = env("SQUIGL_ADB").filter(|p| !p.is_empty()) {
+        found.push(PathBuf::from(p));
     }
+    if let Some(dir) = exe_dir {
+        found.push(dir.join(ADB_EXE));
+    }
+    for sdk in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
+        if let Some(root) = env(sdk).filter(|p| !p.is_empty()) {
+            found.push(PathBuf::from(root).join("platform-tools").join(ADB_EXE));
+        }
+    }
+    found.push(PathBuf::from(ADB_EXE));
+    found
+}
+
+/// A process for `program`. On Windows it gets no console window of its own: a GUI
+/// app spawning adb would otherwise flash one up every time.
+fn command(program: &Path) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// The adb to use: the first that runs (`adb version`) of `$SQUIGL_ADB`, `adb` next
+/// to the running executable, `platform-tools/adb` under `$ANDROID_HOME` or
+/// `$ANDROID_SDK_ROOT`, and `adb` on `PATH`. Found
+/// once and remembered; not finding it is not remembered, so installing adb while
+/// squigl runs is picked up on the next try.
+pub fn locate() -> Result<PathBuf> {
+    static FOUND: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    if let Some(path) = FOUND.get() {
+        return Ok(path.clone());
+    }
+    let exe = std::env::current_exe().ok();
+    let exe_dir = exe.as_deref().and_then(Path::parent);
+    let path = candidates(|v| std::env::var_os(v), exe_dir)
+        .into_iter()
+        .find(|p| {
+            command(p)
+                .arg("version")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .ok_or(Error::AdbNotFound)?;
+    log::debug!("using adb at {}", path.display());
+    Ok(FOUND.get_or_init(|| path).clone())
 }
 
 fn adb(pre_args: &[&str], args: &[&str]) -> Result<String> {
-    let bin = adb_binary()?;
+    let bin = locate()?;
     let mut full = Vec::with_capacity(pre_args.len() + args.len());
     full.extend_from_slice(pre_args);
     full.extend_from_slice(args);
     log::debug!("adb {}", full.join(" "));
-    let output = Command::new(bin).args(&full).output()?;
+    let output = command(&bin).args(&full).output()?;
     if !output.status.success() {
         return Err(Error::AdbCommand(format!(
             "`adb {}` failed: {}",
@@ -210,12 +259,12 @@ fn adb(pre_args: &[&str], args: &[&str]) -> Result<String> {
 }
 
 fn spawn_adb(args: &[&str]) -> Result<Child> {
-    let bin = adb_binary()?;
+    let bin = locate()?;
     log::debug!("adb {} (background)", args.join(" "));
     // Deliberately left in our process group: a terminal Ctrl-C then also reaches the
     // `adb shell` child, so the on-device server dies even if we exit without
     // running `CameraSession`'s Drop (e.g. a second, hard Ctrl-C).
-    Ok(Command::new(bin)
+    Ok(command(&bin)
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -263,7 +312,30 @@ pub fn close_stdin(child: &mut Child) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ipv4_from_ip_addr;
+    use super::*;
+
+    #[test]
+    fn adb_is_looked_for_in_order() {
+        let env = |v: &str| match v {
+            "SQUIGL_ADB" => Some(OsString::from("/opt/adb/adb")),
+            "ANDROID_HOME" => Some(OsString::from("/sdk")),
+            // Set but empty: skipped.
+            "ANDROID_SDK_ROOT" => Some(OsString::new()),
+            _ => None,
+        };
+        let found = candidates(env, Some(Path::new("/app")));
+        assert_eq!(
+            found,
+            [
+                PathBuf::from("/opt/adb/adb"),
+                Path::new("/app").join(ADB_EXE),
+                Path::new("/sdk").join("platform-tools").join(ADB_EXE),
+                PathBuf::from(ADB_EXE),
+            ]
+        );
+        // With nothing set, only PATH.
+        assert_eq!(candidates(|_| None, None), [PathBuf::from(ADB_EXE)]);
+    }
 
     #[test]
     fn parses_wlan_address() {

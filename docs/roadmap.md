@@ -237,6 +237,17 @@ crates/
 - **CI matrix** adds `windows-latest` and `macos-14`, building and testing core, engine, models and egui. egui on Windows/macOS comes almost free and is a cheap smoke test of the engine there.
 - **ffmpeg stays Linux-only.** Windows/macOS use openh264, capped at 3840×2160, which is enough for a magnifier.
 
+**Progress:**
+
+- **Done:**
+  - `adb::locate()`, which spawns adb with `CREATE_NO_WINDOW`;
+  - the per-OS rpath;
+  - `windows_subsystem` for release builds;
+  - the pictures folder, via `engine::paths`;
+  - the CI matrix, now building the whole workspace (`squigl-cli` only says it needs Linux elsewhere);
+  - a manual `models` CI job that runs `glmocr` on the CPU on all three OSes (`SQUIGL_TEST_DEVICES=cpu`).
+- **Left for the Windows VM:** running against the phone over adb.
+
 **Exit criteria:**
 
 - CI passes on all three OSes.
