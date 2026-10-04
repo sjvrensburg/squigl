@@ -242,9 +242,24 @@ convert.rs BT.601 coefficients, rotation as corner texture coordinates, the
 `display::lut` table as a 256x1 texture). `lib/engine.ts` mirrors the engine's serde
 types by hand -- keep it in step. The `custom-protocol` feature (default) serves the
 embedded UI; without it the window loads Vite's dev server (`npm run dev`).
+The window: the toolbar (freeze, rotate, magnification, colours, Open image…, Use
+phone, Settings, full screen), a reading-line overlay, and `Settings.svelte`, a
+native `<dialog>` (colour mode, ink/paper colours, contrast/brightness/mid-tones and a
+two-colour cut-off -- sliders send `PreviewConfig` while dragged and `SetConfig` when
+let go, so one drag is one save --, smoothing, reading line, start magnification,
+the UI theme, and the keyboard). Themes are CSS custom properties on
+`:root[data-theme]` from `[desktop].theme`; shortcuts (`lib/shortcuts.ts`) are the
+default keys plus the `[desktop].shortcuts` overrides, with character keys dropped
+when `single_key_shortcuts` is off (WCAG 2.1.4); a key moved to one action leaves the
+one it had. Images open from the file input, paste (`open_image`: the bytes go to
+the cache's `opened/`, only the newest kept) and Tauri's drag-and-drop (paths, so a
+`.sqrec` plays). `lib/renderer2d.ts` is the Canvas2D fallback when WebGL2 is
+missing at start (the same conversion and table on the CPU; it matched WebGL2 to
+under 0.1/255 on average in a side-by-side snapshot); a lost WebGL context is
+restored, not swapped (a canvas that gave a WebGL context cannot give a 2D one).
 Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-path
-FILE` (the canvas as PNG, then quit) and `--dev-stats` (frames drawn per second, to
-the log) drive it from a script; page errors and warnings go to the app's log
+FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second, to
+the log) and `--dev-canvas2d` drive it from a script; page errors and warnings go to the app's log
 (target `page`). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
 for a window that is not being drawn.
 
