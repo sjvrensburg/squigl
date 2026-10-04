@@ -4,7 +4,7 @@
 //!
 //! Linux-only: on any other target this crate is empty, so a crate that depends on
 //! it only for an optional feature (the engine's `--device` tee) still builds there.
-//! `squigl-cli` uses it unconditionally and stays Linux-only.
+//! `squigl-cli` uses it only on Linux, the one place it does anything.
 
 #![cfg(target_os = "linux")]
 

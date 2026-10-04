@@ -2,6 +2,10 @@
 //! drag a region to zoom, capture, save. The phone side and the decode pipeline are
 //! the `squigl-core` library; this crate is the window and the reconnect policy.
 
+// A window, not a console program: on Windows a release build opens no console
+// beside it. (A debug build keeps one, for the log.)
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod panes;
 mod settings;
