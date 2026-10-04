@@ -1390,7 +1390,9 @@ impl App {
                         self.fps.rate
                     ),
                 },
-                Status::Waiting { reason, retry_at } => format!(
+                Status::Waiting {
+                    reason, retry_at, ..
+                } => format!(
                     "{reason} — retrying in {}s",
                     retry_at.saturating_duration_since(Instant::now()).as_secs() + 1
                 ),
