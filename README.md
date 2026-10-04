@@ -10,7 +10,8 @@ Use an Android phone as a document camera on Linux, without the full `scrcpy` cl
   model (GLM-OCR on your GPU) or any OpenAI-compatible vision endpoint.
 - **`squigl-cli`** -- a headless CLI that streams the phone's camera into a V4L2
   (`/dev/videoN`) device, so browsers, OBS and any webcam app can use it too.
-- **`phone-cam4linux`** -- the Rust library both are built on.
+- **`squigl-core`** (`crates/squigl-core`) -- the Rust library both are built on, and
+  **`squigl-v4l2`** -- its Linux-only V4L2 output.
 
 Linux only (V4L2 is Linux; the GUI is Linux-first). Android 12+ on the phone.
 
@@ -23,7 +24,7 @@ time and pushes/runs it on the phone over ADB, exactly as `scrcpy` itself does. 
 this crate implements natively in Rust is:
 
 - the ADB plumbing to push and launch that server (via the system `adb` binary),
-- scrcpy's client-side video-socket wire protocol (`src/protocol.rs`),
+- scrcpy's client-side video-socket wire protocol (`crates/squigl-core/src/protocol.rs`),
 - H.264 decoding via `openh264` (statically linked, no system FFmpeg) or,
   optionally, the system FFmpeg (`--features ffmpeg`, no frame-size ceiling),
 - I420 -> YUYV422 conversion, and
@@ -94,7 +95,7 @@ cargo build --release                      # or: cargo build --release --feature
 needs a Rust toolchain, `nasm` (OpenH264 assembly), `libclang` (bindgen for the V4L2
 bindings), and for the GUI `libxkbcommon` and `libwayland` development files. The first
 build downloads the pinned `scrcpy-server` jar and (for the GUI) prebuilt ONNX Runtime
-binaries; `cargo build --release -p squigl --no-default-features` skips the latter,
+binaries; `cargo build --release -p squigl-egui --no-default-features` skips the latter,
 the built-in models and the Typst typesetting. `squigl --fetch-model DIR` downloads the models into `DIR/` with
 checksum verification, for machines that will be offline (set `HF_TOKEN` to a Hugging
 Face token if anonymous downloads are being rate-limited; the files are public).
@@ -305,7 +306,7 @@ exercises the loopback/format-negotiation/write path independently of ADB/hardwa
   -- a whole page at too large an image budget provokes one) the read fails with a
   message and both models reload on the CPU for the rest of the session; a restart gets
   the GPU back. Images are capped at 2048 image tokens by default for that reason.
-- **Protocol pinning**: `src/protocol.rs` implements scrcpy's undocumented
+- **Protocol pinning**: `crates/squigl-core/src/protocol.rs` implements scrcpy's undocumented
   video-socket wire format, reverse-engineered against the pinned server version in
   `build.rs` (`SCRCPY_VERSION`). Re-verify this module if you bump `SCRCPY_VERSION`.
 - Wi-Fi works via TCP/IP ADB (`--tcpip` / `--connect`); the initial switch to TCP

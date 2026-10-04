@@ -5,11 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **Squigl**: a Rust workspace built around using an Android phone as a Linux document
-camera with live handwriting OCR (`crates/squigl`, the GUI -- this is "the product").
+camera with live handwriting OCR (`crates/squigl-egui`, the GUI, binary `squigl` -- this
+is "the product").
 It also exposes the phone as a plain V4L2 (`/dev/videoN`) webcam (`crates/squigl-cli`,
-a headless CLI) and provides the shared pipeline both are built on (`phone-cam4linux`,
-unrenamed -- it's the plumbing: scrcpy protocol, H.264 decode, pixel conversion, V4L2
-sink). The on-device capture/encode is **not** reimplemented: the real upstream
+a headless CLI) and provides the shared pipeline both are built on (`crates/squigl-core`,
+formerly `phone-cam4linux` -- it's the plumbing: scrcpy protocol, H.264 decode, pixel
+conversion, V4L2 sink). `docs/roadmap.md` is the phased plan the workspace is being
+restructured by. The on-device capture/encode is **not** reimplemented: the real upstream
 `scrcpy-server.jar` is fetched at build time, embedded, and pushed to the phone over
 ADB. Everything from the socket down is implemented here.
 
@@ -18,10 +20,10 @@ ADB. Everything from the socket down is implemented here.
 ```
 cargo build --release                 # fetches scrcpy-server.jar on first build (needs network)
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
-cargo build --release -p squigl --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
+cargo build --release -p squigl-egui --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
 cargo test --workspace                 # unit tests (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
-cargo test -p phone-cam4linux protocol::tests::parses_codec_meta   # single test
-cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
+cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
+cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --workspace --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 ```
@@ -71,18 +73,20 @@ component is added (a model, a runtime, ported code).
 
 ## Build-time network dependency
 
-`phone-cam4linux/build.rs` downloads `scrcpy-server-v<SCRCPY_VERSION>` from GitHub
+`crates/squigl-core/build.rs` downloads `scrcpy-server-v<SCRCPY_VERSION>` from GitHub
 releases and verifies it against a pinned `SERVER_SHA256`, writing it to `OUT_DIR`
 for `include_bytes!`. Consequences:
 
 - A clean build needs network access. For offline/CI builds, pre-fetch the jar and
-  point `PHONE_CAM4LINUX_SERVER_JAR=/path/to/scrcpy-server.jar` at it.
+  point `SQUIGL_SERVER_JAR=/path/to/scrcpy-server.jar` at it (the old name,
+  `PHONE_CAM4LINUX_SERVER_JAR`, still works).
 - Bumping the scrcpy version means changing **both** `SCRCPY_VERSION` and
   `SERVER_SHA256` together, and re-checking `protocol.rs` (see below).
 
 ## Architecture
 
-The pipeline, in data-flow order (all in `phone-cam4linux/src/`):
+The pipeline, in data-flow order (1-6 in `crates/squigl-core/src/`, which has no
+Linux-specific code; 7 in `crates/squigl-v4l2/src/`):
 
 1. **`adb.rs`** — shells out to the system `adb` binary (not a Rust ADB lib; see the
    module doc for why). Pushes the jar, sets up `adb forward tcp:0 localabstract:scrcpy_<scid>`,
@@ -106,10 +110,13 @@ The pipeline, in data-flow order (all in `phone-cam4linux/src/`):
 5. **`convert.rs`** — I420 → packed YUYV422 (V4L2) and → RGBA8 (whole, cropped region, or
    decimated for a preview) for on-screen display.
 6. **`sink.rs`** — the `FrameSink` trait `run()` feeds (implemented by `V4l2Sink` and by any
-   `FnMut(&YuvFrame) -> Result<()>` closure, which is how a GUI gets frames), and
-   `V4l2Sink`: `v4l` crate mmap output stream to `/dev/videoN`.
-7. **`loopback.rs`** — auto-loads `v4l2loopback` via `pkexec modprobe` if the device
-   node is missing.
+   `FnMut(&YuvFrame) -> Result<()>` closure, which is how a GUI gets frames).
+7. **`squigl-v4l2`** — the Linux-only crate (empty on other targets): `V4l2Sink`, the
+   `v4l` crate's mmap output stream to `/dev/videoN`; `LazyV4l2Sink`, which opens one at
+   the first frame's size (for WebRTC, which announces no size up front); and
+   `loopback.rs`, which auto-loads `v4l2loopback` via `pkexec modprobe` if the device
+   node is missing. The GUI depends on it only on Linux (`--device` is cfg'd out
+   elsewhere).
 
 **`webrtc_source.rs`** is a second, independent camera source alongside `session.rs`,
 for phones that stream over the network instead of ADB (there's no squigl-side app to
@@ -117,7 +124,7 @@ push here, unlike scrcpy-server -- the phone side is a browser page doing
 `getUserMedia` and posting an SDP offer over HTTP, WHIP-style). `WebrtcSource::accept_offer`
 drives `str0m` (a sans-I/O WebRTC/ICE/DTLS/SRTP implementation, chosen because it fits
 this crate's synchronous style with no async runtime) to answer the offer, restricted to
-H.264 only (`clear_codecs().enable_h264(true)`); `run`/`run_to_v4l2` then block decoding
+H.264 only (`clear_codecs().enable_h264(true)`); `run` then blocks decoding
 frames the same way `CameraSession::run` does. str0m's H.264 depacketizer already hands
 back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` unchanged --
 no format conversion between the two sources. LAN-only by design: a host ICE candidate
@@ -134,40 +141,49 @@ browser to H.264 since that's all squigl decodes) at `/` and a minimal WHIP-shap
 endpoint at `POST /whip` (one session at a time; a second POST while one is active gets a
 503). `contrib/` has boot-time loopback config and a systemd user unit.
 
-`crates/squigl` is the egui document-camera window (`stream.rs`: worker thread with
-the reconnect loop, publishing the latest `YuvFrame`; `app.rs`: preview, crop in
-*view* (rotated) coordinates mapped back to the source frame, capture, save, and
-hand erasures (`App::erased`, view-space `erase::Stroke`s -- path plus radius --
-painted with a brush over the Zoom pane, whose size is in screen points, each point
-mapped back through the rectification by `zoom_to_view`; `render_selection` paints
-them before rectifying and enhancing, so reads, saves and both views agree, while
-live block detection stays raw; a retake, zoom or rotation drops them; ctrl+wheel is
-egui's `zoom_delta`, so it never reaches the box-resizing wheel);
-`erase.rs`: the fill -- everything within the radius of the path, one flat colour
-per stroke from the 75th-percentile-bright pixel of a ring around it, no inpainting;
-`transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and halo-workbench
-`/hint/read` backends, and the `~/.config/squigl/gui.toml` `Config` (backend list,
-`[layout]`, `[prompts]`, `[ui] scale`) -- the default prompts are verbatim from
-halo-workbench's `handwriting.py` and travel with each read (`Transcriber::read`
-takes the prompt; the hint API ignores it),
+`crates/squigl-engine` is the window's UI-independent half -- no egui, ONNX Runtime or
+Typst (`cargo tree -p squigl-engine` must show none: the built-in models and the
+typesetter implement its traits from outside, so a second front end can sit on it):
+`stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`;
+`geometry.rs`: `Crop` and `Selection` in *view* (rotated) coordinates, mapped back to
+the source frame by `Crop::to_source`, and `zoom_to_view`; `render.rs`:
+`render_region`, and `render_selection`, which paints erasures before rectifying and
+enhancing, so reads, saves and both views agree, while live block detection stays
+raw; `erase.rs`: the fill -- everything within the radius of the path, one flat
+colour per stroke from the 75th-percentile-bright pixel of a ring around it, no
+inpainting; `transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and
+halo-workbench `/hint/read` backends (`BackendConfig::build` builds only these; the
+window's `BackendFactory` adds the built-in model), and the
+`~/.config/squigl/gui.toml` `Config` (backend list, `[layout]`, `[prompts]`,
+`[ui] scale`; `LocalDevice` lives here so every build reads the same file) -- the
+default prompts are verbatim from halo-workbench's `handwriting.py` and travel with
+each read (`Transcriber::read` takes the prompt; the hint API ignores it),
 readings are grouped and counted, never merged; `layout.rs`: the `BlockDetector`
 trait, `Block`/`Quad` in view space, `Role` (the 25 classes folded into
 text/formula/figure/other -- colour and prompt follow it, `Mode::Formula` for a
 formula block) and the perspective `rectify` (imageproc) a
-non-rectangular block goes through before it is shown or read -- feature-independent
-so the window builds without a detector; `history.rs`: every finished read of the
-session (`App::history`, appended alongside `results`, which only ever drops its
-prefix -- "copy all" relies on that), Markdown export by capture; `panes.rs`: which
+non-rectangular block goes through before it is shown or read; `history.rs`: every
+finished read of the session (`App::history`, appended alongside `results`, which
+only ever drops its prefix -- "copy all" relies on that), Markdown export by capture;
+`typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
+front end's).
+
+`crates/squigl-egui` is the egui document-camera window (`app.rs`: preview, crop,
+capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path
+plus radius -- painted with a brush over the Zoom pane, whose size is in screen
+points, each point mapped back through the rectification by `zoom_to_view`; a
+retake, zoom or rotation drops them; ctrl+wheel is egui's `zoom_delta`, so it never
+reaches the box-resizing wheel); `panes.rs`: which
 of Preview/Zoom/Reading is active, maximised or detached (`App::pane` draws one with
 its header; a detached pane is an egui immediate viewport, `App::detached_windows`,
 which runs the same shortcuts as the main window while that pane's own window has
 focus); `settings.rs`: the Settings window editing
 a draft `Config`, applied by `App::apply_config` (backends whose entry is unchanged
 are kept, so the local model is not reloaded; the detector is rebuilt through the
-`DetectorFactory` main.rs passes in; the scale is egui's zoom factor and the value
+`DetectorFactory` main.rs passes in, backends through its `BackendFactory`; the scale is egui's zoom factor and the value
 in force is authoritative -- `track_zoom` writes any change into config and draft
-and saves it at once, so Save/Cancel never touch it); `mathtext.rs` (feature `math`): readings
-typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
+and saves it at once, so Save/Cancel never touch it). `crates/squigl-math` (the GUI's
+`math` feature): readings typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
 crate and evaluated inside MiTeX's Typst scope (vendored under `assets/mitex/`, so
 `\operatorname` and friends resolve), the rest escaped as markup, rasterised by
 `typst-render` at the window's pixel density and cached per reading as a texture
@@ -181,22 +197,21 @@ nothing defines (models invent `\softmax`, `\Var`) is not a failure: MiTeX's
 `unknown command` makes `convert_math` retry it as `\operatorname{…}`, and a name
 MiTeX passes through that Typst lacks (`unknown variable`) makes `Renderer::render`
 recompile with it defined as `math.op`; `argmax`/`argmin` are defined in the
-template's `compat` scope (with limits);
-`local/`: the
-built-in models --
-`local/glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`
+template's `compat` scope (with limits). `crates/squigl-models` (the GUI's
+`local-model` feature): the built-in models --
+`glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`
 (vision encoder, embeddings, merged decoder with an explicit KV cache and the
 undocumented scalar `num_logits_to_keep` input; preprocessing and MRoPE position ids
-ported from oar-ocr-vl's Candle implementation), `local/layout.rs` is PP-DocLayoutV3
+ported from oar-ocr-vl's Candle implementation), `layout.rs` is PP-DocLayoutV3
 (official ONNX export: 800x800 stretched input, `[N,7]` boxes with a reading-order
 column plus `[N,200,200]` instance masks; mask → largest contour → approxPolyDP →
 min-area rect gives the quad, as PaddleX does; `suppress_overlaps` is the
 cross-class NMS PaddleX also runs, since the model reports the same lines twice at
-times), `local/models.rs` finds or downloads
+times), `models.rs` finds or downloads
 each model's files (pinned HF revision + sha256 manifest; `$SQUIGL_MODEL_DIR/<name>/`,
 `models/<name>/` beside `$APPIMAGE`, exe-adjacent `models/<name>/`, then
 `~/.cache/squigl/models/<name>/`), and
-`local/mod.rs` holds the one process-wide `ort` environment (`ort` refuses a second)
+`lib.rs` holds the one process-wide `ort` environment (`ort` refuses a second)
 and wraps GLM-OCR as a `Transcriber` that prepares on a thread, plus `RUNTIME`, the
 one lock every session load and run takes: the WebGPU EP segfaults on concurrent
 `run` across sessions (microsoft/onnxruntime#32561, open) -- keep it until the
@@ -213,7 +228,7 @@ to the new block with the highest IoU (`follow_selection`, so tab keeps its plac
 an untouched crop tracks its block); "read all" captures first, waits for the
 capture's own detection, then drains a snapshot queue one read at a time. `ort` is pinned to a git commit because the published rc.13 has a different
 API (the pin carries ONNX Runtime 1.30; after moving it, run `glmocr_handwriting`, which
-reads `crates/squigl/testdata/handwriting/` on WebGPU and CPU against the readings
+reads `crates/squigl-models/testdata/handwriting/` on WebGPU and CPU against the readings
 recorded there -- a near-tie can flip on a kernel change, so re-record with
 `SQUIGL_BLESS=1` only after looking at the diff); its `download-binaries` fetches pyke's prebuilt ONNX Runtime at build time, and
 the WebGPU provider is a separate `libwebgpu_dawn.so` that lands next to the binary
@@ -264,7 +279,7 @@ messages (TYPE_CAMERA_ZOOM_IN/OUT = 19/20, step ×1.0625; TYPE_CAMERA_SET_TORCH 
 -- `ConnectOptions::control` opens that second connection (made right after the video
 socket's dummy byte; only the first connection gets one) and `CameraSession::control()`
 hands out a cloneable `CameraControl` usable from any thread while `run()` blocks
-(`phone-cam4linux/examples/control.rs` shows it). The phone never reports the zoom it
+(`crates/squigl-v4l2/examples/control.rs` shows it). The phone never reports the zoom it
 ends up at, so the GUI tracks the step count itself. No exposure, focus or
 white-balance control exists at any version.
 

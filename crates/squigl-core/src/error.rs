@@ -1,0 +1,34 @@
+use std::io;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("`adb` executable not found on PATH; install android-tools/platform-tools")]
+    AdbNotFound,
+
+    #[error("adb command failed: {0}")]
+    AdbCommand(String),
+
+    #[error("no Android device found (is USB debugging enabled and authorized, or the phone reachable over Wi-Fi?)")]
+    NoDevice,
+
+    #[error("unexpected scrcpy protocol data: {0}")]
+    Protocol(String),
+
+    #[error("video stream stalled: no data from the phone for {0:?}")]
+    StreamStalled(std::time::Duration),
+
+    #[error("the phone restarted the video stream at {width}x{height}; reconnect to pick up the new size")]
+    StreamResized { width: u32, height: u32 },
+
+    #[error("H.264 decode error: {0}")]
+    Decode(String),
+
+    /// A [`crate::sink::FrameSink`] failed; the message names the sink.
+    #[error("{0}")]
+    Sink(String),
+
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
