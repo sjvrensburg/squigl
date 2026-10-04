@@ -162,6 +162,10 @@ crates/
   - **macOS arm64:** `libwebgpu_dawn.dylib`, next to the binary (found through `@executable_path`).
 
   On both, as on Linux, they are symlinks into ort's cache, so packaging copies the real files (Phase 6: all three DLLs on Windows).
+- **On Windows, the build needs the Visual Studio 2026 C++ Build Tools** (MSVC 14.5x, winget `Microsoft.VisualStudio.BuildTools`). With the 2022 tools (14.44), linking the pinned ONNX Runtime's prebuilt library fails on `__std_rotate`, `__std_max_element_8i` and similar. `windows-latest` has 2026.
+- **The Windows 11 VM (2026-10-04):**
+  - Both apps build there.
+  - `squigl-desktop` streams live from the phone over adb, with no extra USB driver needed for this Samsung on LineageOS.
 - Still open:
   - `glmocr_handwriting` on CPU on those runners, which needs the model download (a manual job);
   - whether the WebGPU provider actually runs there, which needs a real GPU *(tester)*;
@@ -301,8 +305,12 @@ crates/
 - **Keyboard:** single-key shortcuts that can be turned off or remapped (WCAG 2.1.4).
 - **Opening images:** Open image…, paste, drag-and-drop, and "Use phone" to go back.
 - **The Canvas2D fallback:** it matches WebGL2 to under 0.1/255 on average. With the phone, it draws 27.6 fps on 1.47 cores, against WebGL2's 30 fps on 0.62.
+**Progress (4c, 2026-10-04):**
+
+- **The connection screen.** `stream::Problem` and `stream::classify` say what went wrong in terms a person can act on: adb missing, no phone, unauthorized, offline, several phones, camera in use, Android too old, file missing, other.
+- **Guidance.** Each problem has plain-language steps, with Try now, Open an image instead, and Hide.
+- **Device state.** `adb` now reports an unauthorized or offline phone as such, rather than as "no device".
 - **Next:**
-  - 4c: the connection screen.
   - Then the tests: `tauri-driver` end-to-end, and the per-mode pixel check.
 
 **Exit criteria:**
