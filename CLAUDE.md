@@ -333,7 +333,10 @@ one lock every session load and run takes: the WebGPU EP segfaults on concurrent
 `run` across sessions (microsoft/onnxruntime#32561, open) -- keep it until the
 pinned runtime has the fix; and `GPU_LOST`, set by `note_gpu_loss` when a run fails
 with a lost device (with IO binding the loss surfaces as an ORT error, not a
-segfault), after which `attempts()` yields the CPU only and both services drop their
+segfault), after which `attempts()` yields the CPU only (as it does for `auto` when
+`gpu_present()` -- wgpu's adapter list on D3D12/Metal/Vulkan, asked once -- finds only
+software rasterisers: WebGPU on WARP or llvmpipe read a crop ~10x slower than ONNX
+Runtime's CPU kernels) and both services drop their
 model and reload (`Lifecycle::reload`, phase `Reloading`). In `app.rs` the crop
 is a rectangle plus an optional quad (`Selection`); any hand edit of the crop drops
 the quad (`set_rect`) except dragging a quad corner, which moves that corner and
