@@ -13,7 +13,7 @@ use squigl_core::convert::Rotation;
 use squigl_core::decode::Backend;
 use squigl_core::{ConnectOptions, Facing};
 use squigl_engine::geometry::Crop;
-use squigl_engine::stream::{Resolution, StreamConfig, Worker};
+use squigl_engine::stream::{Resolution, SourceSpec, StreamConfig, Worker};
 use squigl_engine::transcribe::BackendConfig;
 use squigl_engine::{erase, transcribe};
 use std::path::PathBuf;
@@ -58,10 +58,19 @@ struct Args {
     #[arg(long, value_name = "/dev/videoN")]
     device: Option<PathBuf>,
 
+    /// Open an image (a scanned or photographed page) instead of using the phone.
+    /// Dropping a file on the window does the same; "Use phone" goes back.
+    #[arg(long, value_name = "FILE")]
+    open: Option<PathBuf>,
+
     /// Play a recording made with `squigl-cli --record`, looping, instead of using a
     /// phone: for demos, and for trying the window with no phone attached.
-    #[arg(long, value_name = "FILE", conflicts_with_all = ["serial", "connect"])]
+    #[arg(long, value_name = "FILE", conflicts_with = "open")]
     replay: Option<PathBuf>,
+
+    /// Development aid: start on synthetic colour bars instead of the phone.
+    #[arg(long, hide = true, conflicts_with_all = ["open", "replay"])]
+    test_pattern: bool,
 
     /// Camera zoom ratio at startup (the phone's own zoom; a slider in the window
     /// changes it later).
@@ -199,7 +208,14 @@ fn main() -> Result<()> {
             Resolution::Fixed(w, h)
         }
     };
+    let source = match (args.open, args.replay) {
+        (Some(path), _) => SourceSpec::Image(path),
+        (None, Some(path)) => SourceSpec::Replay(path),
+        (None, None) if args.test_pattern => SourceSpec::TestPattern,
+        (None, None) => SourceSpec::Phone,
+    };
     let config = StreamConfig {
+        source,
         options: ConnectOptions {
             serial: args.serial,
             tcp_address: args.connect,
@@ -220,7 +236,6 @@ fn main() -> Result<()> {
         tee_device: args.device,
         #[cfg(not(target_os = "linux"))]
         tee_device: None,
-        replay: args.replay,
     };
     let save_dir = args.save_dir.unwrap_or_else(|| {
         let home = std::env::var_os("HOME")

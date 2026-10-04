@@ -18,10 +18,12 @@ pub mod protocol;
 pub mod replay;
 pub mod session;
 pub mod sink;
+pub mod test_pattern;
 pub mod webrtc_source;
 
 pub use cameras::{list_cameras, CameraInfo};
 pub use error::{Error, Result};
 pub use replay::{Recorder, Replay};
 pub use session::{CameraControl, CameraSession, ConnectOptions, Facing, ZOOM_STEP};
+pub use test_pattern::TestPattern;
 pub use webrtc_source::WebrtcSource;

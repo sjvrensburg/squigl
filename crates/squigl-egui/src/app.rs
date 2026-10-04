@@ -28,7 +28,7 @@ use squigl_engine::geometry::{zoom_to_view, Crop, Selection};
 use squigl_engine::history::{self, History};
 use squigl_engine::layout::{self, Block, BlockDetector, Quad, Role};
 use squigl_engine::render::{render_region, render_selection};
-use squigl_engine::stream::{Shared, Status, Worker};
+use squigl_engine::stream::{Shared, SourceSpec, Status, Worker};
 use squigl_engine::transcribe::{
     BackendConfig, Confidence, Config, LayoutConfig, Mode, Reading, Transcriber, Transcription,
     UiConfig,
@@ -1186,6 +1186,41 @@ impl App {
         }
     }
 
+    /// Switches what the window shows; a frozen capture of the old source is dropped.
+    fn use_source(&mut self, source: SourceSpec) {
+        let what = source.describe();
+        if self.captured.is_some() {
+            self.captured = None;
+            self.erased.clear();
+        }
+        self.shared().use_source(source);
+        self.say(format!("showing {what}"));
+    }
+
+    /// A file dropped on the window becomes the source (see [`SourceSpec::for_file`]);
+    /// while one is dragged over it, says so across the whole window.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
+        if let Some(path) = dropped {
+            self.use_source(SourceSpec::for_file(path));
+        }
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("file_drop"),
+            ));
+            let rect = ctx.content_rect();
+            painter.rect_filled(rect, 0.0, Color32::from_black_alpha(200));
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop an image or a recording to open it",
+                egui::FontId::proportional(28.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
     fn rotate(&mut self, rotation: Rotation) {
         if rotation != self.rotation {
             self.rotation = rotation;
@@ -1264,16 +1299,27 @@ impl App {
             }
             ui.separator();
 
-            let mut facing = self.shared().facing();
-            let before = facing;
-            ui.label("Camera:");
-            ui.selectable_value(&mut facing, Facing::Back, "back");
-            ui.selectable_value(&mut facing, Facing::Front, "front");
-            if facing != before {
-                self.shared().set_facing(facing);
-            }
-            if ui.button("Reconnect").clicked() {
-                self.shared().restart();
+            if self.shared().capabilities().facing {
+                let mut facing = self.shared().facing();
+                let before = facing;
+                ui.label("Camera:");
+                ui.selectable_value(&mut facing, Facing::Back, "back");
+                ui.selectable_value(&mut facing, Facing::Front, "front");
+                if facing != before {
+                    self.shared().set_facing(facing);
+                }
+                if ui.button("Reconnect").clicked() {
+                    self.shared().restart();
+                }
+            } else {
+                ui.label(format!("Showing: {}", self.shared().source().describe()));
+                if ui
+                    .button("Use phone")
+                    .on_hover_text("go back to the phone's camera")
+                    .clicked()
+                {
+                    self.use_source(SourceSpec::Phone);
+                }
             }
             self.zoom_control(ui);
             ui.separator();
@@ -1342,10 +1388,23 @@ impl App {
         ui.horizontal(|ui| {
             let status = self.shared().status();
             let text = match &status {
-                Status::Connecting => "connecting to phone…".to_string(),
-                Status::Streaming { width, height } => {
-                    format!("streaming {width}x{height} at {:.0} fps", self.fps.rate)
-                }
+                Status::Connecting => match self.shared().source() {
+                    SourceSpec::Phone => "connecting to phone…".to_string(),
+                    other => format!("opening {}…", other.describe()),
+                },
+                Status::Streaming { width, height } => match self.shared().source() {
+                    SourceSpec::Phone => {
+                        format!("streaming {width}x{height} at {:.0} fps", self.fps.rate)
+                    }
+                    image @ SourceSpec::Image(_) => {
+                        format!("showing {}, {width}x{height}", image.describe())
+                    }
+                    other => format!(
+                        "playing {}, {width}x{height} at {:.0} fps",
+                        other.describe(),
+                        self.fps.rate
+                    ),
+                },
                 Status::Waiting { reason, retry_at } => format!(
                     "{reason} — retrying in {}s",
                     retry_at.saturating_duration_since(Instant::now()).as_secs() + 1
@@ -2289,6 +2348,7 @@ impl App {
             self.handle_keys(ui.ctx());
         }
         self.handle_screenshot(ui.ctx());
+        self.handle_dropped_files(ui.ctx());
         self.drop_stale_blocks();
         self.poll_read();
         self.maybe_detect(ui.ctx());

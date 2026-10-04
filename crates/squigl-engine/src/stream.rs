@@ -5,11 +5,12 @@
 
 use anyhow::{Context, Result};
 use squigl_core::cameras::is_usable_size;
+use squigl_core::convert::rgba_to_i420;
 use squigl_core::decode::YuvFrame;
 use squigl_core::sink::FrameSink;
 use squigl_core::{
     adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, Replay,
-    ZOOM_STEP,
+    TestPattern, ZOOM_STEP,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,18 +41,75 @@ pub enum Resolution {
     Fixed(u32, u32),
 }
 
-/// Everything the worker needs to (re)connect. Changing the facing takes effect on
-/// the next connection, which [`Shared::restart`] forces.
+/// Where the worker's frames come from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceSpec {
+    /// The phone over ADB, per [`StreamConfig::options`] and `resolution`.
+    Phone,
+    /// A recording made with `squigl-cli --record`, looping.
+    Replay(PathBuf),
+    /// A still image -- a scanned or photographed page -- shown as one frame.
+    Image(PathBuf),
+    /// Synthetic colour bars.
+    TestPattern,
+}
+
+/// Which camera controls the current source has; a front end shows only these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    pub zoom: bool,
+    pub torch: bool,
+    pub facing: bool,
+}
+
+impl SourceSpec {
+    pub fn capabilities(&self) -> Capabilities {
+        let phone = *self == SourceSpec::Phone;
+        Capabilities {
+            zoom: phone,
+            torch: phone,
+            facing: phone,
+        }
+    }
+
+    /// The source for a file a user picked or dropped: a recording (`.sqrec`) plays,
+    /// anything else is opened as an image.
+    pub fn for_file(path: PathBuf) -> Self {
+        if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("sqrec"))
+        {
+            SourceSpec::Replay(path)
+        } else {
+            SourceSpec::Image(path)
+        }
+    }
+
+    /// What to call it in a status line: "phone", or the file's name.
+    pub fn describe(&self) -> String {
+        match self {
+            SourceSpec::Phone => "phone".to_string(),
+            SourceSpec::Replay(path) | SourceSpec::Image(path) => path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into(),
+            ),
+            SourceSpec::TestPattern => "test pattern".to_string(),
+        }
+    }
+}
+
+/// Everything the worker needs to (re)connect. Changing the facing or the source
+/// takes effect on the next connection, which [`Shared::restart`] forces.
 #[derive(Debug, Clone)]
 pub struct StreamConfig {
+    /// Where frames come from. The phone settings below are kept whichever it is,
+    /// so going back to the phone picks them up again.
+    pub source: SourceSpec,
     pub options: ConnectOptions,
     pub resolution: Resolution,
     /// Also write frames to this v4l2loopback device (Linux only; always `None`
     /// elsewhere).
     pub tee_device: Option<PathBuf>,
-    /// Play this recording (`squigl-cli --record`), looping, instead of using a
-    /// phone; `options` then supplies only the decoder.
-    pub replay: Option<PathBuf>,
 }
 
 pub struct Shared {
@@ -108,8 +166,30 @@ impl Shared {
         self.config.lock().unwrap().options.facing
     }
 
-    /// What the phone reported about the current camera, once known.
+    pub fn source(&self) -> SourceSpec {
+        self.config.lock().unwrap().source.clone()
+    }
+
+    pub fn capabilities(&self) -> Capabilities {
+        self.config.lock().unwrap().source.capabilities()
+    }
+
+    /// Switches to `source` (through a restart) unless it is already in use.
+    pub fn use_source(&self, source: SourceSpec) {
+        let mut cfg = self.config.lock().unwrap();
+        if cfg.source != source {
+            cfg.source = source;
+            drop(cfg);
+            self.restart();
+        }
+    }
+
+    /// What the phone reported about the current camera, once known; `None` while
+    /// another source is in use.
     pub fn camera(&self) -> Option<CameraInfo> {
+        if self.source() != SourceSpec::Phone {
+            return None;
+        }
         let facing = self.facing();
         self.cameras
             .lock()
@@ -133,8 +213,12 @@ impl Shared {
     /// phone clamps to its range). Applied live by the zoom thread when a session is
     /// up, and remembered for the next connection either way. Returns whether the
     /// target moved: a value that snaps back to the current grid step (a slider
-    /// re-rounding what it shows) is no change.
+    /// re-rounding what it shows) is no change, and so is any zoom while the source
+    /// has none.
     pub fn set_zoom(&self, zoom: f32) -> bool {
+        if !self.capabilities().zoom {
+            return false;
+        }
         let target = zoom_to_steps(zoom);
         let mut state = self.zoom.lock().unwrap();
         if state.target == target {
@@ -203,13 +287,17 @@ impl Shared {
         }
     }
 
-    /// Switches camera: takes effect through a reconnect.
+    /// Switches camera: takes effect through a reconnect (when the phone is the
+    /// source; otherwise the next time it is).
     pub fn set_facing(&self, facing: Facing) {
         let mut cfg = self.config.lock().unwrap();
         if cfg.options.facing != facing {
             cfg.options.facing = facing;
+            let phone = cfg.source == SourceSpec::Phone;
             drop(cfg);
-            self.restart();
+            if phone {
+                self.restart();
+            }
         }
     }
 
@@ -304,6 +392,12 @@ fn run_loop(shared: &Arc<Shared>, wake: &dyn Fn()) {
         if shared.stop.load(Ordering::Relaxed) {
             break;
         }
+        // Only the phone needs a moment to let go of its camera.
+        let to_phone = config.source == SourceSpec::Phone && shared.source() == SourceSpec::Phone;
+        if shared.restart.load(Ordering::Relaxed) && !to_phone {
+            backoff = MIN_BACKOFF;
+            continue;
+        }
         if shared.restart.load(Ordering::Relaxed) {
             // The phone releases the camera a moment after the server goes; opening
             // the other camera straight away fails with "device is in the error state".
@@ -344,9 +438,64 @@ fn run_session(
     // The session's own stop flag: raised by the outer stop or by a restart request,
     // both of which end `run()` at the next packet.
     let session_stop = AtomicBool::new(false);
-    if let Some(path) = &config.replay {
-        return run_replay(shared, config, path, &session_stop, tee, wake, backoff);
+    let session_stop = &session_stop;
+    let frames_before = shared.frames();
+    let result = match &config.source {
+        SourceSpec::Phone => run_phone(shared, config, session_stop, tee, wake),
+        SourceSpec::Replay(path) => {
+            let mut replay = Replay::open(path, config.options.decoder)?.looping(true);
+            let size = (replay.meta.width, replay.meta.height);
+            log::info!("replaying {} ({}x{})", path.display(), size.0, size.1);
+            run_local(shared, config, size, session_stop, tee, wake, |sink| {
+                replay.run(sink, session_stop)
+            })
+        }
+        SourceSpec::Image(path) => {
+            let frame = load_image(path)?;
+            let size = (frame.width as u32, frame.height as u32);
+            log::info!("showing {} ({}x{})", path.display(), size.0, size.1);
+            run_local(shared, config, size, session_stop, tee, wake, |sink| {
+                sink.frame(&frame)?;
+                // One frame is the whole source: hold it until told otherwise.
+                while !shared.stop.load(Ordering::Relaxed)
+                    && !shared.restart.load(Ordering::Relaxed)
+                {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Ok(())
+            })
+        }
+        SourceSpec::TestPattern => {
+            let mut pattern = TestPattern::new(640, 480);
+            let (w, h) = pattern.size();
+            run_local(
+                shared,
+                config,
+                (w as u32, h as u32),
+                session_stop,
+                tee,
+                wake,
+                |sink| pattern.run(sink, session_stop),
+            )
+        }
+    };
+    // Only a session that delivered frames resets the backoff; one that fails right
+    // after the handshake must keep backing off.
+    if shared.frames() > frames_before {
+        *backoff = Duration::from_secs(1);
     }
+    result
+}
+
+/// A session with the phone: list its cameras (once), resolve the resolution,
+/// connect and stream.
+fn run_phone(
+    shared: &Arc<Shared>,
+    config: &StreamConfig,
+    session_stop: &AtomicBool,
+    tee: &mut Option<Tee>,
+    wake: &dyn Fn(),
+) -> Result<()> {
     // List the cameras once: it answers both "what is max" and "what zoom is there".
     if shared.cameras.lock().unwrap().is_empty() {
         let device = select_device(&config.options)?;
@@ -378,7 +527,7 @@ fn run_session(
         resolution,
         ..config.options.clone()
     };
-    let mut session = CameraSession::connect_with_stop(options, &session_stop)
+    let mut session = CameraSession::connect_with_stop(options, session_stop)
         .context("connecting to phone camera")?;
     let (w, h) = (session.meta.width, session.meta.height);
     log::info!("streaming {w}x{h}");
@@ -396,31 +545,23 @@ fn run_session(
         width: w,
         height: h,
     });
-    let mut sink = |frame: &YuvFrame| deliver(shared, tee, &session_stop, wake, frame);
-    let result = session.run(&mut sink, &session_stop).context("streaming");
+    let mut sink = |frame: &YuvFrame| deliver(shared, tee, session_stop, wake, frame);
+    let result = session.run(&mut sink, session_stop).context("streaming");
     *shared.control.lock().unwrap() = None;
-    // Only a session that delivered frames resets the backoff; one that fails right
-    // after the handshake must keep backing off.
-    if session.frames_decoded() > 0 {
-        *backoff = Duration::from_secs(1);
-    }
     result
 }
 
-/// Plays [`StreamConfig::replay`] in place of a phone session, looping until a stop
-/// or restart.
-fn run_replay(
-    shared: &Arc<Shared>,
+/// A session with a source that needs no phone: open the tee at its `size`, report
+/// it as streaming, and hand `run` the worker's frame delivery.
+fn run_local(
+    shared: &Shared,
     config: &StreamConfig,
-    path: &Path,
+    (w, h): (u32, u32),
     session_stop: &AtomicBool,
     tee: &mut Option<Tee>,
     wake: &dyn Fn(),
-    backoff: &mut Duration,
+    run: impl FnOnce(&mut dyn FrameSink) -> squigl_core::Result<()>,
 ) -> Result<()> {
-    let mut replay = Replay::open(path, config.options.decoder)?.looping(true);
-    let (w, h) = (replay.meta.width, replay.meta.height);
-    log::info!("replaying {} ({w}x{h})", path.display());
     if let Some(path) = &config.tee_device {
         open_tee(tee, path, w, h)?;
     }
@@ -429,11 +570,33 @@ fn run_replay(
         height: h,
     });
     let mut sink = |frame: &YuvFrame| deliver(shared, tee, session_stop, wake, frame);
-    let result = replay.run(&mut sink, session_stop).context("replaying");
-    if replay.frames_decoded() > 0 {
-        *backoff = Duration::from_secs(1);
-    }
-    result
+    run(&mut sink).with_context(|| config.source.describe())
+}
+
+/// A still image as a frame: turned upright by its EXIF orientation (a phone photo
+/// is stored sideways), and trimmed to even dimensions for 4:2:0 chroma.
+fn load_image(path: &Path) -> Result<YuvFrame> {
+    use image::ImageDecoder;
+    let open = || -> image::ImageResult<image::DynamicImage> {
+        let mut decoder = image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .into_decoder()?;
+        let orientation = decoder.orientation()?;
+        let mut img = image::DynamicImage::from_decoder(decoder)?;
+        img.apply_orientation(orientation);
+        Ok(img)
+    };
+    let img = open()
+        .with_context(|| format!("opening {}", path.display()))?
+        .to_rgba8();
+    let (w, h) = (img.width() & !1, img.height() & !1);
+    anyhow::ensure!(w > 0 && h > 0, "{} is too small to show", path.display());
+    let img = if (w, h) == img.dimensions() {
+        img
+    } else {
+        image::imageops::crop_imm(&img, 0, 0, w, h).to_image()
+    };
+    Ok(rgba_to_i420(img.as_raw(), w as usize, h as usize))
 }
 
 /// Publishes a decoded frame to the window (and the tee), and turns a stop or
@@ -516,7 +679,7 @@ mod tests {
             options: ConnectOptions::default(),
             resolution: Resolution::PhoneDefault,
             tee_device: None,
-            replay: None,
+            source: SourceSpec::Phone,
         })
     }
 
@@ -557,7 +720,7 @@ mod tests {
                 options: ConnectOptions::default(),
                 resolution: Resolution::PhoneDefault,
                 tee_device: None,
-                replay: Some(path.clone()),
+                source: SourceSpec::Replay(path.clone()),
             },
             || {},
         );
@@ -606,5 +769,110 @@ mod tests {
         assert!(s.step_zoom(2));
         assert!(!s.set_zoom(s.zoom()));
         assert!(s.set_zoom(1.0));
+    }
+
+    /// Starts a worker on `source` with no phone settings to speak of.
+    fn worker(source: SourceSpec) -> Worker {
+        Worker::start(
+            StreamConfig {
+                source,
+                options: ConnectOptions::default(),
+                resolution: Resolution::PhoneDefault,
+                tee_device: None,
+            },
+            || {},
+        )
+    }
+
+    /// Waits up to 10 s for `done`.
+    fn wait_for(done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn only_the_phone_has_camera_controls() {
+        let all = Capabilities {
+            zoom: true,
+            torch: true,
+            facing: true,
+        };
+        assert_eq!(SourceSpec::Phone.capabilities(), all);
+        for other in [
+            SourceSpec::Replay("a.sqrec".into()),
+            SourceSpec::Image("a.png".into()),
+            SourceSpec::TestPattern,
+        ] {
+            assert_eq!(
+                other.capabilities(),
+                Capabilities {
+                    zoom: false,
+                    torch: false,
+                    facing: false
+                }
+            );
+        }
+        assert_eq!(
+            SourceSpec::Image("/scans/p1.png".into()).describe(),
+            "p1.png"
+        );
+        assert_eq!(
+            SourceSpec::for_file("desk.SQREC".into()),
+            SourceSpec::Replay("desk.SQREC".into())
+        );
+        assert_eq!(
+            SourceSpec::for_file("scan.jpg".into()),
+            SourceSpec::Image("scan.jpg".into())
+        );
+    }
+
+    /// An image is shown upright and trimmed to even dimensions, and switching from
+    /// it to another source happens straight away (no phone camera to release).
+    #[test]
+    fn a_worker_shows_an_image_then_switches_source() {
+        let path = std::env::temp_dir().join(format!("squigl-image-{}.png", std::process::id()));
+        // 5x3, odd both ways: white, with a red top-left pixel.
+        let mut img = image::RgbaImage::from_pixel(5, 3, image::Rgba([255, 255, 255, 255]));
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        img.save(&path).unwrap();
+
+        let mut worker = worker(SourceSpec::Image(path.clone()));
+        wait_for(|| worker.shared.frames() > 0);
+        let frame = worker.shared.latest().expect("the image as a frame");
+        assert_eq!((frame.width, frame.height), (4, 2));
+        // White luma, and the red corner's chroma leans to V.
+        assert!(frame.y[3] >= 230, "{:?}", frame.y);
+        assert!(frame.v[0] > 150, "{:?}", frame.v);
+        assert!(worker.shared.camera().is_none());
+        assert!(!worker.shared.capabilities().zoom);
+        assert!(!worker.shared.set_zoom(2.0), "an image has no zoom");
+
+        let t = Instant::now();
+        worker.shared.use_source(SourceSpec::TestPattern);
+        wait_for(|| worker.shared.latest().is_some_and(|f| f.width == 640));
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        assert!(matches!(
+            worker.shared.status(),
+            Status::Streaming {
+                width: 640,
+                height: 480
+            }
+        ));
+        worker.stop();
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn a_missing_image_is_reported_and_retried() {
+        let mut worker = worker(SourceSpec::Image("/nonexistent/scan.png".into()));
+        wait_for(|| matches!(worker.shared.status(), Status::Waiting { .. }));
+        let status = worker.shared.status();
+        worker.stop();
+        let Status::Waiting { reason, .. } = status else {
+            panic!("{status:?}");
+        };
+        assert!(reason.contains("scan.png"), "{reason}");
     }
 }

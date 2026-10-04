@@ -132,8 +132,10 @@ Linux-specific code; 7 in `crates/squigl-v4l2/src/`):
 paced by the recorded pts, optionally looping). The format is squigl's own (`SQGLREC1`
 magic, size, then pts/flags/length/Annex-B per packet), not scrcpy's wire format, so
 recordings outlive a scrcpy bump. The engine's stream worker plays one in place of the
-phone when `StreamConfig::replay` is set (`squigl --replay FILE`). Its tests encode
-synthetic recordings with openh264, so no binary fixture is checked in.
+phone when `StreamConfig::source` is `SourceSpec::Replay` (`squigl --replay FILE`). Its
+tests encode synthetic recordings with openh264, so no binary fixture is checked in.
+**`test_pattern.rs`** is the third no-phone source (colour bars, `TestPattern::run`), and
+`convert::rgba_to_i420` turns a still image into a frame.
 
 **`webrtc_source.rs`** is a second, independent camera source alongside `session.rs`,
 for phones that stream over the network instead of ADB (there's no squigl-side app to
@@ -161,7 +163,14 @@ endpoint at `POST /whip` (one session at a time; a second POST while one is acti
 `crates/squigl-engine` is the window's UI-independent half -- no egui, ONNX Runtime or
 Typst (`cargo tree -p squigl-engine` must show none: the built-in models and the
 typesetter implement its traits from outside, so a second front end can sit on it):
-`stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`;
+`stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`
+from the `SourceSpec` in `StreamConfig::source` -- `Phone` (the ADB session, per the
+config's `options`/`resolution`, which are kept while another source is in use),
+`Replay`, `Image` (EXIF-oriented, trimmed to even size, published once) or
+`TestPattern`; `SourceSpec::capabilities()` says which camera controls exist (only
+the phone has zoom, torch and facing; `set_zoom` is a no-op without), and
+`Shared::use_source` switches through a restart (the 1.5 s camera-release grace only
+between two phone sessions);
 `geometry.rs`: `Crop` and `Selection` in *view* (rotated) coordinates, mapped back to
 the source frame by `Crop::to_source`, and `zoom_to_view`; `render.rs`:
 `render_region`, and `render_selection`, which paints erasures before rectifying and
