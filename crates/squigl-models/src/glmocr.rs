@@ -681,11 +681,28 @@ mod tests {
     /// cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture
     /// ```
     ///
+    /// `SQUIGL_TEST_DEVICES=cpu` limits it to the CPU (a machine with no GPU).
+    ///
     /// Each `NAME.png` is read as the window reads a crop (`formula-*` with the
     /// formula prompt, `page-*` with the page prompt; default budgets) on WebGPU and
     /// on the CPU, and compared with `NAME.webgpu.txt` / `NAME.cpu.txt`.
     /// `SQUIGL_BLESS=1` records this run's readings instead. The model is found or
     /// downloaded as the window does.
+    /// The devices the model tests run on: `SQUIGL_TEST_DEVICES` (`cpu`, `webgpu`,
+    /// comma-separated), else both.
+    fn test_devices() -> Vec<Device> {
+        let Ok(list) = std::env::var("SQUIGL_TEST_DEVICES") else {
+            return vec![Device::WebGpu, Device::Cpu];
+        };
+        list.split(',')
+            .map(|d| match d.trim().to_ascii_lowercase().as_str() {
+                "cpu" => Device::Cpu,
+                "webgpu" => Device::WebGpu,
+                other => panic!("SQUIGL_TEST_DEVICES: unknown device {other:?}"),
+            })
+            .collect()
+    }
+
     #[test]
     #[ignore = "needs the GLM-OCR model (~650 MB) and runs it"]
     fn glmocr_handwriting() {
@@ -707,7 +724,7 @@ mod tests {
             .unwrap();
 
         let mut failures = Vec::new();
-        for device in [Device::WebGpu, Device::Cpu] {
+        for device in test_devices() {
             let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
             for png in &samples {
                 let stem = png.file_stem().unwrap().to_string_lossy();
@@ -777,7 +794,7 @@ mod tests {
         let model_dir = crate::models::GLM_OCR
             .ensure(&|p| println!("{}", p.describe()), &Default::default())
             .unwrap();
-        for device in [Device::WebGpu, Device::Cpu] {
+        for device in test_devices() {
             let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
             let text = {
                 let _turn = crate::runtime_turn();

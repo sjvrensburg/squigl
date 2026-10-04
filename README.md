@@ -221,7 +221,8 @@ The built-in models' files (~658 MB for GLM-OCR, 130 MB for the layout model) ar
 inside the binary. Each is looked for in `$SQUIGL_MODEL_DIR/<name>/`, then `models/<name>/` next to the AppImage or the
 executable (how a release can ship them), then
 `~/.cache/squigl/models/<name>/` (`glm-ocr-onnx-q4f16`, `pp-doclayoutv3-onnx`); if
-none has it, it is downloaded there on first run from a pinned Hugging Face revision,
+none has it, it is downloaded there (or into `$SQUIGL_MODEL_DIR`, when set) on first
+run from a pinned Hugging Face revision,
 each file verified against a sha256 compiled into the app, with progress shown in the
 window. Reads and detection are refused until the model is ready.
 

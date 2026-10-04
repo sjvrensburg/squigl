@@ -97,9 +97,12 @@ for `include_bytes!`. Consequences:
 The pipeline, in data-flow order (1-6 in `crates/squigl-core/src/`, which has no
 Linux-specific code; 7 in `crates/squigl-v4l2/src/`):
 
-1. **`adb.rs`** — shells out to the system `adb` binary (not a Rust ADB lib; see the
-   module doc for why). Pushes the jar, sets up `adb forward tcp:0 localabstract:scrcpy_<scid>`,
-   and launches the server via `app_process`. Also `connect_tcp` / `enable_tcpip` for
+1. **`adb.rs`** — shells out to the `adb` binary (not a Rust ADB lib; see the
+   module doc for why), found by `locate()`: `$SQUIGL_ADB`, next to the executable,
+   `$ANDROID_HOME`/`$ANDROID_SDK_ROOT` `platform-tools`, then `PATH`; spawned with
+   `CREATE_NO_WINDOW` on Windows (no console flashing up over the window). Pushes
+   the jar, sets up `adb forward tcp:0 localabstract:scrcpy_<scid>`, and launches
+   the server via `app_process`. Also `connect_tcp` / `enable_tcpip` for
    Wi-Fi (`adb connect` exits 0 even on failure -- the verdict is in its text).
 2. **`session.rs`** — the orchestrator and public API (`CameraSession`, `ConnectOptions`,
    `Facing`). `connect()` starts the server with a fixed set of scrcpy options and
@@ -149,7 +152,9 @@ back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` uncha
 no format conversion between the two sources. LAN-only by design: a host ICE candidate
 on the bound interface, no STUN/TURN, no auth.
 
-`crates/squigl-cli` is a clap CLI over this library; it owns the policy bits: Ctrl-C/SIGTERM
+`crates/squigl-cli` is a clap CLI over this library (`linux.rs`; on other OSes
+`main.rs` only says it needs Linux, so the workspace builds everywhere); it owns the
+policy bits: Ctrl-C/SIGTERM
 handling, the reconnect-with-backoff loop (keeping the V4L2 sink open across sessions),
 `--list-sizes` and `--resolution max`. `--webrtc` switches to the WebRTC source instead of
 ADB: `webrtc_server.rs` runs a `tiny_http` HTTPS server (a fresh `rcgen` self-signed cert
@@ -264,7 +269,9 @@ cross-class NMS PaddleX also runs, since the model reports the same lines twice 
 times), `models.rs` finds or downloads
 each model's files (pinned HF revision + sha256 manifest; `$SQUIGL_MODEL_DIR/<name>/`,
 `models/<name>/` beside `$APPIMAGE`, exe-adjacent `models/<name>/`, then
-`~/.cache/squigl/models/<name>/`), and
+`~/.cache/squigl/models/<name>/`; a download goes to `$SQUIGL_MODEL_DIR` when set, else
+the cache; `SQUIGL_TEST_DEVICES=cpu` limits the `glmocr` tests to the CPU, as CI's
+manual `models` job runs them on all three OSes), and
 `lifecycle.rs` is both models' life (`Lifecycle<T>`: idle, preparing on a thread --
 `ModelSpec::ensure` then the loader --, ready or failed, with the phase in a
 `PhaseCell` and a cancel flag the download checks per file and per chunk; eager or

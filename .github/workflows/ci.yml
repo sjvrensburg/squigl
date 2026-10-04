@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Runs the model job below (the others too) on demand: Actions > CI > Run workflow.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -89,8 +91,8 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p squigl-cli -p squigl-egui ${{ matrix.args }}
 
-  # Windows and macOS: no V4L2 (squigl-v4l2 is empty there and squigl-cli is
-  # Linux-only), no ffmpeg (Linux-only by design). Roadmap spike S2 / Phase 3.
+  # Windows and macOS: the whole workspace builds (squigl-v4l2 is empty there and
+  # squigl-cli only says it needs Linux); no ffmpeg (Linux-only by design).
   cross-os:
     name: build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -98,8 +100,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-14]
-    env:
-      PACKAGES: -p squigl-core -p squigl-engine -p squigl-models -p squigl-math -p squigl-egui
     defaults:
       run:
         shell: bash
@@ -135,10 +135,10 @@ jobs:
             "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
 
       - name: Clippy
-        run: cargo clippy $PACKAGES --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test $PACKAGES
+        run: cargo test --workspace
 
       - name: Build the window
         run: cargo build --release -p squigl-egui
@@ -146,4 +146,64 @@ jobs:
       # Where ONNX Runtime's WebGPU provider library lands, for packaging (S2).
       - name: List the release directory
         run: ls -la target/release/
+
+  # GLM-OCR against the recorded readings, on the CPU (the runners have no GPU), on
+  # every OS: on demand only, since it downloads the models (~790 MB, cached).
+  models:
+    if: github.event_name == 'workflow_dispatch'
+    name: models (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    env:
+      SQUIGL_TEST_DEVICES: cpu
+      SQUIGL_MODEL_DIR: ${{ github.workspace }}/.cache/models
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm libclang-dev pkg-config libxkbcommon-dev libwayland-dev
+
+      - name: Install nasm
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: models-${{ matrix.os }}
+
+      - name: Cache scrcpy-server jar
+        id: jar
+        uses: actions/cache@v4
+        with:
+          path: .cache/scrcpy-server.jar
+          key: scrcpy-server-${{ hashFiles('crates/squigl-core/build.rs') }}
+
+      - name: Fetch scrcpy-server jar
+        if: steps.jar.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache
+          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' crates/squigl-core/build.rs)
+          curl -fsSL -o .cache/scrcpy-server.jar \
+            "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
+
+      # Keyed on the manifests: a pinned revision changes only with them.
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: .cache/models
+          key: models-${{ hashFiles('crates/squigl-models/src/models.rs') }}
+
+      - name: GLM-OCR on the CPU
+        run: cargo test -p squigl-models --release glmocr -- --ignored --nocapture --test-threads=1
 

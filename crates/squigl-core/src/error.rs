@@ -2,7 +2,10 @@ use std::io;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("`adb` executable not found on PATH; install android-tools/platform-tools")]
+    #[error(
+        "adb not found: install Android platform-tools (android-tools on Linux), or set \
+         SQUIGL_ADB to the adb executable"
+    )]
     AdbNotFound,
 
     #[error("adb command failed: {0}")]
