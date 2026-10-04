@@ -22,9 +22,9 @@ use v4l::video::Output;
 /// can't pick the lifetime on its own):
 ///
 /// ```no_run
-/// # use phone_cam4linux::{decode::YuvFrame, CameraSession, ConnectOptions};
+/// # use squigl_core::{decode::YuvFrame, CameraSession, ConnectOptions};
 /// # use std::sync::atomic::AtomicBool;
-/// # fn main() -> phone_cam4linux::Result<()> {
+/// # fn main() -> squigl_core::Result<()> {
 /// let mut session = CameraSession::connect(ConnectOptions::default())?;
 /// let mut show = |frame: &YuvFrame| {
 ///     println!("{}x{}", frame.width, frame.height);

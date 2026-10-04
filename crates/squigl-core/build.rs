@@ -17,6 +17,8 @@ const SCRCPY_VERSION: &str = "4.1";
 /// https://github.com/Genymobile/scrcpy/releases/download/v4.1/scrcpy-server-v4.1
 /// (matches the release's SHA256SUMS.txt).
 const SERVER_SHA256: &str = "deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae";
+/// Environment variables naming a pre-fetched jar, in order of precedence.
+const JAR_VARS: [&str; 2] = ["SQUIGL_SERVER_JAR", "PHONE_CAM4LINUX_SERVER_JAR"];
 
 fn server_url() -> String {
     format!(
@@ -33,10 +35,17 @@ fn main() {
     let dest = Path::new(&out_dir).join("scrcpy-server.jar");
 
     // Allow a pre-fetched jar (e.g. vendored, or fetched by CI ahead of time) to skip
-    // the network round-trip: PHONE_CAM4LINUX_SERVER_JAR=/path/to/scrcpy-server.jar
-    if let Ok(local) = std::env::var("PHONE_CAM4LINUX_SERVER_JAR") {
-        let bytes = std::fs::read(&local)
-            .unwrap_or_else(|e| panic!("failed to read PHONE_CAM4LINUX_SERVER_JAR={local}: {e}"));
+    // the network round-trip: SQUIGL_SERVER_JAR=/path/to/scrcpy-server.jar. The
+    // crate's old name for it, PHONE_CAM4LINUX_SERVER_JAR, still works.
+    for var in JAR_VARS {
+        println!("cargo:rerun-if-env-changed={var}");
+    }
+    if let Some((var, local)) = JAR_VARS
+        .iter()
+        .find_map(|var| std::env::var(var).ok().map(|v| (var, v)))
+    {
+        let bytes =
+            std::fs::read(&local).unwrap_or_else(|e| panic!("failed to read {var}={local}: {e}"));
         verify_and_write(&bytes, &dest);
         return;
     }
@@ -55,7 +64,7 @@ fn main() {
     let bytes = fetch(&url).unwrap_or_else(|e| {
         panic!(
             "failed to download scrcpy-server.jar from {url}: {e}\n\
-             Set PHONE_CAM4LINUX_SERVER_JAR=/path/to/scrcpy-server.jar to use a local copy instead."
+             Set SQUIGL_SERVER_JAR=/path/to/scrcpy-server.jar to use a local copy instead."
         )
     });
 

@@ -1,6 +1,6 @@
 //! squigl: use an Android phone as a document camera on the desktop -- live view,
 //! drag a region to zoom, capture, save. The phone side and the decode pipeline are
-//! the `phone-cam4linux` library; this crate is the window and the reconnect policy.
+//! the `squigl-core` library; this crate is the window and the reconnect policy.
 
 mod app;
 mod enhance;
@@ -18,10 +18,10 @@ mod transcribe;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use phone_cam4linux::cameras::is_usable_size;
-use phone_cam4linux::convert::Rotation;
-use phone_cam4linux::decode::Backend;
-use phone_cam4linux::{ConnectOptions, Facing};
+use squigl_core::cameras::is_usable_size;
+use squigl_core::convert::Rotation;
+use squigl_core::decode::Backend;
+use squigl_core::{ConnectOptions, Facing};
 use std::path::PathBuf;
 use stream::{Resolution, StreamConfig, Worker};
 

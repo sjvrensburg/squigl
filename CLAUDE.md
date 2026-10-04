@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Squigl**: a Rust workspace built around using an Android phone as a Linux document
 camera with live handwriting OCR (`crates/squigl`, the GUI -- this is "the product").
 It also exposes the phone as a plain V4L2 (`/dev/videoN`) webcam (`crates/squigl-cli`,
-a headless CLI) and provides the shared pipeline both are built on (`phone-cam4linux`,
-unrenamed -- it's the plumbing: scrcpy protocol, H.264 decode, pixel conversion, V4L2
-sink). The on-device capture/encode is **not** reimplemented: the real upstream
+a headless CLI) and provides the shared pipeline both are built on (`crates/squigl-core`,
+formerly `phone-cam4linux` -- it's the plumbing: scrcpy protocol, H.264 decode, pixel
+conversion, V4L2 sink). `docs/roadmap.md` is the phased plan the workspace is being
+restructured by. The on-device capture/encode is **not** reimplemented: the real upstream
 `scrcpy-server.jar` is fetched at build time, embedded, and pushed to the phone over
 ADB. Everything from the socket down is implemented here.
 
@@ -20,7 +21,7 @@ cargo build --release                 # fetches scrcpy-server.jar on first build
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
 cargo build --release -p squigl --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
 cargo test --workspace                 # unit tests (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
-cargo test -p phone-cam4linux protocol::tests::parses_codec_meta   # single test
+cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
 cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --workspace --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
@@ -71,18 +72,19 @@ component is added (a model, a runtime, ported code).
 
 ## Build-time network dependency
 
-`phone-cam4linux/build.rs` downloads `scrcpy-server-v<SCRCPY_VERSION>` from GitHub
+`crates/squigl-core/build.rs` downloads `scrcpy-server-v<SCRCPY_VERSION>` from GitHub
 releases and verifies it against a pinned `SERVER_SHA256`, writing it to `OUT_DIR`
 for `include_bytes!`. Consequences:
 
 - A clean build needs network access. For offline/CI builds, pre-fetch the jar and
-  point `PHONE_CAM4LINUX_SERVER_JAR=/path/to/scrcpy-server.jar` at it.
+  point `SQUIGL_SERVER_JAR=/path/to/scrcpy-server.jar` at it (the old name,
+  `PHONE_CAM4LINUX_SERVER_JAR`, still works).
 - Bumping the scrcpy version means changing **both** `SCRCPY_VERSION` and
   `SERVER_SHA256` together, and re-checking `protocol.rs` (see below).
 
 ## Architecture
 
-The pipeline, in data-flow order (all in `phone-cam4linux/src/`):
+The pipeline, in data-flow order (all in `crates/squigl-core/src/`):
 
 1. **`adb.rs`** — shells out to the system `adb` binary (not a Rust ADB lib; see the
    module doc for why). Pushes the jar, sets up `adb forward tcp:0 localabstract:scrcpy_<scid>`,
@@ -264,7 +266,7 @@ messages (TYPE_CAMERA_ZOOM_IN/OUT = 19/20, step ×1.0625; TYPE_CAMERA_SET_TORCH 
 -- `ConnectOptions::control` opens that second connection (made right after the video
 socket's dummy byte; only the first connection gets one) and `CameraSession::control()`
 hands out a cloneable `CameraControl` usable from any thread while `run()` blocks
-(`phone-cam4linux/examples/control.rs` shows it). The phone never reports the zoom it
+(`crates/squigl-core/examples/control.rs` shows it). The phone never reports the zoom it
 ends up at, so the GUI tracks the step count itself. No exposure, focus or
 white-balance control exists at any version.
 

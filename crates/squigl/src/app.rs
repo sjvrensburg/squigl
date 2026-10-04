@@ -28,9 +28,9 @@ use egui::{
     Color32, ColorImage, ComboBox, FontId, Key, Pos2, Rect, Sense, Shape, Slider, Stroke,
     StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
-use phone_cam4linux::convert::{i420_region_to_rgba, region_size, rotate_rgba, Rotation};
-use phone_cam4linux::decode::YuvFrame;
-use phone_cam4linux::Facing;
+use squigl_core::convert::{i420_region_to_rgba, region_size, rotate_rgba, Rotation};
+use squigl_core::decode::YuvFrame;
+use squigl_core::Facing;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};

@@ -122,7 +122,7 @@ impl AdbDevice {
 
     /// Pushes the embedded scrcpy-server jar to the device's tmp dir.
     pub fn push_server_jar(&self, jar: &[u8]) -> Result<()> {
-        let tmp = std::env::temp_dir().join("phone-cam4linux-scrcpy-server.jar");
+        let tmp = std::env::temp_dir().join("squigl-scrcpy-server.jar");
         std::fs::write(&tmp, jar)?;
         let tmp_str = tmp.to_string_lossy().to_string();
         adb(&self.args(&[]), &["push", &tmp_str, DEVICE_SERVER_PATH])?;

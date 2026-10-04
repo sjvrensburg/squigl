@@ -2,19 +2,19 @@
 //! streaming to a V4L2 device:
 //!
 //! ```text
-//! cargo run --release -p phone-cam4linux --example control -- /dev/video11
+//! cargo run --release -p squigl-core --example control -- /dev/video11
 //! ```
 //!
 //! Streams for ~9 s: after 2 s it zooms in eight steps (x1.0625 each, about 1.6x),
 //! at 5 s turns the torch on, at 7 s turns it off and zooms back out.
 
-use phone_cam4linux::sink::{FrameSink, V4l2Sink};
-use phone_cam4linux::{CameraSession, ConnectOptions};
+use squigl_core::sink::{FrameSink, V4l2Sink};
+use squigl_core::{CameraSession, ConnectOptions};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn main() -> phone_cam4linux::Result<()> {
+fn main() -> squigl_core::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let device = std::env::args()
         .nth(1)
@@ -25,9 +25,9 @@ fn main() -> phone_cam4linux::Result<()> {
         ..Default::default()
     };
     // The phone's default size may exceed the decoder (4000x3000 does for openh264).
-    let device_handle = phone_cam4linux::adb::AdbDevice::autodetect()?;
+    let device_handle = squigl_core::adb::AdbDevice::autodetect()?;
     let resolution =
-        phone_cam4linux::cameras::largest_usable_size(&device_handle, opts.facing, opts.decoder)?;
+        squigl_core::cameras::largest_usable_size(&device_handle, opts.facing, opts.decoder)?;
     let mut session = CameraSession::connect(ConnectOptions {
         resolution: Some(resolution),
         ..opts
@@ -39,7 +39,7 @@ fn main() -> phone_cam4linux::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let script = {
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || -> phone_cam4linux::Result<()> {
+        std::thread::spawn(move || -> squigl_core::Result<()> {
             std::thread::sleep(Duration::from_secs(2));
             for _ in 0..8 {
                 control.zoom_in()?;
@@ -61,7 +61,7 @@ fn main() -> phone_cam4linux::Result<()> {
     };
 
     let mut frames = 0u64;
-    let mut tee = |frame: &phone_cam4linux::decode::YuvFrame| {
+    let mut tee = |frame: &squigl_core::decode::YuvFrame| {
         frames += 1;
         sink.frame(frame)
     };
