@@ -85,13 +85,46 @@ pub(crate) fn note_gpu_loss(e: &anyhow::Error) -> bool {
     lost
 }
 
+/// Whether the graphics system offers a real GPU: an adapter on Direct3D 12, Metal
+/// or Vulkan that is not a software rasteriser. Without one, WebGPU would run on
+/// Microsoft's WARP or Mesa's llvmpipe -- a VM, a PC without its GPU driver -- far
+/// slower than ONNX Runtime's own CPU kernels. Asked once.
+fn gpu_present() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::PRIMARY));
+        let infos: Vec<_> = adapters.iter().map(|a| a.get_info()).collect();
+        let present = infos.iter().any(|i| i.device_type != wgpu::DeviceType::Cpu);
+        let names: Vec<_> = infos
+            .iter()
+            .map(|i| format!("{} ({:?}, {:?})", i.name, i.device_type, i.backend))
+            .collect();
+        if present {
+            log::debug!("GPU adapters: {}", names.join("; "));
+        } else {
+            log::info!(
+                "no hardware GPU (adapters: {}); the models run on the CPU",
+                if names.is_empty() {
+                    "none".to_string()
+                } else {
+                    names.join("; ")
+                }
+            );
+        }
+        present
+    })
+}
+
 /// The devices to try for a preference, in order -- the CPU alone once the GPU
-/// has been lost.
+/// has been lost, or when "auto" finds no real GPU to try.
 fn attempts(device: DevicePref) -> &'static [Device] {
     if GPU_LOST.load(Ordering::SeqCst) {
         return &[Device::Cpu];
     }
     match device {
+        DevicePref::Auto if !gpu_present() => &[Device::Cpu],
         DevicePref::Auto => &[Device::WebGpu, Device::Cpu],
         DevicePref::Webgpu => &[Device::WebGpu],
         DevicePref::Cpu => &[Device::Cpu],
