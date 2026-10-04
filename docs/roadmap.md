@@ -168,6 +168,9 @@ crates/
   - `squigl-desktop` streams live from the phone over adb, with no extra USB driver needed for this Samsung on LineageOS.
   - So does the egui window (25 fps at 2992x2992), once it drew with wgpu: OpenGL there is 1.1. It also downloaded the models and detected blocks.
   - "auto" loaded the models on WebGPU over WARP, the software D3D12 adapter, and a read took minutes. Under llvmpipe here the same crop took 23 s on WebGPU against 2.2 s on the CPU. "auto" now skips WebGPU when the only adapters are software ones.
+    With that fixed, a formula block read in 14.7 s on the VM's CPU.
+  - Clicking a block did nothing, because the VM's viewer delivers press and release in one frame and the drag-only preview never started a drag. Such a click is now handled as one (#26).
+- **Phase 3's exit criteria are met for Windows (in the VM).** On macOS they are *(tester)*.
 - Still open:
   - `glmocr_handwriting` on CPU on those runners, which needs the model download (a manual job);
   - whether the WebGPU provider actually runs there, which needs a real GPU *(tester)*;
