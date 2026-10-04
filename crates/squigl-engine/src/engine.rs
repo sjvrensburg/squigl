@@ -115,6 +115,12 @@ pub enum Command {
     SetConfig {
         config: Box<Config>,
     },
+    /// Puts settings in force like [`Command::SetConfig`] without saving them: for a
+    /// control being dragged. The next `SetConfig` saves whatever is in force, even
+    /// if it equals what was previewed.
+    PreviewConfig {
+        config: Box<Config>,
+    },
     /// Gets a built-in model ready (downloading it if need be), by its name in
     /// [`ModelsSlice`].
     PrepareModel {
@@ -348,6 +354,8 @@ pub struct Engine {
     seen_status: Option<u64>,
     seen_frame: u64,
     notices: Vec<Notice>,
+    /// Settings were previewed and not saved since.
+    unsaved: bool,
     /// Each slice's version when [`pump`](Self::pump) last sent it (0: never).
     sent: Sent,
 }
@@ -407,6 +415,7 @@ impl Engine {
             seen_status: None,
             seen_frame: 0,
             notices: Vec::new(),
+            unsaved: false,
             sent: Sent::default(),
         };
         engine.build(&config, true);
@@ -557,16 +566,19 @@ impl Engine {
                 Reply::Done
             }
             Command::SetConfig { config } => {
-                if *config == *self.config() {
-                    Reply::Unchanged
-                } else {
-                    self.build(&config, false);
-                    self.state.config.update(*config);
+                let reply = self.apply_config(*config);
+                if reply == Reply::Done || self.unsaved {
                     if let Some(path) = &self.options.config_file {
                         self.config().save_to(path)?;
                     }
-                    Reply::Done
+                    self.unsaved = false;
                 }
+                reply
+            }
+            Command::PreviewConfig { config } => {
+                let reply = self.apply_config(*config);
+                self.unsaved |= reply == Reply::Done;
+                reply
             }
             Command::PrepareModel { name } => {
                 self.model(&name)?.prepare();
@@ -579,6 +591,16 @@ impl Engine {
         };
         self.refresh(Instant::now());
         Ok(reply)
+    }
+
+    /// Puts `config` in force (see [`Command::SetConfig`]); `Unchanged` if it is.
+    fn apply_config(&mut self, config: Config) -> Reply {
+        if config == *self.config() {
+            return Reply::Unchanged;
+        }
+        self.build(&config, false);
+        self.state.config.update(config);
+        Reply::Done
     }
 
     /// What a zoom command did: a move goes live.
@@ -1115,6 +1137,36 @@ mod tests {
             Reply::Unchanged
         );
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn a_preview_is_in_force_but_saved_only_by_set_config() {
+        let file =
+            std::env::temp_dir().join(format!("squigl-engine-preview-{}.toml", std::process::id()));
+        let (mut engine, _) = start(
+            SourceSpec::TestPattern,
+            Config::default(),
+            Some(file.clone()),
+        );
+        let mut config = engine.config().clone();
+        config.display.contrast = 1.8;
+        let preview = Command::PreviewConfig {
+            config: Box::new(config.clone()),
+        };
+        assert_eq!(engine.handle(preview).unwrap(), Reply::Done);
+        assert_eq!(engine.config().display.contrast, 1.8);
+        assert!(!file.exists(), "a preview is not saved");
+        // The same settings again: nothing changes, but what was previewed is saved.
+        let set = Command::SetConfig {
+            config: Box::new(config.clone()),
+        };
+        assert_eq!(engine.handle(set.clone()).unwrap(), Reply::Unchanged);
+        let saved: Config = toml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(saved.display.contrast, 1.8);
+        std::fs::remove_file(&file).unwrap();
+        // Nothing unsaved now: an unchanged SetConfig writes nothing.
+        engine.handle(set).unwrap();
+        assert!(!file.exists());
     }
 
     #[test]
