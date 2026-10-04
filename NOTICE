@@ -11,9 +11,9 @@ are the ones that are not ordinary crate dependencies or that deserve a note.
 scrcpy-server (https://github.com/Genymobile/scrcpy)
   Copyright Genymobile and contributors. Apache License 2.0.
   The upstream-built scrcpy-server jar is downloaded at build time
-  (phone-cam4linux/build.rs, SHA-256 pinned), embedded in the binaries, and pushed
+  (crates/squigl-core/build.rs, SHA-256 pinned), embedded in the binaries, and pushed
   to the phone at run time. It is not modified. The video-socket and
-  control-socket wire formats implemented in phone-cam4linux/src were derived by
+  control-socket wire formats implemented in crates/squigl-core/src were derived by
   reading its source.
 
 OpenH264 (https://github.com/cisco/openh264)

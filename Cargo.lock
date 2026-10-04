@@ -4621,23 +4621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phone-cam4linux"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "env_logger",
- "ffmpeg-next",
- "hex",
- "log",
- "openh264",
- "sha2",
- "str0m",
- "thiserror 2.0.20",
- "ureq 2.12.1",
- "v4l",
-]
-
-[[package]]
 name = "pic-scale"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6093,10 +6076,10 @@ dependencies = [
  "mitex",
  "ndarray",
  "ort",
- "phone-cam4linux",
  "serde",
  "serde_json",
  "sha2",
+ "squigl-core",
  "tokenizers",
  "toml 1.1.6+spec-1.1.0",
  "typst",
@@ -6115,9 +6098,26 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "log",
- "phone-cam4linux",
  "rcgen",
+ "squigl-core",
  "tiny_http",
+]
+
+[[package]]
+name = "squigl-core"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "ffmpeg-next",
+ "hex",
+ "log",
+ "openh264",
+ "sha2",
+ "str0m",
+ "thiserror 2.0.20",
+ "ureq 2.12.1",
+ "v4l",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   # build.rs downloads and SHA256-verifies scrcpy-server on a clean build; cache it
   # across runs so CI doesn't hit GitHub releases every time.
-  PHONE_CAM4LINUX_SERVER_JAR: ${{ github.workspace }}/.cache/scrcpy-server.jar
+  SQUIGL_SERVER_JAR: ${{ github.workspace }}/.cache/scrcpy-server.jar
 
 jobs:
   test:
@@ -48,13 +48,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/scrcpy-server.jar
-          key: scrcpy-server-${{ hashFiles('phone-cam4linux/build.rs') }}
+          key: scrcpy-server-${{ hashFiles('crates/squigl-core/build.rs') }}
 
       - name: Fetch scrcpy-server jar
         if: steps.jar.outputs.cache-hit != 'true'
         run: |
           mkdir -p .cache
-          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' phone-cam4linux/build.rs)
+          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' crates/squigl-core/build.rs)
           curl -fsSL -o .cache/scrcpy-server.jar \
             "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
 

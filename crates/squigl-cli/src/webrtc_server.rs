@@ -1,6 +1,6 @@
 //! The "policy" half of the WebRTC camera source: an HTTPS server serving the phone
 //! browser's capture page and a minimal WHIP-shaped ingest endpoint
-//! ([`phone_cam4linux::webrtc_source`] handles the WebRTC/ICE/DTLS side once an offer
+//! ([`squigl_core::webrtc_source`] handles the WebRTC/ICE/DTLS side once an offer
 //! is accepted). LAN-only: no auth, no STUN/TURN, one session at a time.
 //!
 //! Self-signed and generated fresh each run (browsers require a secure context for
@@ -9,8 +9,8 @@
 //! and must be accepted to proceed.
 
 use anyhow::{Context, Result};
-use phone_cam4linux::decode::Backend;
-use phone_cam4linux::WebrtcSource;
+use squigl_core::decode::Backend;
+use squigl_core::WebrtcSource;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};

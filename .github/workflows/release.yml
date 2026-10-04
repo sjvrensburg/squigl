@@ -17,7 +17,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  PHONE_CAM4LINUX_SERVER_JAR: ${{ github.workspace }}/.cache/scrcpy-server.jar
+  SQUIGL_SERVER_JAR: ${{ github.workspace }}/.cache/scrcpy-server.jar
 
 jobs:
   build:
@@ -45,7 +45,7 @@ jobs:
       - name: Fetch scrcpy-server jar
         run: |
           mkdir -p .cache
-          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' phone-cam4linux/build.rs)
+          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' crates/squigl-core/build.rs)
           curl -fsSL -o .cache/scrcpy-server.jar \
             "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
 

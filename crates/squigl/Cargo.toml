@@ -12,7 +12,7 @@ name = "squigl"
 path = "src/main.rs"
 
 [dependencies]
-phone-cam4linux = { path = "../../phone-cam4linux" }
+squigl-core = { path = "../squigl-core" }
 anyhow.workspace = true
 clap.workspace = true
 log.workspace = true
@@ -45,7 +45,7 @@ mitex = { version = "0.2", optional = true }
 
 [features]
 default = ["local-model", "math"]
-ffmpeg = ["phone-cam4linux/ffmpeg"]
+ffmpeg = ["squigl-core/ffmpeg"]
 # The out-of-the-box models: GLM-OCR (onnx-community q4f16 export) for reading and
 # PP-DocLayoutV3 for block detection, run through ONNX Runtime, WebGPU (Vulkan on
 # Linux) with CPU fallback. Downloads pyke's prebuilt ONNX Runtime at build time and

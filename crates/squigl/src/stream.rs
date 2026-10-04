@@ -3,10 +3,10 @@
 //! policy as the `squigl-cli` CLI). Optionally tees every frame to a V4L2 device too.
 
 use anyhow::{Context, Result};
-use phone_cam4linux::cameras::is_usable_size;
-use phone_cam4linux::decode::YuvFrame;
-use phone_cam4linux::sink::{FrameSink, V4l2Sink};
-use phone_cam4linux::{
+use squigl_core::cameras::is_usable_size;
+use squigl_core::decode::YuvFrame;
+use squigl_core::sink::{FrameSink, V4l2Sink};
+use squigl_core::{
     adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, ZOOM_STEP,
 };
 use std::path::PathBuf;
@@ -341,7 +341,7 @@ fn run_session(
     // List the cameras once: it answers both "what is max" and "what zoom is there".
     if shared.cameras.lock().unwrap().is_empty() {
         let device = select_device(&config.options)?;
-        let cameras = phone_cam4linux::list_cameras(&device).context("listing cameras")?;
+        let cameras = squigl_core::list_cameras(&device).context("listing cameras")?;
         *shared.cameras.lock().unwrap() = cameras;
     }
     let resolution = match config.resolution {
@@ -392,7 +392,7 @@ fn run_session(
         width: w,
         height: h,
     });
-    let mut sink = |frame: &YuvFrame| -> phone_cam4linux::Result<()> {
+    let mut sink = |frame: &YuvFrame| -> squigl_core::Result<()> {
         // A copy per frame (12 MB at 4K, well under a millisecond) keeps the decoder
         // free to overwrite its buffers while the UI reads this one.
         *shared.latest.lock().unwrap() = Some(Arc::new(frame.clone()));
