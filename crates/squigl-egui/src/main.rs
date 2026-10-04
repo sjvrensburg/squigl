@@ -73,6 +73,11 @@ struct Args {
     #[arg(long, value_name = "FILE", conflicts_with = "open")]
     replay: Option<PathBuf>,
 
+    /// How to draw: `glow` (OpenGL, the default on Linux) or `wgpu` (the default on
+    /// Windows and macOS). For a machine where the default does not work.
+    #[arg(long, hide = true, value_enum)]
+    renderer: Option<RendererArg>,
+
     /// Development aid: start on synthetic colour bars instead of the phone.
     #[arg(long, hide = true, conflicts_with_all = ["open", "replay"])]
     test_pattern: bool,
@@ -146,6 +151,13 @@ struct Args {
     dev_zoom: Option<f32>,
 }
 
+/// How the window draws: OpenGL (`glow`) or wgpu (Direct3D 12, Metal, Vulkan).
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+enum RendererArg {
+    Glow,
+    Wgpu,
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum FacingArg {
     Front,
@@ -180,6 +192,39 @@ impl From<DecoderArg> for Backend {
 }
 
 fn main() -> Result<()> {
+    let result = run();
+    if let Err(e) = &result {
+        fatal(&format!("{e:#}"));
+    }
+    result
+}
+
+/// Says why the window could not start. On Windows a release build has no console
+/// (`windows_subsystem`), so the message would otherwise go nowhere.
+fn fatal(message: &str) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (text, title) = (
+            wide(&format!("Squigl could not start:\n\n{message}")),
+            wide("Squigl"),
+        );
+        // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call.
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = message; // printed by `main`'s returned error
+}
+
+fn run() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,ort=warn"))
         .init();
     let args = Args::parse();
@@ -343,6 +388,23 @@ fn main() -> Result<()> {
         glow_options: eframe::egui_glow::GlowConfiguration {
             vsync: false,
             ..Default::default()
+        },
+        wgpu_options: eframe::WgpuConfiguration {
+            surface: eframe::SurfaceConfig {
+                present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
+                ..eframe::SurfaceConfig::LOW_LATENCY
+            },
+            ..Default::default()
+        },
+        // OpenGL where it is at home. On Windows a machine without a proper GPU
+        // driver (a VM, a basic display adapter) offers OpenGL 1.1, which egui_glow
+        // refuses; wgpu's Direct3D 12 falls back to Microsoft's software rasteriser
+        // there. On macOS OpenGL is deprecated; wgpu draws with Metal.
+        renderer: match args.renderer {
+            Some(RendererArg::Glow) => eframe::Renderer::Glow,
+            Some(RendererArg::Wgpu) => eframe::Renderer::Wgpu,
+            None if cfg!(any(windows, target_os = "macos")) => eframe::Renderer::Wgpu,
+            None => eframe::Renderer::Glow,
         },
         ..Default::default()
     };
