@@ -21,12 +21,14 @@ ADB. Everything from the socket down is implemented here.
 cargo build --release                 # fetches scrcpy-server.jar on first build (needs network)
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
 cargo build --release -p squigl-egui --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
-cargo test --workspace                 # unit tests (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
+cargo test                             # unit tests (the default members: all but squigl-desktop) (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
 cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
 cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
-cargo clippy --workspace --all-targets [--features ffmpeg]
+cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib   # CI enforces this too (libraries only: the binaries' docs are --help text)
+(cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
+cargo build --release -p squigl-desktop   # the Tauri app (needs WebKitGTK 4.1 headers on Linux)
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --lib   # CI enforces this too (libraries only: the binaries' docs are --help text)
 ```
 
 `squigl --rotate 270 --screenshot-after 8 --screenshot-path /tmp/gui.png` renders the
@@ -221,6 +223,30 @@ only ever drops its prefix -- "copy all" relies on that), Markdown export by cap
 front end's); `paths.rs`: the config, cache and pictures directories per OS via the
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
 Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
+
+`crates/squigl-desktop` is the Tauri 2 app that will replace the egui window
+(roadmap Phase 4 on; a workspace member but not a default one, since Tauri embeds the
+built web UI at compile time). `host.rs`: one thread owns the `Engine` and serves
+everything through one channel -- `dispatch`ed commands, `subscribe`d event
+channels (every slice on subscribing; the stream slice held to 4 Hz), plane
+requests, the display table, `Stop` on exit; `transport.rs`: the frame WebSocket
+(spike S1's choice) on `127.0.0.1:0`, refusing any handshake without this launch's
+128-bit `?token=` or an `Origin` from the app's own webview; the page sends a
+`FrameRequest` (its `view::Viewport`, which frame, which planes) and gets `u32`
+header length + JSON `FrameHeader` (the `PlaneHeader`, the view-space region, the
+view size and the viewport's `Placement`) + Y, U, V. The web UI (`ui/`, Svelte 5 +
+TypeScript, Vite, vitest; Node 22 in CI) pulls a frame whenever something changed
+(a `Frame` event while live, the capture, the config, the viewport) with at most one
+request in flight, and draws it with WebGL2 (`lib/renderer.ts`: R8 planes, the
+convert.rs BT.601 coefficients, rotation as corner texture coordinates, the
+`display::lut` table as a 256x1 texture). `lib/engine.ts` mirrors the engine's serde
+types by hand -- keep it in step. The `custom-protocol` feature (default) serves the
+embedded UI; without it the window loads Vite's dev server (`npm run dev`).
+Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-path
+FILE` (the canvas as PNG, then quit) and `--dev-stats` (frames drawn per second, to
+the log) drive it from a script; page errors and warnings go to the app's log
+(target `page`). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
+for a window that is not being drawn.
 
 `crates/squigl-egui` is the egui document-camera window, on an `Engine` (eager
 models; it pumps once per pass, shows `Notice`s in its status line, and reads the
