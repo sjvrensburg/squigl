@@ -152,6 +152,7 @@ crates/
 - **The scheme and IPC** pass up to 5.5 MB, but cost about 3 times the CPU per byte.
 - No frame was corrupted.
 - **Still to run:** the Ubuntu/Nvidia box (`./run.sh`). Windows and macOS are *(tester)*.
+- **For S3:** WebGL2 works under llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`), at 30 fps for 3 MB, but on 3.4 cores. Without a GPU, the front end must send smaller frames or use Canvas2D.
 
 **S2 findings (CI, 2026-10-04):**
 
