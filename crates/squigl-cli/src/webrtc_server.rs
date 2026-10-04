@@ -1,6 +1,6 @@
 //! The "policy" half of the WebRTC camera source: an HTTPS server serving the phone
 //! browser's capture page and a minimal WHIP-shaped ingest endpoint
-//! ([`phone_cam4linux::webrtc_source`] handles the WebRTC/ICE/DTLS side once an offer
+//! ([`squigl_core::webrtc_source`] handles the WebRTC/ICE/DTLS side once an offer
 //! is accepted). LAN-only: no auth, no STUN/TURN, one session at a time.
 //!
 //! Self-signed and generated fresh each run (browsers require a secure context for
@@ -9,8 +9,9 @@
 //! and must be accepted to proceed.
 
 use anyhow::{Context, Result};
-use phone_cam4linux::decode::Backend;
-use phone_cam4linux::WebrtcSource;
+use squigl_core::decode::Backend;
+use squigl_core::WebrtcSource;
+use squigl_v4l2::LazyV4l2Sink;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -115,7 +116,8 @@ fn handle_whip(
             let busy = Arc::clone(busy);
             std::thread::spawn(move || {
                 log::info!("WebRTC session started");
-                if let Err(e) = session.run_to_v4l2(&device, &stop) {
+                let mut sink = LazyV4l2Sink::new(device);
+                if let Err(e) = session.run(&mut sink, &stop) {
                     log::warn!("WebRTC session ended: {e}");
                 } else {
                     log::info!("WebRTC session ended");

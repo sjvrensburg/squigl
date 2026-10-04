@@ -34,7 +34,7 @@ ln -s squigl.svg "$appdir/.DirIcon"
 cat > "$appdir/AppRun" <<'RUN'
 #!/bin/sh
 # The binaries find libwebgpu_dawn.so beside themselves ($ORIGIN rpath); the
-# models are looked for next to the AppImage itself (see local/models.rs).
+# models are looked for next to the AppImage itself (see crates/squigl-models/src/models.rs).
 here=$(dirname "$(readlink -f "$0")")
 exec "$here/usr/bin/squigl" "$@"
 RUN

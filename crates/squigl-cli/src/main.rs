@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use phone_cam4linux::adb::AdbDevice;
-use phone_cam4linux::cameras::{is_usable_size, largest_usable_size};
-use phone_cam4linux::decode::Backend;
-use phone_cam4linux::{loopback, sink::V4l2Sink, ConnectOptions, Facing};
+use squigl_core::adb::AdbDevice;
+use squigl_core::cameras::{is_usable_size, largest_usable_size};
+use squigl_core::decode::Backend;
+use squigl_core::{ConnectOptions, Facing};
+use squigl_v4l2::{loopback, V4l2Sink};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -268,7 +269,7 @@ fn stream_loop(
                     resolution: res,
                     ..opts.clone()
                 };
-                phone_cam4linux::CameraSession::connect_with_stop(opts, stop)
+                squigl_core::CameraSession::connect_with_stop(opts, stop)
                     .context("connecting to phone camera")
             })
             .and_then(|mut session| {
@@ -370,7 +371,7 @@ fn enable_tcpip(serial: Option<&str>, port: u16) -> Result<()> {
 }
 
 fn list_sizes(device: &AdbDevice, decoder: Backend) -> Result<()> {
-    let cameras = phone_cam4linux::list_cameras(device).context("listing cameras")?;
+    let cameras = squigl_core::list_cameras(device).context("listing cameras")?;
     for cam in &cameras {
         let facing = match cam.facing {
             Some(Facing::Back) => "back",

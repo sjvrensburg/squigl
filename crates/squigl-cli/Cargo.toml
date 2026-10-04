@@ -11,7 +11,8 @@ name = "squigl-cli"
 path = "src/main.rs"
 
 [dependencies]
-phone-cam4linux = { path = "../../phone-cam4linux" }
+squigl-core = { path = "../squigl-core" }
+squigl-v4l2 = { path = "../squigl-v4l2" }
 anyhow.workspace = true
 clap.workspace = true
 log.workspace = true
@@ -22,4 +23,4 @@ rcgen = "0.14.10"
 
 [features]
 default = []
-ffmpeg = ["phone-cam4linux/ffmpeg"]
+ffmpeg = ["squigl-core/ffmpeg"]

@@ -4621,23 +4621,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "phone-cam4linux"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "env_logger",
- "ffmpeg-next",
- "hex",
- "log",
- "openh264",
- "sha2",
- "str0m",
- "thiserror 2.0.20",
- "ureq 2.12.1",
- "v4l",
-]
-
-[[package]]
 name = "pic-scale"
 version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6076,37 +6059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "squigl"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "clap",
- "eframe",
- "egui",
- "env_logger",
- "half",
- "image",
- "imageproc",
- "log",
- "mitex",
- "ndarray",
- "ort",
- "phone-cam4linux",
- "serde",
- "serde_json",
- "sha2",
- "tokenizers",
- "toml 1.1.6+spec-1.1.0",
- "typst",
- "typst-as-lib",
- "typst-layout",
- "typst-render",
- "ureq 3.4.1",
-]
-
-[[package]]
 name = "squigl-cli"
 version = "0.10.0"
 dependencies = [
@@ -6115,9 +6067,107 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "log",
- "phone-cam4linux",
  "rcgen",
+ "squigl-core",
+ "squigl-v4l2",
  "tiny_http",
+]
+
+[[package]]
+name = "squigl-core"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "ffmpeg-next",
+ "hex",
+ "log",
+ "openh264",
+ "sha2",
+ "str0m",
+ "thiserror 2.0.20",
+ "ureq 2.12.1",
+]
+
+[[package]]
+name = "squigl-egui"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "eframe",
+ "egui",
+ "env_logger",
+ "image",
+ "log",
+ "squigl-core",
+ "squigl-engine",
+ "squigl-math",
+ "squigl-models",
+]
+
+[[package]]
+name = "squigl-engine"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "image",
+ "imageproc",
+ "log",
+ "serde",
+ "serde_json",
+ "squigl-core",
+ "squigl-v4l2",
+ "toml 1.1.6+spec-1.1.0",
+ "ureq 3.4.1",
+]
+
+[[package]]
+name = "squigl-math"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "log",
+ "mitex",
+ "squigl-engine",
+ "typst",
+ "typst-as-lib",
+ "typst-layout",
+ "typst-render",
+]
+
+[[package]]
+name = "squigl-models"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "half",
+ "image",
+ "imageproc",
+ "log",
+ "ndarray",
+ "ort",
+ "serde",
+ "serde_json",
+ "sha2",
+ "squigl-engine",
+ "tokenizers",
+ "ureq 3.4.1",
+]
+
+[[package]]
+name = "squigl-v4l2"
+version = "0.10.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "squigl-core",
+ "thiserror 2.0.20",
+ "v4l",
 ]
 
 [[package]]

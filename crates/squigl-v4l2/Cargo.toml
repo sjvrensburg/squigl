@@ -1,0 +1,19 @@
+[package]
+name = "squigl-v4l2"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Linux V4L2 output for squigl-core: frames to a v4l2loopback /dev/videoN device"
+
+[dependencies]
+squigl-core = { path = "../squigl-core" }
+log.workspace = true
+thiserror.workspace = true
+
+# Everything here is Linux-only; on other targets the crate builds empty.
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l.workspace = true
+
+[dev-dependencies]
+env_logger.workspace = true
