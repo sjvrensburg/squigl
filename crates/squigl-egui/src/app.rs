@@ -1498,6 +1498,31 @@ impl App {
                 .unwrap_or_else(|| layout::rect_quad(sel.rect))
                 .map(|[x, y]| to_screen(x, y))
         });
+        // What the pointer did over the preview this frame, for diagnosing clicks
+        // (RUST_LOG=squigl::app=debug).
+        if log::log_enabled!(log::Level::Debug) {
+            let (pressed, released, clicked) = ui.input(|i| {
+                (
+                    i.pointer.primary_pressed(),
+                    i.pointer.primary_released(),
+                    i.pointer.primary_clicked(),
+                )
+            });
+            if pressed || released || clicked || response.drag_started() {
+                let pos = ui.input(|i| i.pointer.interact_pos());
+                log::debug!(
+                    "preview pointer: pressed {pressed} released {released} clicked {clicked} \
+                     hovered {} drag_started {} drag_stopped {} dragging {} at {pos:?} \
+                     (view {:?}, block {:?})",
+                    response.hovered(),
+                    response.drag_started(),
+                    response.drag_stopped(),
+                    self.drag.is_some(),
+                    pos.map(to_view),
+                    pos.map(|p| self.block_at(to_view(p))),
+                );
+            }
+        }
         // A press and release that reach us in the same frame (a VM's or a remote
         // desktop's viewer can send them together; a fast click on a slow frame)
         // start no drag, and this response senses drags only: take it as the click
