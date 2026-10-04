@@ -53,32 +53,65 @@ pub struct ViewRequest {
     pub format: PlaneFormat,
 }
 
+/// Where a [`Viewport`] puts the view: the view-space point at the drawing area's
+/// top-left corner and the device pixels per view pixel. A view smaller than the
+/// area (low magnification) is centred, so the origin may be negative.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Placement {
+    pub origin: [f32; 2],
+    pub scale: f32,
+}
+
 impl Viewport {
-    /// The part of a `view`-sized (rotated) frame this viewport shows, and the
-    /// largest step that still leaves at least one sent pixel per device pixel. The
-    /// region is kept inside the view: a centre too near an edge is moved in.
+    /// Where this viewport puts a `view`-sized (rotated) frame. A centre too near
+    /// an edge is moved in, so the area never shows past the view's edge on a side
+    /// it could fill.
+    pub fn placement(&self, view: (usize, usize)) -> Placement {
+        let (vw, vh) = (view.0.max(1) as f32, view.1.max(1) as f32);
+        let (dw, dh) = (
+            (self.width * self.dpr).max(1.0),
+            (self.height * self.dpr).max(1.0),
+        );
+        let scale = (dw / vw).min(dh / vh) * self.magnification.max(f32::EPSILON);
+        let origin = |c: f32, area: f32, size: f32| {
+            let shown = area / scale;
+            if shown >= size {
+                (size - shown) / 2.0
+            } else {
+                (c * size).clamp(shown / 2.0, size - shown / 2.0) - shown / 2.0
+            }
+        };
+        Placement {
+            origin: [
+                origin(self.centre[0], dw, vw),
+                origin(self.centre[1], dh, vh),
+            ],
+            scale,
+        }
+    }
+
+    /// The part of a `view`-sized (rotated) frame this viewport shows (see
+    /// [`placement`](Self::placement)), and the largest step that still leaves at
+    /// least one sent pixel per device pixel.
     pub fn request(
         &self,
         view: (usize, usize),
         frame: FrameRef,
         format: PlaneFormat,
     ) -> ViewRequest {
-        let (vw, vh) = (view.0.max(1) as f32, view.1.max(1) as f32);
+        let p = self.placement(view);
         let (dw, dh) = (
             (self.width * self.dpr).max(1.0),
             (self.height * self.dpr).max(1.0),
         );
-        // Device pixels per view pixel.
-        let scale = (dw / vw).min(dh / vh) * self.magnification.max(f32::EPSILON);
-        let (rw, rh) = ((dw / scale).min(vw), (dh / scale).min(vh));
-        let centre = |c: f32, extent: f32, size: f32| {
-            (c * size).clamp(extent / 2.0, size - extent / 2.0) - extent / 2.0
+        let span = |origin: f32, area: f32, size: usize| {
+            let start = (origin.floor().max(0.0) as usize).min(size.max(1) - 1);
+            let end = ((origin + area / p.scale).ceil().max(0.0) as usize).min(size);
+            (start, end.saturating_sub(start).max(1))
         };
-        let x = (centre(self.centre[0], rw, vw).floor().max(0.0) as usize).min(view.0 - 1);
-        let y = (centre(self.centre[1], rh, vh).floor().max(0.0) as usize).min(view.1 - 1);
-        let w = (rw.ceil() as usize).clamp(1, view.0 - x);
-        let h = (rh.ceil() as usize).clamp(1, view.1 - y);
-        let step = ((1.0 / scale).floor() as usize).max(1);
+        let (x, w) = span(p.origin[0], dw, view.0);
+        let (y, h) = span(p.origin[1], dh, view.1);
+        let step = ((1.0 / p.scale).floor() as usize).max(1);
         ViewRequest {
             frame,
             region: Crop { x, y, w, h },
@@ -293,6 +326,20 @@ mod tests {
                 .step,
             2
         );
+    }
+
+    #[test]
+    fn a_small_view_is_centred_and_a_magnified_one_follows_the_centre() {
+        // 400x300 in 800x600 at 1x: fits exactly (scale 2), origin 0.
+        let p = viewport(1.0, [0.5, 0.5]).placement((400, 300));
+        assert_eq!((p.origin, p.scale), ([0.0, 0.0], 2.0));
+        // A square 300x300 view in 800x600: scale 2, 400 view px across, centred.
+        let p = viewport(1.0, [0.5, 0.5]).placement((300, 300));
+        assert_eq!((p.origin, p.scale), ([-50.0, 0.0], 2.0));
+        // At 4x on 4000x3000, centred on (0.25, 0.5): 1000 view px wide from 500.
+        let p = viewport(4.0, [0.25, 0.5]).placement((4000, 3000));
+        assert_eq!(p.scale, 0.8);
+        assert_eq!(p.origin, [500.0, 1125.0]);
     }
 
     #[test]
