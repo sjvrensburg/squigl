@@ -862,6 +862,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -6092,6 +6093,7 @@ dependencies = [
  "hex",
  "log",
  "openh264",
+ "serde",
  "sha2",
  "str0m",
  "thiserror 2.0.20",

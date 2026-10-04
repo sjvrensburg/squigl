@@ -1,5 +1,5 @@
-//! Reading a crop: the [`Transcriber`] trait and the remote backends, plus the on-disk
-//! backend list (`~/.config/squigl/gui.toml`).
+//! Reading a crop: the [`Transcriber`] trait and the remote backends, and the
+//! backend entries of the config file ([`crate::config`]).
 //!
 //! The rules come from halo-workbench's hint tool, which this replaces: several
 //! readings are shown as several readings (grouped by identical text, counted, never
@@ -7,10 +7,11 @@
 //! and the prompts are the ones every measurement behind the model choice was taken
 //! with -- change them and the comparison is void.
 
+use crate::config::UiConfig;
+use crate::model::ModelPhase;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -66,7 +67,7 @@ impl Mode {
 }
 
 /// One alternate the model considered instead of the token it went with.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TokenAlt {
     pub text: String,
     pub prob: f32,
@@ -76,7 +77,7 @@ pub struct TokenAlt {
 /// workbench's sense (`app/handwriting.py::token_confidences()`): >= 0.92 is
 /// "steady", >= 0.6 "wavering", below that "hesitant". Never merged or voted --
 /// each backend that can report tokens reports its own.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Token {
     pub text: String,
     pub prob: f32,
@@ -85,7 +86,7 @@ pub struct Token {
 }
 
 /// One distinct answer and how many of the samples gave it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reading {
     pub text: String,
     pub count: u32,
@@ -130,7 +131,7 @@ impl Token {
 }
 
 /// What one backend said about one image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Transcription {
     pub backend: String,
     pub readings: Vec<Reading>,
@@ -149,6 +150,16 @@ pub trait Transcriber: Send + Sync {
     fn status(&self) -> Option<String> {
         None
     }
+    /// Where a built-in model is in getting ready; `None` for a backend with nothing
+    /// to prepare (a remote one).
+    fn phase(&self) -> Option<ModelPhase> {
+        None
+    }
+    /// Gets ready -- finds, downloads if need be, and loads -- unless it is already
+    /// ready or on its way. Returns at once; [`phase`](Self::phase) follows it.
+    fn prepare(&self) {}
+    /// Abandons a download in progress (the model goes back to not installed).
+    fn cancel_prepare(&self) {}
     /// `prompt` is the instruction for `mode` (the user's, or the default); a
     /// backend that sets its own prompt (the hint API) ignores it. `capture_px` is
     /// the size of the whole frame the crop was cut from, for backends that warn
@@ -276,188 +287,6 @@ impl BackendConfig {
             }),
             BackendConfig::Local { .. } => return None,
         })
-    }
-}
-
-/// The built-in block detector (PP-DocLayoutV3; needs the `local-model` build
-/// feature).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct LayoutConfig {
-    pub enabled: bool,
-    pub device: LocalDevice,
-    /// Minimum detection score. Handwriting scores lower than the printed pages the
-    /// model was trained on.
-    pub threshold: f32,
-}
-
-impl Default for LayoutConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            device: LocalDevice::default(),
-            threshold: 0.4,
-        }
-    }
-}
-
-/// The instructions sent with an image. Sent by the OpenAI-compatible and built-in
-/// backends; the hint API has its own on the workbench side.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct PromptsConfig {
-    /// For a boxed region (a word or a line).
-    pub crop: String,
-    /// For a block the layout model called a formula.
-    pub formula: String,
-    /// For a whole page.
-    pub page: String,
-}
-
-impl Default for PromptsConfig {
-    fn default() -> Self {
-        Self {
-            crop: CROP_PROMPT.into(),
-            formula: FORMULA_PROMPT.into(),
-            page: PAGE_PROMPT.into(),
-        }
-    }
-}
-
-impl PromptsConfig {
-    pub fn for_mode(&self, mode: Mode) -> &str {
-        match mode {
-            Mode::Crop => &self.crop,
-            Mode::Formula => &self.formula,
-            Mode::Page => &self.page,
-        }
-    }
-}
-
-/// The window itself.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct UiConfig {
-    /// Everything in the window scaled by this (1.0 = the desktop's own size).
-    pub scale: f32,
-    /// The readings' text size in points (scaled by `scale` like everything else).
-    pub reading_size: f32,
-    /// A token at or above this probability is shown as steady (no tint). Workbench
-    /// default: 0.92.
-    pub steady_threshold: f32,
-    /// A token at or above this (but below `steady_threshold`) is "wavering"
-    /// (amber); below it, "hesitant" (red). Workbench default: 0.6.
-    pub wavering_threshold: f32,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            scale: 1.0,
-            reading_size: 20.0,
-            steady_threshold: 0.92,
-            wavering_threshold: 0.6,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Config {
-    #[serde(default)]
-    pub backends: Vec<BackendConfig>,
-    #[serde(default)]
-    pub layout: LayoutConfig,
-    #[serde(default)]
-    pub prompts: PromptsConfig,
-    #[serde(default)]
-    pub ui: UiConfig,
-    #[serde(default)]
-    pub enhance: crate::enhance::EnhanceConfig,
-}
-
-impl Config {
-    /// `gui.toml` in the [config directory](crate::paths::config_dir).
-    pub fn path() -> PathBuf {
-        crate::paths::config_dir().join("gui.toml")
-    }
-
-    /// The file's contents, or -- if there is no file -- the defaults, written out so
-    /// there is something to edit.
-    pub fn load_or_create() -> Result<Self> {
-        let path = Self::path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let config = Self::default();
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir)?;
-                }
-                std::fs::write(&path, Self::default_text())
-                    .with_context(|| format!("writing {}", path.display()))?;
-                log::info!("wrote default backends to {}", path.display());
-                Ok(config)
-            }
-            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-        }
-    }
-
-    /// Writes the file; the Settings window's Save.
-    pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(&path, self.text()).with_context(|| format!("writing {}", path.display()))
-    }
-
-    fn default_text() -> String {
-        Self::default().text()
-    }
-
-    fn text(&self) -> String {
-        format!(
-            "# squigl settings: edit here or in the window's Settings. Each [[backends]]\n\
-             # entry is one choice in the window; the first is selected at startup.\n\
-             # [layout] is the block detector, [prompts] what the models are asked,\n\
-             # [ui] the window.\n\n{}",
-            toml::to_string_pretty(self).expect("config serialises")
-        )
-    }
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            backends: vec![
-                BackendConfig::Local {
-                    name: "GLM-OCR (built in)".into(),
-                    device: LocalDevice::default(),
-                    max_tokens: 1024,
-                    max_image_tokens: 2048,
-                },
-                BackendConfig::HintApi {
-                    name: "workbench GLM-OCR".into(),
-                    base_url: "http://127.0.0.1:8093".into(),
-                    member: "glm-ocr".into(),
-                    samples: 3,
-                },
-                BackendConfig::OpenAi {
-                    name: "llama-server :8099".into(),
-                    base_url: "http://127.0.0.1:8099/v1".into(),
-                    model: "local".into(),
-                    api_key: None,
-                    samples: 1,
-                    temperature: 0.0,
-                    max_tokens: 1024,
-                },
-            ],
-            layout: LayoutConfig::default(),
-            prompts: PromptsConfig::default(),
-            ui: UiConfig::default(),
-            enhance: crate::enhance::EnhanceConfig::default(),
-        }
     }
 }
 
@@ -986,26 +815,5 @@ mod tests {
         assert_eq!(t.readings.len(), 1);
         assert_eq!(t.readings[0].count, 2);
         assert_eq!((t.samples, t.silent), (3, 1));
-    }
-
-    #[test]
-    fn default_config_round_trips_through_toml() {
-        let text = Config::default_text();
-        let parsed: Config = toml::from_str(&text).unwrap();
-        assert_eq!(parsed, Config::default());
-        assert!(matches!(parsed.backends[0], BackendConfig::Local { .. }));
-        assert_eq!(
-            parsed.backends[1].build().unwrap().name(),
-            "workbench GLM-OCR"
-        );
-        // Optional fields may be left out.
-        let minimal: Config = toml::from_str(
-            "[[backends]]\nkind = \"open-ai\"\nname = \"x\"\nbase_url = \"http://h/v1\"\nmodel = \"m\"\n",
-        )
-        .unwrap();
-        assert!(matches!(
-            minimal.backends[0],
-            BackendConfig::OpenAi { samples: 1, .. }
-        ));
     }
 }

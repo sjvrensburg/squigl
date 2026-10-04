@@ -22,18 +22,18 @@ use egui::{
 use squigl_core::convert::Rotation;
 use squigl_core::decode::YuvFrame;
 use squigl_core::Facing;
+use squigl_engine::config::{Config, UiConfig};
+use squigl_engine::engine::{Command, Engine, Event, Reply};
 use squigl_engine::enhance::{self, EnhanceConfig, EnhanceMode};
 use squigl_engine::erase;
 use squigl_engine::geometry::{zoom_to_view, Crop, Selection};
 use squigl_engine::history::{self, History};
 use squigl_engine::layout::{self, Block, BlockDetector, Quad, Role};
 use squigl_engine::render::{render_region, render_selection};
-use squigl_engine::stream::{Shared, SourceSpec, Status, Worker};
-use squigl_engine::transcribe::{
-    BackendConfig, Confidence, Config, LayoutConfig, Mode, Reading, Transcriber, Transcription,
-    UiConfig,
-};
+use squigl_engine::stream::{Shared, SourceSpec, Status};
+use squigl_engine::transcribe::{Confidence, Mode, Reading, Transcription};
 use squigl_engine::typeset::{typeset_source, Typesetter};
+use squigl_engine::view::FrameRef;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -147,15 +147,6 @@ struct ResultEntry {
     typeset: HashMap<usize, Typeset>,
 }
 
-/// Builds the block detector for a layout config; `None` when the build has none or
-/// it is disabled.
-pub type DetectorFactory = Box<dyn Fn(&LayoutConfig) -> Option<Arc<dyn BlockDetector>>>;
-
-/// Builds a transcription backend from its config entry; `None` for one this build
-/// cannot provide. [`BackendConfig::build`] covers the HTTP ones; the built-in model
-/// is the caller's to add.
-pub type BackendFactory = Box<dyn Fn(&BackendConfig) -> Option<Box<dyn Transcriber>>>;
-
 /// What a results list belongs to.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ResultsScope {
@@ -265,12 +256,10 @@ impl View {
 }
 
 pub struct App {
-    worker: Worker,
+    /// The stream, the capture and its rotation, the settings and the backends.
+    engine: Engine,
     preview: View,
     crop_view: View,
-    /// A frozen frame; while set, it is shown instead of the live one.
-    captured: Option<Arc<YuvFrame>>,
-    rotation: Rotation,
     /// In view space.
     crop: Option<Crop>,
     /// The crop's quad when it came from a non-rectangular block; cleared by any
@@ -283,6 +272,9 @@ pub struct App {
     /// light scratch-out the model would read through), in view space, oldest first.
     /// They belong to the capture: a retake, a zoom or a rotation drops them.
     erased: Vec<erase::Stroke>,
+    /// The engine's capture number `erased` belongs to: when it moves (a retake, a
+    /// zoom, a new source) they go.
+    erased_capture: u64,
     /// A stroke is being painted: the last of `erased` grows with the pointer.
     painting: bool,
     /// The brush's diameter in screen points on the Zoom pane.
@@ -296,15 +288,7 @@ pub struct App {
     /// View size the crop was drawn against; a different frame size (camera switch)
     /// invalidates it.
     crop_space: Option<(usize, usize)>,
-    /// The configuration in force, and the backends built from it (`backend_configs`
-    /// says which config each one came from, so a Save can keep the unchanged ones
-    /// -- the local model is not reloaded for an edit elsewhere).
-    config: Config,
-    backend_configs: Vec<BackendConfig>,
-    backends: Vec<Arc<dyn Transcriber>>,
     selected_backend: usize,
-    backend_factory: BackendFactory,
-    detector_factory: DetectorFactory,
     /// The Settings window's draft while it is open.
     draft: Option<Config>,
     settings_open: bool,
@@ -318,10 +302,11 @@ pub struct App {
     history_open: bool,
     /// The Zoom pane's enhancement knobs are shown (collapsed, only the mode is).
     enhance_open: bool,
+    /// The enhancement in use, adjusted live; it reaches the settings (and the
+    /// file) once no pointer button is held, so a slider drag is saved once.
+    enhance: EnhanceConfig,
     /// Which pane is active and which, if any, is maximised.
     panes: Panes,
-    /// How many captures so far; history entries say which they came from.
-    capture_seq: u32,
     typesetter: Option<Arc<dyn Typesetter>>,
     /// The width the readings are typeset at, following the Reading pane's.
     reading_width: SettledWidth,
@@ -332,7 +317,6 @@ pub struct App {
     /// What `results` were read from; they are dropped when a read of something
     /// else starts or the capture goes.
     results_key: Option<(Arc<YuvFrame>, ResultsScope)>,
-    detector: Option<Arc<dyn BlockDetector>>,
     /// Detected blocks of the captured frame, in reading order, in view space.
     blocks: Vec<Block>,
     /// The frame and rotation `blocks` were found on; they go when it changes.
@@ -371,25 +355,23 @@ pub struct App {
 
 impl App {
     pub fn new(
-        worker: Worker,
+        engine: Engine,
         save_dir: PathBuf,
-        config: Config,
-        backend_factory: BackendFactory,
-        detector_factory: DetectorFactory,
         typesetter: Option<Arc<dyn Typesetter>>,
         screenshot: Option<(Duration, PathBuf)>,
     ) -> Self {
-        let mut app = Self {
-            worker,
+        let enhance = engine.config().enhance;
+        Self {
+            enhance,
+            engine,
             preview: View::new("preview"),
             crop_view: View::new("crop"),
-            captured: None,
-            rotation: Rotation::None,
             crop: None,
             quad: None,
             crop_role: None,
             drag: None,
             erased: Vec::new(),
+            erased_capture: 0,
             painting: false,
             brush_px: BRUSH_DEFAULT_PX,
             wheel_preview: 0.0,
@@ -398,15 +380,7 @@ impl App {
             message: None,
             fps: FpsCounter::default(),
             crop_space: None,
-            config: Config {
-                backends: Vec::new(),
-                ..config.clone()
-            },
-            backend_configs: Vec::new(),
-            backends: Vec::new(),
             selected_backend: 0,
-            backend_factory,
-            detector_factory,
             draft: None,
             settings_open: false,
             ctx: None,
@@ -416,13 +390,11 @@ impl App {
             history_open: false,
             enhance_open: true,
             panes: Panes::default(),
-            capture_seq: 0,
             typesetter: typesetter.clone(),
             reading_width: SettledWidth::default(),
             typeset_on: typesetter.is_some(),
             last_zoom: None,
             results_key: None,
-            detector: None,
             blocks: Vec::new(),
             blocks_key: None,
             selected_block: None,
@@ -440,53 +412,46 @@ impl App {
             screenshot: screenshot.map(|(after, path)| (after, path, Instant::now())),
             keys: KeyFocus::default(),
             detached_keys: Default::default(),
-        };
-        app.apply_config(config, true);
-        app
+        }
     }
 
-    /// Puts `new` in force: backends whose entry did not change are kept (a local
-    /// model stays loaded), the rest are built; the detector is rebuilt if its
-    /// section changed; the scale is applied once the window exists.
-    fn apply_config(&mut self, new: Config, first: bool) {
-        let mut backends = Vec::new();
-        let mut configs = Vec::new();
-        for b in &new.backends {
-            let existing = self
-                .backend_configs
-                .iter()
-                .position(|c| c == b)
-                .map(|i| Arc::clone(&self.backends[i]));
-            let built = existing.or_else(|| (self.backend_factory)(b).map(Into::into));
-            if let Some(t) = built {
-                backends.push(t);
-                configs.push(b.clone());
-            }
-        }
+    /// The settings in force (the engine's).
+    fn config(&self) -> &Config {
+        self.engine.config()
+    }
+
+    /// Puts `new` in force through the engine -- which keeps the backends whose
+    /// entry did not change (a local model stays loaded), rebuilds the detector if
+    /// its section changed, and saves the file -- then follows it here: the
+    /// selected backend by name, block mode without a detector, the scale, and the
+    /// typeset textures when the reading size changed. An error is the save's; the
+    /// settings are in force regardless.
+    fn apply_config(&mut self, new: Config) -> anyhow::Result<()> {
+        let old_reading_size = self.config().ui.reading_size;
         let selected_name = self
-            .backends
+            .engine
+            .backends()
             .get(self.selected_backend)
             .map(|b| b.name().to_string());
-        self.backends = backends;
-        self.backend_configs = configs;
+        let result = self.engine.handle(Command::SetConfig {
+            config: Box::new(new),
+        });
         self.selected_backend = selected_name
-            .and_then(|n| self.backends.iter().position(|b| b.name() == n))
+            .and_then(|n| self.engine.backends().iter().position(|b| b.name() == n))
             .unwrap_or(0);
-        if first || new.layout != self.config.layout {
-            self.detector = (self.detector_factory)(&new.layout);
-            if self.detector.is_none() {
-                self.block_mode = false;
-            }
+        if self.engine.detector().is_none() {
+            self.block_mode = false;
         }
+        let scale = self.config().ui.scale;
         if let Some(ctx) = &self.ctx {
-            ctx.set_zoom_factor(new.ui.scale);
+            ctx.set_zoom_factor(scale);
         }
-        if (new.ui.reading_size - self.config.ui.reading_size).abs() > 0.01 {
+        if (self.config().ui.reading_size - old_reading_size).abs() > 0.01 {
             for entry in &mut self.results {
                 entry.typeset.clear();
             }
         }
-        self.config = new;
+        result.map(|_| ())
     }
 
     /// The History window: every reading of the session, newest first, with copy
@@ -498,7 +463,7 @@ impl App {
         let mut open = true;
         let mut save = false;
         let mut copy = false;
-        let ui_cfg = self.config.ui.clone();
+        let ui_cfg = self.config().ui.clone();
         egui::Window::new(HISTORY_TITLE)
             .id(window_id(HISTORY_TITLE))
             .open(&mut open)
@@ -562,7 +527,7 @@ impl App {
         if !self.settings_open {
             return;
         }
-        let mut draft = self.draft.take().unwrap_or_else(|| self.config.clone());
+        let mut draft = self.draft.take().unwrap_or_else(|| self.config().clone());
         let outcome = settings::show(ctx, &mut self.settings_open, &mut draft);
         match outcome.action {
             settings::Action::None => {
@@ -572,11 +537,10 @@ impl App {
                 self.draft = Some(draft);
             }
             settings::Action::Save => {
-                match draft.save() {
+                match self.apply_config(draft) {
                     Ok(()) => self.say(format!("settings saved to {}", Config::path().display())),
                     Err(e) => self.say(format!("saving settings failed: {e:#}")),
                 }
-                self.apply_config(draft, false);
                 self.draft = None;
                 self.settings_open = false;
             }
@@ -602,9 +566,12 @@ impl App {
             if let Some(d) = &mut self.draft {
                 d.ui.scale = zoom;
             }
-            if (self.config.ui.scale - zoom).abs() > 1e-3 {
-                self.config.ui.scale = zoom;
-                if let Err(e) = self.config.save() {
+            if (self.config().ui.scale - zoom).abs() > 1e-3 {
+                let mut config = self.config().clone();
+                config.ui.scale = zoom;
+                if let Err(e) = self.engine.handle(Command::SetConfig {
+                    config: Box::new(config),
+                }) {
                     log::warn!("saving the window scale: {e:#}");
                 }
             }
@@ -613,6 +580,21 @@ impl App {
             }
         }
         self.last_zoom = Some(zoom);
+    }
+
+    /// Writes a changed [`App::enhance`] into the settings once no pointer button is
+    /// held (a drag is over).
+    fn keep_enhance(&mut self, ctx: &egui::Context) {
+        if self.enhance == self.config().enhance || ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let mut config = self.config().clone();
+        config.enhance = self.enhance;
+        if let Err(e) = self.engine.handle(Command::SetConfig {
+            config: Box::new(config),
+        }) {
+            log::warn!("saving the enhancement: {e:#}");
+        }
     }
 
     pub fn set_dev_zoom(&mut self, zoom: Option<f32>) {
@@ -709,18 +691,33 @@ impl App {
     }
 
     fn shared(&self) -> &Arc<Shared> {
-        &self.worker.shared
+        self.engine.shared()
+    }
+
+    /// Whether a capture is frozen.
+    fn frozen(&self) -> bool {
+        self.engine.capture_seq() != 0
+    }
+
+    fn rotation(&self) -> Rotation {
+        self.engine.rotation()
+    }
+
+    /// Sends a camera command (zoom, torch, facing, reconnect); true if it changed
+    /// anything. The engine itself goes live when the zoom moves.
+    fn camera(&mut self, command: Command) -> bool {
+        matches!(self.engine.handle(command), Ok(Reply::Done))
     }
 
     /// The frame on screen: the capture if there is one, else the newest live frame.
     fn current_frame(&self) -> Option<Arc<YuvFrame>> {
-        self.captured.clone().or_else(|| self.shared().latest())
+        self.engine.frame(FrameRef::Shown)
     }
 
     /// The erasures that apply to `frame`: the capture's, none on a live frame.
     fn erased_on(&self, frame: &Arc<YuvFrame>) -> Vec<erase::Stroke> {
-        match &self.captured {
-            Some(c) if Arc::ptr_eq(c, frame) => self.erased.clone(),
+        match self.engine.captured() {
+            Some(c) if Arc::ptr_eq(&c, frame) => self.erased.clone(),
             _ => Vec::new(),
         }
     }
@@ -740,14 +737,15 @@ impl App {
 
     fn capture(&mut self) {
         self.erased.clear();
-        if self.captured.is_some() {
-            self.captured = None;
+        if self.frozen() {
+            self.engine.handle(Command::Live).ok();
             self.say("live again");
-        } else if let Some(frame) = self.shared().latest() {
-            self.say(format!("captured {}x{}", frame.width, frame.height));
-            self.captured = Some(frame);
-            self.capture_seq += 1;
+        } else if self.engine.handle(Command::Freeze).is_ok() {
+            if let Some(frame) = self.engine.captured() {
+                self.say(format!("captured {}x{}", frame.width, frame.height));
+            }
         }
+        self.erased_capture = self.engine.capture_seq();
     }
 
     /// Sends the crop (or the whole view) to the selected backend on a thread.
@@ -766,7 +764,7 @@ impl App {
             self.say("turn on Blocks [L] first");
             return;
         }
-        if self.captured.is_none() {
+        if !self.frozen() {
             self.capture();
         }
         self.read_all_armed = true;
@@ -778,14 +776,14 @@ impl App {
         if !self.read_all_armed || self.pending_detect.is_some() {
             return;
         }
-        let Some(captured) = &self.captured else {
+        let Some(captured) = self.engine.captured() else {
             self.read_all_armed = false;
             return;
         };
         if !self
             .blocks_key
             .as_ref()
-            .is_some_and(|(f, _)| Arc::ptr_eq(f, captured))
+            .is_some_and(|(f, _)| Arc::ptr_eq(f, &captured))
         {
             return;
         }
@@ -835,14 +833,14 @@ impl App {
     /// A second opinion: the current selection read again by the next backend in
     /// the list, listed alongside. The selected backend does not change.
     fn second_opinion(&mut self) {
-        if self.backends.len() < 2 {
+        if self.engine.backends().len() < 2 {
             self.say("a second opinion needs a second backend (Settings)");
             return;
         }
         self.read_queue.clear();
         let selection = self.selection();
         let mode = self.read_mode();
-        let other = (self.selected_backend + 1) % self.backends.len();
+        let other = (self.selected_backend + 1) % self.engine.backends().len();
         // Keep the list: same scope as the reading it seconds.
         let scope = match self.results_key {
             Some((_, ResultsScope::AllBlocks)) => ResultsScope::AllBlocks,
@@ -878,31 +876,31 @@ impl App {
             self.say("still reading the last one");
             return;
         }
-        let Some(backend) = self.backends.get(backend_index).cloned() else {
+        let Some(backend) = self.engine.backends().get(backend_index).cloned() else {
             self.say(format!(
                 "no transcription backends configured (see {})",
                 Config::path().display()
             ));
             return;
         };
-        if self.captured.is_none() {
+        if !self.frozen() {
             self.capture();
         }
-        let Some(frame) = self.captured.clone() else {
+        let Some(frame) = self.engine.captured() else {
             self.say("nothing to read yet");
             return;
         };
         // Results belong to this frame and selection; a read of something else
         // starts a fresh list.
         self.set_results_key(scope);
-        let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
+        let (vw, vh) = self.rotation().rotated_size(frame.width, frame.height);
         let (rgba, w, h) = render_selection(
             &frame,
-            self.rotation,
+            self.rotation(),
             selection,
             1,
             &self.erased,
-            Some(&self.config.enhance),
+            Some(&self.enhance),
         );
         let mut png = Vec::new();
         let encoded = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
@@ -915,7 +913,7 @@ impl App {
         let (tx, rx) = mpsc::sync_channel(1);
         let ctx = self.ctx.clone();
         let name = backend.name().to_string();
-        let prompt = self.config.prompts.for_mode(mode).to_string();
+        let prompt = self.config().prompts.for_mode(mode).to_string();
         std::thread::Builder::new()
             .name("squigl-read".into())
             .spawn(move || {
@@ -932,7 +930,7 @@ impl App {
     /// Readings are kept while they are of the captured frame and `scope`; anything
     /// else starts a fresh list.
     fn set_results_key(&mut self, scope: ResultsScope) {
-        let key = self.captured.clone().map(|f| (f, scope));
+        let key = self.engine.captured().map(|f| (f, scope));
         let same = match (&self.results_key, &key) {
             (Some((a, sa)), Some((b, sb))) => Arc::ptr_eq(a, b) && sa == sb,
             (None, None) => true,
@@ -946,7 +944,7 @@ impl App {
 
     /// Readings go with the capture they were made from.
     fn drop_stale_results(&mut self) {
-        let stale = match (&self.results_key, &self.captured) {
+        let stale = match (&self.results_key, &self.engine.captured()) {
             (Some((a, _)), Some(b)) => !Arc::ptr_eq(a, b),
             (Some(_), None) => true,
             (None, _) => false,
@@ -978,7 +976,7 @@ impl App {
                 });
                 self.history.push(history::Entry {
                     at: chrono::Local::now(),
-                    capture: self.capture_seq,
+                    capture: self.engine.captures() as u32,
                     what,
                     result: result.clone(),
                 });
@@ -1004,7 +1002,7 @@ impl App {
                 self.pending_detect = None;
                 match result {
                     Ok(blocks) => {
-                        if self.captured.is_some() {
+                        if self.frozen() {
                             self.say(format!(
                                 "{} block{} in {:.2}s",
                                 blocks.len(),
@@ -1028,7 +1026,7 @@ impl App {
 
     /// Block mode: `L` or the toolbar toggle.
     fn toggle_block_mode(&mut self) {
-        let Some(detector) = &self.detector else {
+        let Some(detector) = self.engine.detector() else {
             self.say("no block detector in this build");
             return;
         };
@@ -1048,7 +1046,7 @@ impl App {
         if !self.block_mode || self.pending_detect.is_some() || self.pending.is_some() {
             return;
         }
-        let Some(detector) = self.detector.clone() else {
+        let Some(detector) = self.engine.detector().cloned() else {
             return;
         };
         if !detector.ready() {
@@ -1060,11 +1058,11 @@ impl App {
         if self
             .blocks_key
             .as_ref()
-            .is_some_and(|(f, r)| Arc::ptr_eq(f, &frame) && *r == self.rotation)
+            .is_some_and(|(f, r)| Arc::ptr_eq(f, &frame) && *r == self.rotation())
         {
             return;
         }
-        if self.captured.is_none() {
+        if !self.frozen() {
             if let Some(at) = self.last_detect {
                 let since = at.elapsed();
                 if since < LIVE_DETECT_INTERVAL {
@@ -1079,7 +1077,7 @@ impl App {
     /// Runs the block detector over `frame`, on a thread. The result lands in
     /// `blocks` in view space.
     fn detect(&mut self, detector: Arc<dyn BlockDetector>, frame: Arc<YuvFrame>) {
-        let rotation = self.rotation;
+        let rotation = self.rotation();
         let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
         let step = vw.max(vh).div_ceil(DETECT_MAX_EDGE).max(1);
         let (rgba, w, h) = render_region(&frame, rotation, Crop::whole(vw, vh), step);
@@ -1158,7 +1156,7 @@ impl App {
             || self
                 .blocks_key
                 .as_ref()
-                .is_some_and(|(_, r)| *r != self.rotation);
+                .is_some_and(|(_, r)| *r != self.rotation());
         if stale {
             self.clear_blocks();
         }
@@ -1173,31 +1171,17 @@ impl App {
     /// Whether the selected backend can take a read now (a local model may still
     /// be downloading or loading).
     fn backend_ready(&self) -> bool {
-        self.backends
+        self.engine
+            .backends()
             .get(self.selected_backend)
             .and_then(|b| b.status())
             .is_none_or(|s| s.starts_with("ready") || s.starts_with("unavailable"))
     }
 
-    /// Any change to the camera itself (zoom) makes a frozen capture stale: drop it
-    /// so the preview shows what the phone now sees.
-    fn go_live(&mut self) {
-        if self.captured.is_some() {
-            self.captured = None;
-            self.erased.clear();
-            self.say("live again (zoom changed)");
-        }
-    }
-
-    /// Switches what the window shows; a frozen capture of the old source is dropped.
+    /// Switches what the window shows; the engine drops a capture of the old source
+    /// (and says what is showing).
     fn use_source(&mut self, source: SourceSpec) {
-        let what = source.describe();
-        if self.captured.is_some() {
-            self.captured = None;
-            self.erased.clear();
-        }
-        self.shared().use_source(source);
-        self.say(format!("showing {what}"));
+        self.camera(Command::UseSource { source });
     }
 
     /// A file dropped on the window becomes the source (see [`SourceSpec::for_file`]);
@@ -1225,8 +1209,7 @@ impl App {
     }
 
     fn rotate(&mut self, rotation: Rotation) {
-        if rotation != self.rotation {
-            self.rotation = rotation;
+        if self.camera(Command::SetRotation { rotation }) {
             // The crop and erasures are in view space; rather than spin them, start
             // over.
             self.set_rect(None);
@@ -1242,7 +1225,7 @@ impl App {
         };
         let erased = self.erased_on(&frame);
         let (rgba, w, h) =
-            render_selection(&frame, self.rotation, self.selection(), 1, &erased, None);
+            render_selection(&frame, self.rotation(), self.selection(), 1, &erased, None);
         let path = self.save_dir.join(format!(
             "squigl-{}.png",
             chrono::Local::now().format("%Y%m%d-%H%M%S")
@@ -1260,7 +1243,7 @@ impl App {
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         // Wrapped: at a larger window scale the row overflows otherwise.
         ui.horizontal_wrapped(|ui| {
-            let live = self.captured.is_none();
+            let live = !self.frozen();
             let label = if live {
                 "Capture  [space]"
             } else {
@@ -1277,7 +1260,7 @@ impl App {
                     self.set_rect(None);
                 }
             });
-            if let Some(detector) = &self.detector {
+            if let Some(detector) = self.engine.detector() {
                 let status = detector.status();
                 let toggle = ui.add_enabled(
                     status.is_none(),
@@ -1295,10 +1278,10 @@ impl App {
             }
             ui.separator();
             if ui.button("Rotate left  [shift+R]").clicked() {
-                self.rotate(self.rotation.turned_ccw());
+                self.rotate(self.rotation().turned_ccw());
             }
             if ui.button("Rotate right  [R]").clicked() {
-                self.rotate(self.rotation.turned_cw());
+                self.rotate(self.rotation().turned_cw());
             }
             ui.separator();
 
@@ -1309,10 +1292,10 @@ impl App {
                 ui.selectable_value(&mut facing, Facing::Back, "back");
                 ui.selectable_value(&mut facing, Facing::Front, "front");
                 if facing != before {
-                    self.shared().set_facing(facing);
+                    self.camera(Command::SetFacing { facing });
                 }
                 if ui.button("Reconnect").clicked() {
-                    self.shared().restart();
+                    self.camera(Command::Reconnect);
                 }
             } else {
                 ui.label(format!("Showing: {}", self.shared().source().describe()));
@@ -1368,22 +1351,21 @@ impl App {
                 );
                 // `changed()` alone is not a move: the slider re-rounds the shown
                 // value to two decimals every frame, which is off the zoom grid.
-                if slider.changed() && self.shared().set_zoom(value) {
-                    self.go_live();
+                if slider.changed() {
+                    self.camera(Command::SetZoom { zoom: value });
                 }
                 if ui
                     .button("1x  [0]")
                     .on_hover_text("reset the phone's zoom")
                     .clicked()
-                    && self.shared().set_zoom(1.0)
                 {
-                    self.go_live();
+                    self.camera(Command::SetZoom { zoom: 1.0 });
                 }
             });
         }
         let mut torch = self.shared().torch();
         if ui.checkbox(&mut torch, "Torch").changed() {
-            self.shared().set_torch(torch);
+            self.camera(Command::SetTorch { on: torch });
         }
     }
 
@@ -1419,9 +1401,9 @@ impl App {
                 _ => ui.visuals().text_color(),
             };
             ui.colored_label(colour, text);
-            if self.rotation != Rotation::None {
+            if self.rotation() != Rotation::None {
                 ui.separator();
-                ui.label(format!("rotated {:?}", self.rotation));
+                ui.label(format!("rotated {:?}", self.rotation()));
             }
             let (want, have) = (self.shared().zoom(), self.shared().zoom_applied());
             if want > 1.0 || have > 1.0 {
@@ -1432,14 +1414,14 @@ impl App {
                     ui.label(format!("zoom {have:.2}x"));
                 }
             }
-            if self.captured.is_some() {
+            if self.frozen() {
                 ui.separator();
                 ui.strong("CAPTURED");
                 ui.weak("preview frozen — space or esc goes back to live");
             }
             if self.block_mode {
                 ui.separator();
-                if self.captured.is_none() && self.pending_detect.is_some() {
+                if !self.frozen() && self.pending_detect.is_some() {
                     ui.spinner();
                 }
                 ui.label(format!(
@@ -1456,7 +1438,7 @@ impl App {
                         ui.colored_label(role_colour(role), name);
                     }
                 }
-            } else if let Some(status) = self.detector.as_ref().and_then(|d| d.status()) {
+            } else if let Some(status) = self.engine.detector().and_then(|d| d.status()) {
                 ui.separator();
                 ui.weak(status);
             }
@@ -1472,11 +1454,11 @@ impl App {
     /// The live/captured image, fitted to the panel, with the crop rectangle drawn on
     /// it and drag-to-select. Coordinates here are view space.
     fn preview_panel(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
-        let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
+        let (vw, vh) = self.rotation().rotated_size(frame.width, frame.height);
         let step = vw.max(vh).div_ceil(PREVIEW_MAX_EDGE).max(1);
         let erased = self.erased_on(frame);
         self.preview
-            .update(ui.ctx(), frame, None, step, self.rotation, &erased, None);
+            .update(ui.ctx(), frame, None, step, self.rotation(), &erased, None);
         let Some(texture) = &self.preview.texture else {
             return;
         };
@@ -1562,8 +1544,8 @@ impl App {
         if response.hovered() {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             let notches = wheel_notches(&mut self.wheel_preview, delta);
-            if notches != 0 && self.shared().step_zoom(notches) {
-                self.go_live();
+            if notches != 0 {
+                self.camera(Command::StepZoom { steps: notches });
             }
         }
 
@@ -1835,7 +1817,7 @@ impl App {
                      struck-out word) before it is read; ctrl+wheel or the slider sizes the \
                      brush, ctrl+Z takes back the last stroke.",
                 );
-                if self.detector.is_some() {
+                if self.engine.detector().is_some() {
                     ui.label(
                         "Blocks [L] keeps finding the page's blocks in reading order as \
                          you aim: click one or tab through them to make it the box, drag \
@@ -1846,7 +1828,7 @@ impl App {
             return;
         };
         let crop = selection.rect;
-        enhance_controls(ui, &mut self.config.enhance, &mut self.enhance_open);
+        enhance_controls(ui, &mut self.enhance, &mut self.enhance_open);
         ui.horizontal(|ui| {
             ui.label("Erase brush");
             ui.add(
@@ -1866,9 +1848,9 @@ impl App {
             frame,
             Some(selection),
             step,
-            self.rotation,
+            self.rotation(),
             &erased,
-            Some(self.config.enhance),
+            Some(self.enhance),
         );
         let Some(texture) = &self.crop_view.texture else {
             return;
@@ -1925,7 +1907,7 @@ impl App {
             let delta = ui.input(|i| i.smooth_scroll_delta.y);
             let notches = wheel_notches(&mut self.wheel_crop, delta);
             if notches != 0 {
-                let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
+                let (vw, vh) = self.rotation().rotated_size(frame.width, frame.height);
                 let factor = 1.1f32.powi(-notches);
                 self.set_rect(Some(crop.scaled(factor, vw, vh)));
             }
@@ -1971,10 +1953,10 @@ impl App {
                 return;
             };
             let radius = ((off[0] - at[0]).powi(2) + (off[1] - at[1]).powi(2)).sqrt();
-            if self.captured.is_none() {
+            if !self.frozen() {
                 self.capture();
             }
-            if self.captured.is_none() || radius <= 0.0 {
+            if !self.frozen() || radius <= 0.0 {
                 return;
             }
             self.erased.push(erase::Stroke {
@@ -2017,36 +1999,42 @@ impl App {
                 Mode::Formula => "Read the formula  [enter]",
                 Mode::Page => "Read the page  [enter]",
             };
-            ui.add_enabled_ui(self.pending.is_none() && !self.backends.is_empty(), |ui| {
-                if ui.button(what).clicked() {
-                    self.read();
-                }
-                if !self.blocks.is_empty() && ui.button("Read all blocks  [ctrl+enter]").clicked() {
-                    self.read_all();
-                }
-                if self.backends.len() > 1 {
-                    let other = (self.selected_backend + 1) % self.backends.len();
-                    if ui
-                        .button("2nd opinion  [shift+enter]")
-                        .on_hover_text(format!(
-                            "read the same thing with {} and list it alongside",
-                            self.backends[other].name()
-                        ))
-                        .clicked()
-                    {
-                        self.second_opinion();
+            ui.add_enabled_ui(
+                self.pending.is_none() && !self.engine.backends().is_empty(),
+                |ui| {
+                    if ui.button(what).clicked() {
+                        self.read();
                     }
-                }
-            });
+                    if !self.blocks.is_empty()
+                        && ui.button("Read all blocks  [ctrl+enter]").clicked()
+                    {
+                        self.read_all();
+                    }
+                    if self.engine.backends().len() > 1 {
+                        let other = (self.selected_backend + 1) % self.engine.backends().len();
+                        if ui
+                            .button("2nd opinion  [shift+enter]")
+                            .on_hover_text(format!(
+                                "read the same thing with {} and list it alongside",
+                                self.engine.backends()[other].name()
+                            ))
+                            .clicked()
+                        {
+                            self.second_opinion();
+                        }
+                    }
+                },
+            );
             let current = self
-                .backends
+                .engine
+                .backends()
                 .get(self.selected_backend)
                 .map(|b| b.name().to_string())
                 .unwrap_or_else(|| "no backends".into());
             egui::ComboBox::from_id_salt("backend")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
-                    for (i, b) in self.backends.iter().enumerate() {
+                    for (i, b) in self.engine.backends().iter().enumerate() {
                         ui.selectable_value(&mut self.selected_backend, i, b.name());
                     }
                 });
@@ -2061,7 +2049,8 @@ impl App {
                     ui.weak(format!("{} to go", self.read_queue.len()));
                 }
             } else if let Some(status) = self
-                .backends
+                .engine
+                .backends()
                 .get(self.selected_backend)
                 .and_then(|b| b.status())
             {
@@ -2076,7 +2065,7 @@ impl App {
                     let n = self.results.len();
                     let text = history::joined(
                         self.history.entries.iter().rev().take(n).rev(),
-                        &self.config.ui,
+                        &self.config().ui,
                     );
                     ui.ctx().copy_text(text);
                     self.say("readings copied");
@@ -2112,7 +2101,8 @@ impl App {
                 // One read at a time: newest on top. A "read all": in page order.
                 let in_order = matches!(self.results_key, Some((_, ResultsScope::AllBlocks)));
                 let typesetter = self.typeset_on.then(|| self.typesetter.clone()).flatten();
-                let reading_size = self.config.ui.reading_size;
+                let reading_size = self.config().ui.reading_size;
+                let ui_cfg = self.config().ui.clone();
                 let mut ordered: Vec<_> = self.results.iter_mut().collect();
                 if !in_order {
                     ordered.reverse();
@@ -2129,7 +2119,7 @@ impl App {
                             &mut entry.typeset,
                             typeset_width,
                             reading_size,
-                            &self.config.ui,
+                            &ui_cfg,
                         ),
                         Err(e) => {
                             ui.colored_label(ui.visuals().error_fg_color, e);
@@ -2198,8 +2188,8 @@ impl App {
             toggle_fullscreen(ctx);
         }
         if ctx.input(|i| !i.modifiers.any() && i.key_pressed(Key::E)) {
-            self.config.enhance.mode = self.config.enhance.mode.cycle();
-            self.say(format!("enhancement: {}", self.config.enhance.mode.label()));
+            self.enhance.mode = self.enhance.mode.cycle();
+            self.say(format!("enhancement: {}", self.enhance.mode.label()));
         }
         if tab != 0 {
             self.step_block(tab);
@@ -2212,11 +2202,14 @@ impl App {
                 i.key_pressed(Key::Num0),
             )
         });
-        let moved = (zoom_in && self.shared().step_zoom(2))
-            | (zoom_out && self.shared().step_zoom(-2))
-            | (zoom_reset && self.shared().set_zoom(1.0));
-        if moved {
-            self.go_live();
+        if zoom_in {
+            self.camera(Command::StepZoom { steps: 2 });
+        }
+        if zoom_out {
+            self.camera(Command::StepZoom { steps: -2 });
+        }
+        if zoom_reset {
+            self.camera(Command::SetZoom { zoom: 1.0 });
         }
         // Digital box: [ / ] shrink and grow, arrows pan (shift: finer).
         if let (Some(crop), Some((vw, vh))) = (self.crop, self.crop_space) {
@@ -2259,7 +2252,7 @@ impl App {
             // Back out one level: the box first, then the capture, then full screen.
             if self.crop.is_some() {
                 self.set_rect(None);
-            } else if self.captured.is_some() {
+            } else if self.frozen() {
                 self.capture();
             } else if is_fullscreen(ctx) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
@@ -2269,10 +2262,10 @@ impl App {
             self.save();
         }
         if rot_cw {
-            self.rotate(self.rotation.turned_cw());
+            self.rotate(self.rotation().turned_cw());
         }
         if rot_ccw {
-            self.rotate(self.rotation.turned_ccw());
+            self.rotate(self.rotation().turned_ccw());
         }
     }
 
@@ -2318,7 +2311,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.worker.stop();
+        self.engine.stop();
     }
 }
 
@@ -2339,9 +2332,22 @@ impl App {
     fn pass(&mut self, ui: &mut egui::Ui, shortcuts: bool) {
         if self.ctx.is_none() {
             self.ctx = Some(ui.ctx().clone());
-            ui.ctx().set_zoom_factor(self.config.ui.scale);
+            ui.ctx().set_zoom_factor(self.config().ui.scale);
+        }
+        for event in self.engine.pump(Instant::now()) {
+            if let Event::Notice(notice) = event {
+                self.say(notice.text);
+            }
+        }
+        // Erasures belong to a capture; the engine may have dropped it (a zoom, a new
+        // source).
+        if self.engine.capture_seq() != self.erased_capture {
+            self.erased.clear();
+            self.painting = false;
+            self.erased_capture = self.engine.capture_seq();
         }
         self.track_zoom(ui.ctx());
+        self.keep_enhance(ui.ctx());
         self.settings_window(ui.ctx());
         self.history_window(ui.ctx());
         self.fps.tick(self.shared().frames());
@@ -2374,7 +2380,7 @@ impl App {
 
         // The crop must fit the frame about to be drawn: frames change size when the
         // camera is switched, and a stale box would index outside the new frame.
-        let view = self.rotation.rotated_size(frame.width, frame.height);
+        let view = self.rotation().rotated_size(frame.width, frame.height);
         if self.crop_space != Some(view) {
             if self.crop_space.is_some() {
                 self.set_rect(None);
@@ -2393,7 +2399,7 @@ impl App {
                 Some(at) if at.elapsed() > Duration::from_secs(3) => {
                     let zoom = *zoom;
                     self.dev_zoom = None;
-                    self.shared().set_zoom(zoom);
+                    self.camera(Command::SetZoom { zoom });
                 }
                 _ => {
                     ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -2401,10 +2407,10 @@ impl App {
             }
         }
         if !self.dev_erase.is_empty() {
-            if self.captured.is_none() {
+            if !self.frozen() {
                 self.capture();
             }
-            if self.captured.is_some() {
+            if self.frozen() {
                 self.erased = std::mem::take(&mut self.dev_erase);
             }
         }
