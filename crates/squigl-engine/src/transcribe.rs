@@ -376,12 +376,9 @@ pub struct Config {
 }
 
 impl Config {
+    /// `gui.toml` in the [config directory](crate::paths::config_dir).
     pub fn path() -> PathBuf {
-        let base = std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .unwrap_or_default();
-        base.join("squigl").join("gui.toml")
+        crate::paths::config_dir().join("gui.toml")
     }
 
     /// The file's contents, or -- if there is no file -- the defaults, written out so

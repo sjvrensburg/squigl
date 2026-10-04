@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
 base64 = "0.22"
+directories = "6"
 
 # The camera worker's optional copy of the stream to a v4l2loopback device.
 [target.'cfg(target_os = "linux")'.dependencies]
