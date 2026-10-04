@@ -8,6 +8,19 @@ members = [
     "crates/squigl-math",
     "crates/squigl-cli",
     "crates/squigl-egui",
+    "crates/squigl-desktop",
+]
+# squigl-desktop is left out of a plain `cargo build`/`cargo test`: Tauri embeds its
+# web UI at compile time, which needs `npm run build` in crates/squigl-desktop/ui
+# first (and WebKitGTK headers on Linux). Build it with `-p squigl-desktop`.
+default-members = [
+    "crates/squigl-core",
+    "crates/squigl-v4l2",
+    "crates/squigl-engine",
+    "crates/squigl-models",
+    "crates/squigl-math",
+    "crates/squigl-cli",
+    "crates/squigl-egui",
 ]
 
 [workspace.package]

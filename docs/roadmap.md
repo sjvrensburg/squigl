@@ -265,7 +265,7 @@ crates/
 ### Phase 4: Tauri skeleton and the magnifier MVP
 
 - **App shell.** `squigl-desktop`: `EngineHost`, `dispatch` and `subscribe`, the S1 transport, and the WebGL2 table renderer with Canvas2D fallback.
-- **Frontend.** Svelte 5 or plain TS using **native HTML elements, with no component library**. Native elements give keyboard behaviour and focus for free, and focus is what OS magnifiers track.
+- **Frontend.** Svelte 5 + TypeScript (chosen 2026-10-04) using **native HTML elements, with no component library**. Native elements give keyboard behaviour and focus for free, and focus is what OS magnifiers track.
   - Everything is sized in `rem`, and the OS text scale maps to webview zoom.
   - The app ships its own high-contrast UI themes, because `prefers-contrast` and `forced-colors` are uneven on WebKitGTK.
 - **Magnifier features:**
@@ -282,6 +282,21 @@ crates/
   - Vitest with `@tauri-apps/api/mocks`;
   - `tauri-driver` end-to-end on Linux and Windows against the `Replay` source (macOS has no WebDriver);
   - a pixel check of each mode against the Rust reference table.
+
+**Progress (4a, 2026-10-04):**
+
+- **Done:** the shell.
+  - `squigl-desktop`, with `EngineHost` (`host.rs`), `dispatch` and `subscribe`.
+  - The WebSocket transport, with a per-launch token and an Origin check.
+  - The WebGL2 renderer, with the display table.
+  - `Viewport::placement` in the engine.
+  - A first window: freeze, rotate, magnification, display mode, full screen, keyboard pan and zoom, and an `aria-live` notice line.
+  - The `desktop` CI job on three OSes.
+- **Measured against the phone (2992x2992 live) on the Fedora box:** 30 fps drawn, on 0.62 cores for the whole app, decoding included.
+- **Next:**
+  - 4b: the full magnifier controls (contrast, brightness, threshold, smoothing, the reading line), the high-contrast UI themes, remappable single-key shortcuts, the Canvas2D fallback, and image paste.
+  - 4c: the connection screen.
+  - Then the tests: `tauri-driver` end-to-end, and the per-mode pixel check.
 
 **Exit criteria:**
 
