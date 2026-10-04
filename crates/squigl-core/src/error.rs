@@ -27,6 +27,11 @@ pub enum Error {
     #[error("{0}")]
     Sink(String),
 
+    /// A [`crate::replay`] recording could not be read or written; the message says
+    /// what.
+    #[error("{0}")]
+    Recording(String),
+
     #[error(transparent)]
     Io(#[from] io::Error),
 }

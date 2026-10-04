@@ -5,9 +5,10 @@ use crate::adb::{self, AdbDevice};
 use crate::decode::{self, Decoder};
 use crate::error::{Error, Result};
 use crate::protocol;
+use crate::replay::Recorder;
 use crate::sink::FrameSink;
 use std::io::BufReader;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -130,6 +131,7 @@ pub struct CameraSession {
     port: u16,
     socket: BufReader<TcpStream>,
     control: Option<CameraControl>,
+    recorder: Option<Recorder<Box<dyn Write + Send>>>,
     pub meta: protocol::CodecMeta,
 }
 
@@ -242,6 +244,7 @@ impl CameraSession {
             port,
             socket,
             control,
+            recorder: None,
             meta,
         })
     }
@@ -255,6 +258,18 @@ impl CameraSession {
     /// that actually worked from one that failed right after the handshake.
     pub fn frames_decoded(&self) -> u64 {
         self.frames_decoded
+    }
+
+    /// Also writes every packet [`run`](Self::run) receives to `out`, as a
+    /// [`crate::replay`] recording that [`crate::Replay`] plays back. Call before
+    /// `run`, so the recording starts at the stream's first packet. A write error
+    /// ends the session; the recording is flushed when the session is dropped.
+    pub fn record_to(&mut self, out: impl Write + Send + 'static) -> Result<()> {
+        self.recorder = Some(Recorder::new(
+            Box::new(out) as Box<dyn Write + Send>,
+            self.meta,
+        )?);
+        Ok(())
     }
 
     /// Blocks, decoding the camera stream and handing each frame to `sink` (a
@@ -321,6 +336,9 @@ impl CameraSession {
                 Err(e) => return Err(e),
             };
             stats.packet(packet.data.len());
+            if let Some(recorder) = &mut self.recorder {
+                recorder.packet(&packet)?;
+            }
             match decoder.decode(&packet.data) {
                 Ok(Some(frame)) => {
                     stats.frame();
@@ -453,6 +471,11 @@ impl StreamStats {
 
 impl Drop for CameraSession {
     fn drop(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            if let Err(e) = recorder.finish() {
+                log::warn!("finishing the recording: {e}");
+            }
+        }
         adb::close_stdin(&mut self.server_process);
         let _ = self.server_process.kill();
         let _ = self.server_process.wait();
