@@ -64,6 +64,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets ${{ matrix.args }} -- -D warnings
 
+      # Libraries only: the binaries' doc comments are clap's --help text
+      # (`HOST[:PORT]`, `DIR/<model name>/`), not rustdoc.
+      - name: Docs
+        run: cargo doc --workspace --no-deps --lib ${{ matrix.args }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # The engine is shared by every front end, so no UI toolkit, ONNX Runtime or
       # Typst may reach it (they implement its traits from outside).
       - name: Engine stays UI-independent

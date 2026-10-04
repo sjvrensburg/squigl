@@ -38,6 +38,20 @@ Two rules hold throughout:
 - Every phase leaves the egui app working, and CI green for both feature sets.
 - `CLAUDE.md`, `README.md` and `NOTICE` are updated in the same PR as the change they describe.
 
+### Test machines
+
+Squigl is tested on two machines:
+
+- a Fedora box (AMD, Wayland and X11);
+- an Ubuntu box with an Nvidia GPU.
+
+There is no Windows PC or Mac. The exit criteria below are graded to match:
+
+- **Linux** is tested on real hardware on both boxes, for function and for performance.
+- **Windows** is built and tested by GitHub's `windows-latest` runners. A Windows 11 VM on the Fedora box (KVM, with the phone passed through over USB and the VM on the LAN) checks function: adb drivers, firewall prompts, installers, Windows Magnifier, voices. It cannot measure performance, because a Windows guest gets no GPU acceleration under KVM.
+- **macOS** is built and tested by GitHub's `macos-14` runners only. Apple's licence allows macOS VMs only on Apple hardware.
+- **Where a criterion needs real Windows or macOS hardware** (frame rates, the GPU provider, macOS Zoom, clean-machine installs), it is marked *(tester)*. It is met when someone with that machine runs it, and does not block the phase.
+
 ---
 
 ## Target architecture
@@ -124,9 +138,9 @@ crates/
 
 | Spike | Time box | Decides |
 |---|---|---|
-| **S1** Frame transport | 4 days | Tauri hello app with a synthetic source (seq and timestamp burned into pixels). Custom scheme vs IPC Channel vs WebSocket, at 1/3/5.5/12 MB payloads, with a WebGL2 renderer. Machines: Fedora Wayland/X11 (AMD/Intel plus one Nvidia), Ubuntu 24.04, Windows 11, macOS 14 arm64. **Pass:** ≥30 fps at 3 MB, p95 ≤ 50 ms, under one core in total. |
-| **S2** Cross-OS native build | 2 days | ort git-pin prebuilt binaries for windows-x64 and macos-arm64; where the Dawn DLL/dylib lands; openh264 `source` with MSVC and nasm; the scrcpy jar fetch; `glmocr_handwriting` on CPU on each OS. If the WebGPU EP is missing on an OS, use CPU there for now. |
-| **S3** WebKitGTK GPU, scaling and OS magnifiers | 3 days | Is WebGL2 on with Nvidia/Wayland, Intel/X11 and llvmpipe? Note the `WEBKIT_DISABLE_DMABUF_RENDERER` workaround. Do GNOME Zoom, Windows Magnifier and macOS Zoom follow keyboard focus in a Tauri window? Does OS text scaling reach the webview, and does the UI hold up at 200–300%? Flatpak vs .deb. |
+| **S1** Frame transport | 4 days | Tauri hello app with a synthetic source (seq and timestamp burned into pixels). Custom scheme vs IPC Channel vs WebSocket, at 1/3/5.5/12 MB payloads, with a WebGL2 renderer. Machines: Fedora Wayland/X11 (AMD) and Ubuntu 24.04 with Nvidia; Windows 11 and macOS 14 *(tester)*. WebKitGTK is the hardest webview, so Linux passing is the bar; WebSocket stays the default unless another transport passes everywhere it can be measured. **Pass:** ≥30 fps at 3 MB, p95 ≤ 50 ms, under one core in total. |
+| **S2** Cross-OS native build | 2 days | On the GitHub Windows and macOS runners, brought forward as Phase 3's CI matrix, and in the Windows VM: ort git-pin prebuilt binaries for windows-x64 and macos-arm64; where the Dawn DLL/dylib lands; openh264 `source` with MSVC and nasm; the scrcpy jar fetch; `glmocr_handwriting` on CPU on each OS. If the WebGPU EP is missing on an OS, use CPU there for now. |
+| **S3** WebKitGTK GPU, scaling and OS magnifiers | 3 days | Is WebGL2 on with Nvidia/Wayland (Ubuntu box), AMD Wayland/X11 (Fedora box) and llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`)? Note the `WEBKIT_DISABLE_DMABUF_RENDERER` workaround. Does GNOME Zoom follow keyboard focus in a Tauri window? Windows Magnifier is checked in the VM; macOS Zoom is *(tester)*. Does OS text scaling reach the webview, and does the UI hold up at 200–300%? Flatpak vs .deb. |
 | **S4** Phone onboarding | 2 days | Windows adb on 2–3 phones (OEM driver?). Adb setup and QR pairing walked through with one low-vision user and one non-technical teacher, noting where each gets stuck (Developer options, the certificate warning). |
 | **S5** Display-mode legibility | 1–2 days on S1's build | 2–3 low-vision users compare the modes, and raw vs JPEG, at 8–16×. |
 | **S6** WebCodecs probe | 0.5 day | Availability per webview (for the record only). |
@@ -192,8 +206,8 @@ crates/
 **Exit criteria:**
 
 - CI passes on all three OSes.
-- The egui app runs against a phone over adb on Windows and macOS.
-- `glmocr_handwriting --ignored` passes on CPU on each OS (nightly or manual).
+- The egui app runs against a phone over adb on Windows (in the VM). On macOS *(tester)*.
+- `glmocr_handwriting --ignored` passes on CPU on Linux, on the Windows VM, and on the macOS runner (manual workflow).
 
 ### Phase 4: Tauri skeleton and the magnifier MVP
 
@@ -218,10 +232,10 @@ crates/
 
 **Exit criteria:**
 
-- On all three OSes: ≥25 fps magnified from a 3840×2160 source, with ≤100 ms added latency.
+- ≥25 fps magnified from a 3840×2160 source, with ≤100 ms added latency, on both Linux boxes. On Windows and macOS *(tester)*.
 - Every control works from the keyboard, with a clearly visible focus ring.
 - The UI is usable at 200% OS text scale and in each high-contrast theme.
-- GNOME Zoom, Windows Magnifier and macOS Zoom follow focus around the controls.
+- GNOME Zoom and Windows Magnifier (in the VM) follow focus around the controls. macOS Zoom *(tester)*.
 - At least two low-vision testers complete the core tasks.
 
 ### Phase 5: Phone pairing in the GUI (QR / WebRTC)
@@ -245,20 +259,20 @@ crates/
 
 **Exit criteria:**
 
-- QR pairing works on all three OSes.
-- Firewall prompts are documented: Windows "private networks", macOS incoming connections, and `NSLocalNetworkUsageDescription`.
+- QR pairing works on Linux and on Windows (in the VM). On macOS *(tester)*.
+- Firewall prompts are documented: Windows "private networks" (from the VM), and macOS incoming connections and `NSLocalNetworkUsageDescription` (from Apple's documentation until a tester confirms them).
 
 ### Phase 6: Packaging and beta release (the magnifier beta)
 
 - **Linux:** .deb/.rpm plus Flatpak (the GNOME runtime gives a current WebKitGTK; `--device=all` for adb USB). The egui AppImage continues alongside until switchover.
 - **Windows:** NSIS installer with the WebView2 bootstrapper, signed (Azure Trusted Signing or an OV certificate) to avoid SmartScreen. The uninstaller kills `adb.exe`.
-- **macOS:** .dmg with Developer ID, hardened runtime and notarisation. The bundled adb and `libwebgpu_dawn.dylib` are re-signed and placed in `Contents/Frameworks` and `Resources`.
+- **macOS:** .dmg with Developer ID, hardened runtime and notarisation. The bundled adb and `libwebgpu_dawn.dylib` are re-signed and placed in `Contents/Frameworks` and `Resources`. The beta marks macOS *experimental* until a tester has run it. The Apple developer fee (about $99/yr) can wait until then.
 - **Bundled adb:** check the platform-tools licence first. The fallback is adb built from AOSP source (Apache-2.0). Update `NOTICE`.
 - **Models are not bundled.** They download with consent on first use of reading features.
 - **Release workflow:** add a three-OS matrix job for `squigl-desktop`. The existing Linux tarball, AppImage and models steps stay unchanged.
 - **Docs:** a short user guide with screenshots (`docs/user-guide.md`). The README is split into user and developer docs.
 
-**Exit criteria:** install → pair → magnify works on clean Windows 11, macOS 14, Ubuntu 24.04 and Fedora machines.
+**Exit criteria:** install → pair → magnify works on clean Ubuntu 24.04 and Fedora machines, and on a clean Windows 11 (the VM restored to a fresh snapshot). On macOS 14 *(tester)*.
 
 ### Phase 7: Extract read orchestration (overlaps Phases 4–6; touches only egui and engine)
 
@@ -304,7 +318,7 @@ crates/
 **Exit criteria:**
 
 - A feature checklist against egui is complete.
-- The `glmocr_handwriting` readings render and are spoken correctly, maths included, on each OS.
+- The `glmocr_handwriting` readings render and are spoken correctly, maths included, on Linux and Windows (the VM has a sound device). On macOS *(tester)*.
 - Two low-vision testers and two teachers complete their core tasks: read a printed page aloud, and transcribe and check a handwritten script.
 
 ### Phase 9: Switchover ("Squigl 1.0")

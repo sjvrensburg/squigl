@@ -6,7 +6,7 @@
 //!   system FFmpeg/OpenH264 is needed). Hard-limited to H.264 level 5.2 frame sizes.
 //! - **FFmpeg** (`ffmpeg` cargo feature; links the system libavcodec) using the native
 //!   `h264` decoder, which has no practical size limit. Selected via
-//!   [`Backend::Ffmpeg`]; the default is whichever is "best available".
+//!   `Backend::Ffmpeg`; the default is whichever is "best available".
 
 use crate::error::{Error, Result};
 use openh264::decoder::Decoder as H264Decoder;

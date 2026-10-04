@@ -717,7 +717,10 @@ mod tests {
                     CROP_PROMPT
                 };
                 let img = image::open(png).unwrap().to_rgb8();
-                let text = model.generate(&img, prompt, 1024).unwrap().text;
+                let text = {
+                    let _turn = crate::runtime_turn();
+                    model.generate(&img, prompt, 1024).unwrap().text
+                };
                 let expected = png.with_extension(format!("{}.txt", device.name().to_lowercase()));
                 if bless {
                     std::fs::write(&expected, format!("{text}\n")).unwrap();
@@ -772,10 +775,13 @@ mod tests {
         let model_dir = crate::models::GLM_OCR.ensure(&|s| println!("{s}")).unwrap();
         for device in [Device::WebGpu, Device::Cpu] {
             let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
-            let text = model
-                .generate(&img, squigl_engine::transcribe::CROP_PROMPT, 1024)
-                .unwrap()
-                .text;
+            let text = {
+                let _turn = crate::runtime_turn();
+                model
+                    .generate(&img, squigl_engine::transcribe::CROP_PROMPT, 1024)
+                    .unwrap()
+                    .text
+            };
             println!("{}: {text:?}", device.name());
             // Line 3's reading may shift without line 2 as context (`model.fit`
             // reads as `model .fib`, closer to the ink); what must hold is two lines,

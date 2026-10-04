@@ -26,6 +26,7 @@ cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
 cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --workspace --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --lib   # CI enforces this too (libraries only: the binaries' docs are --help text)
 ```
 
 `squigl --rotate 270 --screenshot-after 8 --screenshot-path /tmp/gui.png` renders the
