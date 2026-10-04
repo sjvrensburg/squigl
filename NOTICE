@@ -77,6 +77,18 @@ MiTeX (https://github.com/mitex-rs/mitex)
 egui / eframe (https://github.com/emilk/egui)
   Copyright Emil Ernerfeldt. MIT License or Apache License 2.0.
 
+Tauri (https://github.com/tauri-apps/tauri)
+  Copyright The Tauri Programme within The Commons Conservancy. MIT License or
+  Apache License 2.0. The desktop app's shell (crates/squigl-desktop). It draws
+  through the system's own web view -- WebKitGTK (LGPL-2.1) on Linux, WebView2 on
+  Windows, WKWebView on macOS -- which it links but does not ship.
+
+Svelte (https://github.com/sveltejs/svelte)
+  Copyright Svelte contributors. MIT License. The desktop app's web UI is compiled
+  with it (crates/squigl-desktop/ui); its runtime is bundled into the UI. The UI's
+  other npm dependencies are listed with their licenses in
+  crates/squigl-desktop/ui/package-lock.json.
+
 v4l2loopback (https://github.com/umlaeute/v4l2loopback)
   GNU General Public License v2.0. A kernel module the user installs separately;
   this project talks to it through the V4L2 device interface only and neither

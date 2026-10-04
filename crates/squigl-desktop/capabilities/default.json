@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The main window may use the core APIs (events, the window) and the app's own commands.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:window:allow-set-fullscreen", "core:window:allow-is-fullscreen"]
+}
