@@ -3,18 +3,12 @@
 //! the `squigl-core` library; this crate is the window and the reconnect policy.
 
 mod app;
-mod enhance;
-mod erase;
-mod history;
-mod layout;
 #[cfg(feature = "local-model")]
 mod local;
 #[cfg(feature = "math")]
 mod mathtext;
 mod panes;
 mod settings;
-mod stream;
-mod transcribe;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -22,8 +16,11 @@ use squigl_core::cameras::is_usable_size;
 use squigl_core::convert::Rotation;
 use squigl_core::decode::Backend;
 use squigl_core::{ConnectOptions, Facing};
+use squigl_engine::geometry::Crop;
+use squigl_engine::stream::{Resolution, StreamConfig, Worker};
+use squigl_engine::transcribe::BackendConfig;
+use squigl_engine::{erase, transcribe};
 use std::path::PathBuf;
-use stream::{Resolution, StreamConfig, Worker};
 
 /// Live view, crop and capture an Android phone's camera.
 #[derive(Parser, Debug)]
@@ -267,6 +264,27 @@ fn main() -> Result<()> {
             ..Default::default()
         }
     });
+    // The engine builds the HTTP backends; the built-in model is this binary's.
+    let backend_factory: app::BackendFactory = Box::new(|backend| match backend {
+        #[cfg(feature = "local-model")]
+        BackendConfig::Local {
+            name,
+            device,
+            max_tokens,
+            max_image_tokens,
+        } => Some(Box::new(local::LocalBackend::new(
+            name.clone(),
+            *device,
+            *max_tokens,
+            *max_image_tokens,
+        ))),
+        #[cfg(not(feature = "local-model"))]
+        BackendConfig::Local { name, .. } => {
+            log::warn!("backend {name:?} needs a build with the local-model feature");
+            None
+        }
+        other => other.build(),
+    });
     #[cfg(feature = "local-model")]
     let detector_factory: app::DetectorFactory = Box::new(|layout| {
         layout.enabled.then(|| {
@@ -279,10 +297,10 @@ fn main() -> Result<()> {
     #[cfg(not(feature = "local-model"))]
     let detector_factory: app::DetectorFactory = Box::new(|_| None);
     #[cfg(feature = "math")]
-    let typesetter: Option<std::sync::Arc<dyn app::Typesetter>> =
+    let typesetter: Option<std::sync::Arc<dyn squigl_engine::typeset::Typesetter>> =
         Some(std::sync::Arc::new(mathtext::Renderer::new()));
     #[cfg(not(feature = "math"))]
-    let typesetter: Option<std::sync::Arc<dyn app::Typesetter>> = None;
+    let typesetter: Option<std::sync::Arc<dyn squigl_engine::typeset::Typesetter>> = None;
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -308,6 +326,7 @@ fn main() -> Result<()> {
                 worker,
                 save_dir,
                 gui_config,
+                backend_factory,
                 detector_factory,
                 typesetter,
                 screenshot,
@@ -326,13 +345,13 @@ fn main() -> Result<()> {
 }
 
 /// `X,Y,W,H` in view pixels, for the development flags.
-fn parse_crop(s: &str) -> anyhow::Result<app::Crop> {
+fn parse_crop(s: &str) -> anyhow::Result<Crop> {
     let v: Vec<usize> = s
         .split(',')
         .map(|n| n.trim().parse())
         .collect::<Result<_, _>>()?;
     anyhow::ensure!(v.len() == 4, "wanted X,Y,W,H, got {s:?}");
-    Ok(app::Crop {
+    Ok(Crop {
         x: v[0],
         y: v[1],
         w: v[2],

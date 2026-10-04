@@ -3,8 +3,8 @@
 //! URL, model and key go here), and the block detector. Edits are made to a draft;
 //! Save writes the file and applies it, Cancel drops the draft.
 
-use crate::transcribe::{BackendConfig, Config, LocalDevice, Mode};
 use egui::{ComboBox, DragValue, Slider, TextEdit};
+use squigl_engine::transcribe::{BackendConfig, Config, LocalDevice, Mode};
 
 /// What the window asked for this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

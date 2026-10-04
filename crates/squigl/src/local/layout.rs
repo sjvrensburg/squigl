@@ -6,8 +6,6 @@
 //! (mask → polygon → quad) follows PaddleX's `layout_analysis` processors.
 
 use super::{attempts, models, open_session, Device, DevicePref, GPU_LOST};
-use crate::app::Crop;
-use crate::layout::{self, BlockDetector};
 use anyhow::{anyhow, bail, Result};
 use image::{GrayImage, RgbImage};
 use imageproc::contours::{find_contours, BorderType};
@@ -16,6 +14,8 @@ use imageproc::point::Point;
 use ndarray::{Array, ArrayD, IxDyn};
 use ort::session::Session;
 use ort::value::Tensor;
+use squigl_engine::geometry::Crop;
+use squigl_engine::layout::{self, BlockDetector};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

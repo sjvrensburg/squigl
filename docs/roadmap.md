@@ -142,10 +142,11 @@ crates/
   - Core's `Error::Sink` becomes generic; `Error::Loopback` moves to the v4l2 crate.
   - In the GUI, the `--device` tee (`crates/squigl/src/stream.rs:8,290,334,387`) becomes Linux-only by target cfg (done that way rather than as a cargo feature: same behaviour on Linux, nothing to remember to enable).
 - **1c. Create `squigl-engine` from the egui-free modules:** enhance, erase, history, layout, stream, transcribe (including `Config`).
-  - New `geometry` module: `Crop`, `Selection`, `zoom_to_view`, `wheel_notches`, from `app.rs:73-188,367-444`.
+  - New `geometry` module: `Crop`, `Selection`, `zoom_to_view`, from `app.rs:73-188,367-444`. (`wheel_notches` stays in `app.rs`: it's scroll-input handling, not geometry.)
   - New `render` module: `render_region` and `render_selection`, from `app.rs:349-428`.
   - New `typeset` module: `TintSpan`, `Typesetter` and `typeset_source`. `typeset_source` takes a tint closure, so `Color32` stays in the UI.
   - This removes the back-references into `app.rs` from `layout.rs:5`, `local/layout.rs:9` and `mathtext.rs:7,495`.
+  - `LocalDevice` is defined once, in the engine (`local::DevicePref` aliases it). `BackendConfig::build` builds only the HTTP backends; the GUI passes a `BackendFactory` that adds the built-in model, the same pattern as `DetectorFactory` (and the shape of Phase 2's `EngineDeps`).
 - **1d. Create `squigl-models` (`local/*`) and `squigl-math` (`mathtext.rs` + `assets/mitex`).** Rename `crates/squigl` to `crates/squigl-egui`, keeping `[[bin]] name = "squigl"`.
 
 **Exit criteria:**

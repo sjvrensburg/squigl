@@ -13,24 +13,27 @@
 //! rectangle (a curved or tilted page) is rectified before it is shown or read. The
 //! crop's corners can be dragged, so a block is a starting point, not a verdict.
 
-use crate::enhance::{self, EnhanceConfig, EnhanceMode};
-use crate::erase;
-use crate::history::{self, History};
-use crate::layout::{self, Block, BlockDetector, Quad, Role};
 use crate::panes::{Pane, Panes};
 use crate::settings;
-use crate::stream::{Shared, Status, Worker};
-use crate::transcribe::{
-    BackendConfig, Confidence, Config, LayoutConfig, Mode, Reading, Transcriber, Transcription,
-    UiConfig,
-};
 use egui::{
     Color32, ColorImage, ComboBox, FontId, Key, Pos2, Rect, Sense, Shape, Slider, Stroke,
     StrokeKind, TextureHandle, TextureOptions, Vec2,
 };
-use squigl_core::convert::{i420_region_to_rgba, region_size, rotate_rgba, Rotation};
+use squigl_core::convert::Rotation;
 use squigl_core::decode::YuvFrame;
 use squigl_core::Facing;
+use squigl_engine::enhance::{self, EnhanceConfig, EnhanceMode};
+use squigl_engine::erase;
+use squigl_engine::geometry::{zoom_to_view, Crop, Selection};
+use squigl_engine::history::{self, History};
+use squigl_engine::layout::{self, Block, BlockDetector, Quad, Role};
+use squigl_engine::render::{render_region, render_selection};
+use squigl_engine::stream::{Shared, Status, Worker};
+use squigl_engine::transcribe::{
+    BackendConfig, Confidence, Config, LayoutConfig, Mode, Reading, Transcriber, Transcription,
+    UiConfig,
+};
+use squigl_engine::typeset::{typeset_source, Typesetter};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
@@ -46,8 +49,6 @@ const DETECT_MAX_EDGE: usize = 1600;
 const LIVE_DETECT_INTERVAL: Duration = Duration::from_millis(200);
 /// How close (screen px) to a corner a drag must start to take the corner.
 const HANDLE_PX: f32 = 10.0;
-/// Drags smaller than this are a click, which clears the crop.
-const MIN_CROP_PX: usize = 8;
 const SELECTED_COLOUR: Color32 = Color32::from_rgb(255, 196, 0);
 /// Hand-erased strokes on the preview, and the brush on the Zoom pane.
 const ERASED_COLOUR: Color32 = Color32::from_rgb(255, 90, 90);
@@ -69,187 +70,18 @@ fn role_colour(role: Role) -> Color32 {
 /// slivers the detector leaves at line edges, not blocks.
 const MIN_BLOCK_FRACTION: f32 = 0.012;
 
-/// A rectangle in pixels, in whichever space the context says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Crop {
-    pub x: usize,
-    pub y: usize,
-    pub w: usize,
-    pub h: usize,
-}
-
-impl Crop {
-    fn whole(w: usize, h: usize) -> Self {
-        Self { x: 0, y: 0, w, h }
-    }
-
-    fn from_corners(a: (usize, usize), b: (usize, usize)) -> Self {
-        let (x0, x1) = (a.0.min(b.0), a.0.max(b.0));
-        let (y0, y1) = (a.1.min(b.1), a.1.max(b.1));
-        Self {
-            x: x0,
-            y: y0,
-            w: x1 - x0,
-            h: y1 - y0,
-        }
-    }
-
-    /// Clamps to a `width`x`height` space; `None` if nothing usable is left.
-    pub fn clamped(self, width: usize, height: usize) -> Option<Self> {
-        let x = self.x.min(width);
-        let y = self.y.min(height);
-        let w = self.w.min(width - x);
-        let h = self.h.min(height - y);
-        (w >= MIN_CROP_PX && h >= MIN_CROP_PX).then_some(Self { x, y, w, h })
-    }
-
-    /// Shifted by (`dx`, `dy`) and kept inside a `width`x`height` space.
-    fn moved(self, dx: i64, dy: i64, width: usize, height: usize) -> Self {
-        let x = (self.x as i64 + dx).clamp(0, (width - self.w) as i64) as usize;
-        let y = (self.y as i64 + dy).clamp(0, (height - self.h) as i64) as usize;
-        Self { x, y, ..self }
-    }
-
-    /// Scaled by `factor` about its centre, clamped to the space and to
-    /// [`MIN_CROP_PX`]: the digital zoom in and out.
-    fn scaled(self, factor: f32, width: usize, height: usize) -> Self {
-        let (cx, cy) = (
-            self.x as f32 + self.w as f32 / 2.0,
-            self.y as f32 + self.h as f32 / 2.0,
-        );
-        let w = ((self.w as f32 * factor).round() as usize).clamp(MIN_CROP_PX, width);
-        let h = ((self.h as f32 * factor).round() as usize).clamp(MIN_CROP_PX, height);
-        let x = ((cx - w as f32 / 2.0).round().max(0.0) as usize).min(width - w);
-        let y = ((cy - h as f32 / 2.0).round().max(0.0) as usize).min(height - h);
-        Self { x, y, w, h }
-    }
-
-    fn contains(self, x: usize, y: usize) -> bool {
-        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
-    }
-
-    fn area(self) -> usize {
-        self.w * self.h
-    }
-
-    /// Intersection over union with `other`: how much the same box they are.
-    fn iou(self, other: Self) -> f32 {
-        let x0 = self.x.max(other.x);
-        let y0 = self.y.max(other.y);
-        let x1 = (self.x + self.w).min(other.x + other.w);
-        let y1 = (self.y + self.h).min(other.y + other.h);
-        if x1 <= x0 || y1 <= y0 {
-            return 0.0;
-        }
-        let inter = ((x1 - x0) * (y1 - y0)) as f32;
-        inter / ((self.area() + other.area()) as f32 - inter)
-    }
-
-    /// Maps a rectangle in view space (the source frame turned by `rotation`, so
-    /// `view_w`x`view_h` pixels) back to the source frame.
-    fn to_source(self, rotation: Rotation, view_w: usize, view_h: usize) -> Self {
-        let Self { x, y, w, h } = self;
-        match rotation {
-            Rotation::None => self,
-            Rotation::Cw90 => Self {
-                x: y,
-                y: view_w - x - w,
-                w: h,
-                h: w,
-            },
-            Rotation::Cw180 => Self {
-                x: view_w - x - w,
-                y: view_h - y - h,
-                w,
-                h,
-            },
-            Rotation::Cw270 => Self {
-                x: view_h - y - h,
-                y: x,
-                w: h,
-                h: w,
-            },
-        }
-    }
-}
-
-/// Turns smoothed scroll deltas into whole wheel notches (positive = up/away).
 /// "1 stroke", "3 strokes".
 fn strokes(n: usize) -> String {
     format!("{n} stroke{}", if n == 1 { "" } else { "s" })
 }
 
+/// Turns smoothed scroll deltas into whole wheel notches (positive = up/away).
 fn wheel_notches(accum: &mut f32, delta: f32) -> i32 {
     const NOTCH: f32 = 40.0;
     *accum += delta;
     let notches = (*accum / NOTCH).trunc();
     *accum -= notches * NOTCH;
     notches as i32
-}
-
-/// A byte range of the text handed to [`Typesetter::render`], to be tinted by
-/// hesitation. Disjoint and given in byte order; `severity` breaks a tie when a
-/// LaTeX maths segment is shaded as a whole and more than one span falls inside
-/// it (higher wins).
-///
-/// Only `mathtext::Renderer` (the `math`-feature `Typesetter`) reads the fields;
-/// without that feature there is no implementor, so a build without it is warned
-/// they go unread.
-#[derive(Debug)]
-#[cfg_attr(not(feature = "math"), allow(dead_code))]
-pub struct TintSpan {
-    pub start: usize,
-    pub end: usize,
-    pub color: [u8; 4],
-    pub severity: u8,
-}
-
-/// Typesets a reading (LaTeX maths and all) into pixels; `None` in a build without
-/// one. Implemented by `mathtext::Renderer`.
-pub trait Typesetter: Send + Sync {
-    /// `width_pt` points wide, text `size_pt`, `scale` pixels per point, in `rgb`.
-    /// `spans` tints hesitant/wavering tokens -- plain text by `#highlight`, a
-    /// LaTeX maths segment as a whole by its worst overlapping span.
-    fn render(
-        &self,
-        text: &str,
-        spans: &[TintSpan],
-        width_pt: f32,
-        size_pt: f32,
-        scale: f32,
-        rgb: [u8; 3],
-    ) -> anyhow::Result<(image::RgbaImage, f32)>;
-}
-
-/// The text to typeset for a reading, and the tint spans over it: the tokens'
-/// concatenation when they are valid (so span byte offsets line up exactly; see
-/// [`Reading::tokens_if_valid`]) and one span per non-steady token, else the
-/// reading's own text and no spans.
-fn typeset_source(r: &Reading, ui_cfg: &UiConfig) -> (String, Vec<TintSpan>) {
-    let Some(tokens) = r.tokens_if_valid() else {
-        return (r.text.clone(), Vec::new());
-    };
-    let mut text = String::new();
-    let mut spans = Vec::new();
-    for tok in tokens {
-        let start = text.len();
-        text.push_str(&tok.text);
-        let end = text.len();
-        let confidence = tok.confidence(ui_cfg);
-        if let Some(color) = confidence_tint(confidence) {
-            spans.push(TintSpan {
-                start,
-                end,
-                color: color.to_srgba_unmultiplied(),
-                severity: match confidence {
-                    Confidence::Hesitant => 2,
-                    Confidence::Wavering => 1,
-                    Confidence::Steady => 0,
-                },
-            });
-        }
-    }
-    (text, spans)
 }
 
 /// The narrowest the readings are laid out at, in points: a narrower Reading pane
@@ -319,6 +151,11 @@ struct ResultEntry {
 /// it is disabled.
 pub type DetectorFactory = Box<dyn Fn(&LayoutConfig) -> Option<Arc<dyn BlockDetector>>>;
 
+/// Builds a transcription backend from its config entry; `None` for one this build
+/// cannot provide. [`BackendConfig::build`] covers the HTTP ones; the built-in model
+/// is the caller's to add.
+pub type BackendFactory = Box<dyn Fn(&BackendConfig) -> Option<Box<dyn Transcriber>>>;
+
 /// What a results list belongs to.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ResultsScope {
@@ -342,105 +179,6 @@ enum Drag {
     /// Dragging one corner of the selection (index into its quad, clockwise from
     /// the top-left).
     Corner(usize),
-}
-
-/// Fetches a view-space region of `frame` as rotated RGBA, every `step`-th pixel.
-/// Returns the pixels and their size.
-fn render_region(
-    frame: &YuvFrame,
-    rotation: Rotation,
-    region: Crop,
-    step: usize,
-) -> (Vec<u8>, usize, usize) {
-    let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
-    let src = region.to_source(rotation, vw, vh);
-    let (sw, sh) = region_size(src.w, src.h, step);
-    let mut buf = vec![0u8; sw * sh * 4];
-    i420_region_to_rgba(frame, src.x, src.y, src.w, src.h, step, &mut buf);
-    let (ow, oh) = rotation.rotated_size(sw, sh);
-    (rotate_rgba(&buf, sw, sh, rotation), ow, oh)
-}
-
-/// What is selected on the view: a rectangle, and -- when it came from a detected
-/// block that is not rectangular -- the quad inside it that is the actual block.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Selection {
-    pub rect: Crop,
-    pub quad: Option<Quad>,
-}
-
-/// The pixels of a selection (or the whole view when there is none) at every
-/// `step`-th pixel, rotated as shown, with the `erased` regions (view space) painted
-/// over and, for a quad, rectified. `enhance`, when given, is applied last -- this is
-/// the crop the model reads and/or the crop panel shows; the preview passes none and
-/// live block detection calls [`render_region`] directly, raw. Returns the pixels and
-/// their size.
-fn render_selection(
-    frame: &YuvFrame,
-    rotation: Rotation,
-    selection: Option<Selection>,
-    step: usize,
-    erased: &[erase::Stroke],
-    enhance: Option<&EnhanceConfig>,
-) -> (Vec<u8>, usize, usize) {
-    let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
-    let region = selection.map_or(Crop::whole(vw, vh), |sel| sel.rect);
-    let (mut rgba, w, h) = render_region(frame, rotation, region, step);
-    if !erased.is_empty() {
-        let mut img =
-            image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer matches size");
-        erase::erase(
-            &mut img,
-            &erase::to_region(erased, (region.x, region.y), step),
-        );
-        rgba = img.into_raw();
-    }
-    let (rgba, w, h) = match selection.and_then(|sel| sel.quad) {
-        None => (rgba, w, h),
-        Some(quad) => {
-            // The quad in the rendered region's own pixels.
-            let local = quad.map(|[x, y]| {
-                [
-                    (x - region.x as f32) / step as f32,
-                    (y - region.y as f32) / step as f32,
-                ]
-            });
-            let img =
-                image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer matches size");
-            match layout::rectify(&img, &local) {
-                Some(out) => {
-                    let (ow, oh) = (out.width() as usize, out.height() as usize);
-                    (out.into_raw(), ow, oh)
-                }
-                None => (img.into_raw(), w, h),
-            }
-        }
-    };
-    match enhance {
-        Some(cfg) if cfg.mode != EnhanceMode::Off => {
-            let img =
-                image::RgbaImage::from_raw(w as u32, h as u32, rgba).expect("buffer matches size");
-            let out = enhance::apply(&img, cfg);
-            (out.into_raw(), w, h)
-        }
-        _ => (rgba, w, h),
-    }
-}
-
-/// A point given as a fraction of the Zoom pane's image of `selection` (rectified,
-/// for a quad), in view space. `None` for a quad too degenerate to invert.
-fn zoom_to_view(selection: Selection, [fx, fy]: [f32; 2]) -> Option<[f32; 2]> {
-    let rect = selection.rect;
-    let (ox, oy) = (rect.x as f32, rect.y as f32);
-    match selection.quad {
-        None => Some([ox + fx * rect.w as f32, oy + fy * rect.h as f32]),
-        Some(quad) => {
-            let local = quad.map(|[x, y]| [x - ox, y - oy]);
-            let (w, h) = layout::rectified_size(&local);
-            let [x, y] = layout::unrectify(&local, [fx * w as f32, fy * h as f32])?;
-            Some([ox + x, oy + y])
-        }
-    }
 }
 
 /// A texture cached against the frame, region, step and rotation it was made from, so
@@ -565,6 +303,7 @@ pub struct App {
     backend_configs: Vec<BackendConfig>,
     backends: Vec<Arc<dyn Transcriber>>,
     selected_backend: usize,
+    backend_factory: BackendFactory,
     detector_factory: DetectorFactory,
     /// The Settings window's draft while it is open.
     draft: Option<Config>,
@@ -635,6 +374,7 @@ impl App {
         worker: Worker,
         save_dir: PathBuf,
         config: Config,
+        backend_factory: BackendFactory,
         detector_factory: DetectorFactory,
         typesetter: Option<Arc<dyn Typesetter>>,
         screenshot: Option<(Duration, PathBuf)>,
@@ -665,6 +405,7 @@ impl App {
             backend_configs: Vec::new(),
             backends: Vec::new(),
             selected_backend: 0,
+            backend_factory,
             detector_factory,
             draft: None,
             settings_open: false,
@@ -716,7 +457,7 @@ impl App {
                 .iter()
                 .position(|c| c == b)
                 .map(|i| Arc::clone(&self.backends[i]));
-            let built = existing.or_else(|| b.build().map(Into::into));
+            let built = existing.or_else(|| (self.backend_factory)(b).map(Into::into));
             if let Some(t) = built {
                 backends.push(t);
                 configs.push(b.clone());
@@ -2965,7 +2706,9 @@ fn typeset_reading(
 ) -> Typeset {
     let colour = ui.visuals().text_color();
     let scale = ui.ctx().pixels_per_point() * 1.5;
-    let (text, spans) = typeset_source(r, ui_cfg);
+    let (text, spans) = typeset_source(r, ui_cfg, |c| {
+        confidence_tint(c).map(|colour| colour.to_srgba_unmultiplied())
+    });
     let rgb = [colour.r(), colour.g(), colour.b()];
     let mut result = ts.render(&text, &spans, width_pt, size_pt, scale, rgb);
     if let Err(e) = &result {
@@ -3026,6 +2769,7 @@ impl FpsCounter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use squigl_engine::typeset::TintSpan;
 
     /// One headless egui pass.
     fn pass(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) {
@@ -3663,177 +3407,5 @@ mod tests {
         h.pass(key(Key::Enter));
         assert_eq!(h.shortcuts, 1);
         assert_eq!(h.rotations, 0);
-    }
-
-    /// A 6x4 source frame with luma = 16 + x + 10 y, so every pixel is identifiable.
-    fn frame() -> YuvFrame {
-        let (w, h) = (6, 4);
-        let y = (0..h)
-            .flat_map(|row| (0..w).map(move |col| (16 + col + 10 * row) as u8))
-            .collect();
-        YuvFrame {
-            width: w,
-            height: h,
-            y,
-            u: vec![128; 6],
-            v: vec![128; 6],
-        }
-    }
-
-    /// The red channel of a rendered gray pixel: monotonic in the source luma, so it
-    /// identifies the source pixel.
-    fn at(rgba: &[u8], w: usize, x: usize, y: usize) -> u8 {
-        rgba[(y * w + x) * 4]
-    }
-
-    #[test]
-    fn crop_maps_back_to_source_under_every_rotation() {
-        let f = frame();
-        // A 2x1 view-space region; whichever way the frame is turned, rendering it
-        // must equal cutting it out of the rotated whole view.
-        for rotation in [
-            Rotation::None,
-            Rotation::Cw90,
-            Rotation::Cw180,
-            Rotation::Cw270,
-        ] {
-            let (vw, vh) = rotation.rotated_size(f.width, f.height);
-            let (whole, ww, _) = render_region(&f, rotation, Crop::whole(vw, vh), 1);
-            let region = Crop {
-                x: 1,
-                y: 1,
-                w: 2,
-                h: 1,
-            };
-            let (part, pw, ph) = render_region(&f, rotation, region, 1);
-            assert_eq!((pw, ph), (2, 1), "{rotation:?}");
-            for x in 0..2 {
-                assert_eq!(
-                    at(&part, pw, x, 0),
-                    at(&whole, ww, region.x + x, region.y),
-                    "{rotation:?} pixel {x}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn rotated_whole_view_has_the_source_corner_where_expected() {
-        let f = frame();
-        let (v, w, _) = render_region(&f, Rotation::None, Crop::whole(6, 4), 1);
-        let src_top_left = at(&v, w, 0, 0);
-        // Clockwise: the source's top-left corner is the view's top-right.
-        let (v, w, h) = render_region(&f, Rotation::Cw90, Crop::whole(4, 6), 1);
-        assert_eq!((w, h), (4, 6));
-        assert_eq!(at(&v, w, 3, 0), src_top_left);
-        // Counter-clockwise: bottom-left.
-        let (v, w, _) = render_region(&f, Rotation::Cw270, Crop::whole(4, 6), 1);
-        assert_eq!(at(&v, w, 0, 5), src_top_left);
-    }
-
-    #[test]
-    fn iou_is_overlap_over_union() {
-        let a = Crop {
-            x: 0,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        let b = Crop {
-            x: 5,
-            y: 0,
-            w: 10,
-            h: 10,
-        };
-        assert!((a.iou(a) - 1.0).abs() < 1e-6);
-        assert!((a.iou(b) - 50.0 / 150.0).abs() < 1e-6);
-        assert_eq!(a.iou(Crop { x: 20, ..a }), 0.0);
-    }
-
-    #[test]
-    fn small_drags_are_clicks() {
-        assert!(Crop::from_corners((10, 10), (12, 40))
-            .clamped(100, 100)
-            .is_none());
-        assert_eq!(
-            Crop::from_corners((90, 5), (200, 20)).clamped(100, 100),
-            Some(Crop {
-                x: 90,
-                y: 5,
-                w: 10,
-                h: 15
-            })
-        );
-    }
-
-    #[test]
-    fn an_erased_region_is_flat_in_every_render_and_the_rest_is_untouched() {
-        let f = frame();
-        // Covers pixel centres (1..3, 1..3) and nothing else.
-        let erased = erase::Stroke::line([2.0, 1.5], [2.0, 2.5], 0.75);
-        let (raw, w, _) = render_selection(&f, Rotation::None, None, 1, &[], None);
-        let (out, _, _) = render_selection(
-            &f,
-            Rotation::None,
-            None,
-            1,
-            std::slice::from_ref(&erased),
-            None,
-        );
-        let inside = |x: usize, y: usize| (1..3).contains(&x) && (1..3).contains(&y);
-        let fill = at(&out, w, 1, 1);
-        for y in 0..4 {
-            for x in 0..6 {
-                if inside(x, y) {
-                    assert_eq!(at(&out, w, x, y), fill, "({x}, {y}) inside");
-                } else {
-                    assert_eq!(at(&out, w, x, y), at(&raw, w, x, y), "({x}, {y}) outside");
-                }
-            }
-        }
-        // A selection over part of it sees the erasure in its own pixels: flat, though
-        // its fill is sampled from the ring as far as this render reaches.
-        let sel = Selection {
-            rect: Crop {
-                x: 2,
-                y: 0,
-                w: 4,
-                h: 4,
-            },
-            quad: None,
-        };
-        let (part, pw, _) = render_selection(&f, Rotation::None, Some(sel), 1, &[erased], None);
-        assert_eq!(at(&part, pw, 0, 1), at(&part, pw, 0, 2));
-        assert_ne!(at(&part, pw, 0, 2), at(&raw, w, 2, 2));
-        assert_eq!(at(&part, pw, 1, 2), at(&raw, w, 3, 2));
-    }
-
-    #[test]
-    fn a_zoom_pane_point_maps_to_view_space() {
-        let rect = Crop {
-            x: 100,
-            y: 50,
-            w: 200,
-            h: 80,
-        };
-        let plain = Selection { rect, quad: None };
-        assert_eq!(zoom_to_view(plain, [0.25, 0.5]), Some([150.0, 90.0]));
-        assert_eq!(zoom_to_view(plain, [1.0, 1.0]), Some([300.0, 130.0]));
-        // For a quad the rectified image's corners are the quad's.
-        let quad: Quad = [[110.0, 55.0], [290.0, 70.0], [280.0, 128.0], [105.0, 110.0]];
-        let tilted = Selection {
-            rect,
-            quad: Some(quad),
-        };
-        for (corner, want) in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
-            .iter()
-            .zip(quad)
-        {
-            let got = zoom_to_view(tilted, *corner).unwrap();
-            assert!(
-                (got[0] - want[0]).abs() < 1e-2 && (got[1] - want[1]).abs() < 1e-2,
-                "{got:?} != {want:?}"
-            );
-        }
     }
 }

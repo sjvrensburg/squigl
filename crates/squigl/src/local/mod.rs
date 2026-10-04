@@ -5,13 +5,13 @@ mod glmocr;
 pub mod layout;
 pub mod models;
 
-use crate::transcribe::{Mode, Reading, Transcriber, Transcription};
 use anyhow::{anyhow, bail, Context, Result};
 pub use glmocr::Device;
 use glmocr::Model;
 use ort::environment::Environment;
 use ort::ep::{ExecutionProviderDispatch, WebGPU, CPU};
 use ort::session::Session;
+use squigl_engine::transcribe::{Mode, Reading, Transcriber, Transcription};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -97,16 +97,9 @@ fn attempts(device: DevicePref) -> &'static [Device] {
 
 // ---------------------------------------------------------------------------
 
-/// Which device to try.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DevicePref {
-    /// WebGPU, falling back to CPU if the provider cannot be set up.
-    #[default]
-    Auto,
-    Webgpu,
-    Cpu,
-}
+/// Which device to try: the config's own type, so the config can name it in a build
+/// without the models.
+pub use squigl_engine::transcribe::LocalDevice as DevicePref;
 
 enum State {
     /// Downloading or loading; the string is shown in the window.

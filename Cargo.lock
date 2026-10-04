@@ -6063,7 +6063,6 @@ name = "squigl"
 version = "0.10.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "chrono",
  "clap",
  "eframe",
@@ -6080,9 +6079,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "squigl-core",
- "squigl-v4l2",
+ "squigl-engine",
  "tokenizers",
- "toml 1.1.6+spec-1.1.0",
  "typst",
  "typst-as-lib",
  "typst-layout",
@@ -6119,6 +6117,24 @@ dependencies = [
  "str0m",
  "thiserror 2.0.20",
  "ureq 2.12.1",
+]
+
+[[package]]
+name = "squigl-engine"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "image",
+ "imageproc",
+ "log",
+ "serde",
+ "serde_json",
+ "squigl-core",
+ "squigl-v4l2",
+ "toml 1.1.6+spec-1.1.0",
+ "ureq 3.4.1",
 ]
 
 [[package]]

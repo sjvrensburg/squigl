@@ -140,37 +140,46 @@ browser to H.264 since that's all squigl decodes) at `/` and a minimal WHIP-shap
 endpoint at `POST /whip` (one session at a time; a second POST while one is active gets a
 503). `contrib/` has boot-time loopback config and a systemd user unit.
 
-`crates/squigl` is the egui document-camera window (`stream.rs`: worker thread with
-the reconnect loop, publishing the latest `YuvFrame`; `app.rs`: preview, crop in
-*view* (rotated) coordinates mapped back to the source frame, capture, save, and
-hand erasures (`App::erased`, view-space `erase::Stroke`s -- path plus radius --
-painted with a brush over the Zoom pane, whose size is in screen points, each point
-mapped back through the rectification by `zoom_to_view`; `render_selection` paints
-them before rectifying and enhancing, so reads, saves and both views agree, while
-live block detection stays raw; a retake, zoom or rotation drops them; ctrl+wheel is
-egui's `zoom_delta`, so it never reaches the box-resizing wheel);
-`erase.rs`: the fill -- everything within the radius of the path, one flat colour
-per stroke from the 75th-percentile-bright pixel of a ring around it, no inpainting;
-`transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and halo-workbench
-`/hint/read` backends, and the `~/.config/squigl/gui.toml` `Config` (backend list,
-`[layout]`, `[prompts]`, `[ui] scale`) -- the default prompts are verbatim from
-halo-workbench's `handwriting.py` and travel with each read (`Transcriber::read`
-takes the prompt; the hint API ignores it),
+`crates/squigl-engine` is the window's UI-independent half -- no egui, ONNX Runtime or
+Typst (`cargo tree -p squigl-engine` must show none: the built-in models and the
+typesetter implement its traits from outside, so a second front end can sit on it):
+`stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`;
+`geometry.rs`: `Crop` and `Selection` in *view* (rotated) coordinates, mapped back to
+the source frame by `Crop::to_source`, and `zoom_to_view`; `render.rs`:
+`render_region`, and `render_selection`, which paints erasures before rectifying and
+enhancing, so reads, saves and both views agree, while live block detection stays
+raw; `erase.rs`: the fill -- everything within the radius of the path, one flat
+colour per stroke from the 75th-percentile-bright pixel of a ring around it, no
+inpainting; `transcribe.rs`: the `Transcriber` trait, the OpenAI-compatible and
+halo-workbench `/hint/read` backends (`BackendConfig::build` builds only these; the
+window's `BackendFactory` adds the built-in model), and the
+`~/.config/squigl/gui.toml` `Config` (backend list, `[layout]`, `[prompts]`,
+`[ui] scale`; `LocalDevice` lives here so every build reads the same file) -- the
+default prompts are verbatim from halo-workbench's `handwriting.py` and travel with
+each read (`Transcriber::read` takes the prompt; the hint API ignores it),
 readings are grouped and counted, never merged; `layout.rs`: the `BlockDetector`
 trait, `Block`/`Quad` in view space, `Role` (the 25 classes folded into
 text/formula/figure/other -- colour and prompt follow it, `Mode::Formula` for a
 formula block) and the perspective `rectify` (imageproc) a
-non-rectangular block goes through before it is shown or read -- feature-independent
-so the window builds without a detector; `history.rs`: every finished read of the
-session (`App::history`, appended alongside `results`, which only ever drops its
-prefix -- "copy all" relies on that), Markdown export by capture; `panes.rs`: which
+non-rectangular block goes through before it is shown or read; `history.rs`: every
+finished read of the session (`App::history`, appended alongside `results`, which
+only ever drops its prefix -- "copy all" relies on that), Markdown export by capture;
+`typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
+front end's).
+
+`crates/squigl` is the egui document-camera window (`app.rs`: preview, crop,
+capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path
+plus radius -- painted with a brush over the Zoom pane, whose size is in screen
+points, each point mapped back through the rectification by `zoom_to_view`; a
+retake, zoom or rotation drops them; ctrl+wheel is egui's `zoom_delta`, so it never
+reaches the box-resizing wheel); `panes.rs`: which
 of Preview/Zoom/Reading is active, maximised or detached (`App::pane` draws one with
 its header; a detached pane is an egui immediate viewport, `App::detached_windows`,
 which runs the same shortcuts as the main window while that pane's own window has
 focus); `settings.rs`: the Settings window editing
 a draft `Config`, applied by `App::apply_config` (backends whose entry is unchanged
 are kept, so the local model is not reloaded; the detector is rebuilt through the
-`DetectorFactory` main.rs passes in; the scale is egui's zoom factor and the value
+`DetectorFactory` main.rs passes in, backends through its `BackendFactory`; the scale is egui's zoom factor and the value
 in force is authoritative -- `track_zoom` writes any change into config and draft
 and saves it at once, so Save/Cancel never touch it); `mathtext.rs` (feature `math`): readings
 typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
