@@ -153,7 +153,14 @@ frame at full resolution.
 ./target/release/squigl --rotate 270           # phone on a stand, mounted sideways
 ./target/release/squigl --device /dev/video10  # also feed the loopback device
 ./target/release/squigl --zoom 2               # start at 2x
+./target/release/squigl --open scan.jpg        # a scanned or photographed page, no phone
 ```
+
+**Open an image** instead of the phone with `--open FILE`, or drop a file on the window
+(PNG, JPEG, TIFF or WebP; a phone photo is turned upright by its EXIF orientation).
+Everything else -- boxes, blocks, erasing, reading -- works on it as on a capture.
+**Use phone** in the toolbar goes back to the camera. Dropping a `.sqrec` recording
+plays it instead (see below).
 
 When the phone reports a zoom range for the camera, the toolbar has a **Zoom** slider
 and a **Torch** toggle that act live through scrcpy's control channel (the phone's own

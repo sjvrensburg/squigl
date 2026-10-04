@@ -186,9 +186,14 @@ crates/
 - Structured `ModelPhase` and lazy `PrepareModel`; egui keeps eager loading via a flag.
 - egui uses the engine for stream, freeze and rotation only. Reads and crop stay in `app.rs` for now.
 
-**Progress:** the replay source and recorder are done.
-- `squigl_core::replay`, with `--record` and `--replay` on the CLI and `squigl --replay`.
-- The worker takes it as `StreamConfig::replay`. `SourceSpec` will fold that in.
+**Progress:**
+
+- **Replay source and recorder:** done. `squigl_core::replay`, with `--record` and `--replay` on the CLI and `squigl --replay`.
+- **`SourceSpec::{Phone, Replay, Image, TestPattern}` with `Capabilities`:** done in `squigl_engine::stream`.
+  - `Phone` reads the config's ADB options, which are kept while another source is in use.
+  - `Webrtc` is added in Phase 5, with the pairing server.
+  - `squigl_core::TestPattern` replaces the CLI's own pattern.
+- **egui:** `--open FILE`, drag-and-drop of an image or `.sqrec`, and "Use phone" are done; the camera controls follow `Capabilities`. Paste is still to do.
 
 **Exit criteria:**
 
