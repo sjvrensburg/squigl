@@ -879,7 +879,10 @@ impl App {
             return;
         }
         let Some(backend) = self.backends.get(backend_index).cloned() else {
-            self.say("no transcription backends configured (see ~/.config/squigl/gui.toml)");
+            self.say(format!(
+                "no transcription backends configured (see {})",
+                Config::path().display()
+            ));
             return;
         };
         if self.captured.is_none() {
