@@ -702,7 +702,9 @@ mod tests {
         samples.sort();
         assert!(!samples.is_empty(), "no samples in {}", dir.display());
         let bless = std::env::var_os("SQUIGL_BLESS").is_some();
-        let model_dir = crate::models::GLM_OCR.ensure(&|s| println!("{s}")).unwrap();
+        let model_dir = crate::models::GLM_OCR
+            .ensure(&|p| println!("{}", p.describe()), &Default::default())
+            .unwrap();
 
         let mut failures = Vec::new();
         for device in [Device::WebGpu, Device::Cpu] {
@@ -772,7 +774,9 @@ mod tests {
             )],
         );
         let img = image::DynamicImage::ImageRgba8(img).to_rgb8();
-        let model_dir = crate::models::GLM_OCR.ensure(&|s| println!("{s}")).unwrap();
+        let model_dir = crate::models::GLM_OCR
+            .ensure(&|p| println!("{}", p.describe()), &Default::default())
+            .unwrap();
         for device in [Device::WebGpu, Device::Cpu] {
             let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
             let text = {

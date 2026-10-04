@@ -4,6 +4,7 @@
 //! frame to a V4L2 device too.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use squigl_core::cameras::is_usable_size;
 use squigl_core::convert::rgba_to_i420;
 use squigl_core::decode::YuvFrame;
@@ -42,7 +43,8 @@ pub enum Resolution {
 }
 
 /// Where the worker's frames come from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "path", rename_all = "kebab-case")]
 pub enum SourceSpec {
     /// The phone over ADB, per [`StreamConfig::options`] and `resolution`.
     Phone,
@@ -55,7 +57,7 @@ pub enum SourceSpec {
 }
 
 /// Which camera controls the current source has; a front end shows only these.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     pub zoom: bool,
     pub torch: bool,
@@ -116,8 +118,11 @@ pub struct Shared {
     stop: AtomicBool,
     restart: AtomicBool,
     frames: AtomicU64,
-    latest: Mutex<Option<Arc<YuvFrame>>>,
+    /// The newest frame and its number (the `frames` count when it arrived).
+    latest: Mutex<Option<(u64, Arc<YuvFrame>)>>,
     status: Mutex<Status>,
+    /// Bumped on every status change, so a watcher can tell without comparing.
+    status_changes: AtomicU64,
     config: Mutex<StreamConfig>,
     /// The phone's camera listing, fetched once per worker (it costs a server
     /// round-trip) and reused for `max` resolution and the zoom range.
@@ -150,7 +155,23 @@ fn steps_to_zoom(steps: i32) -> f32 {
 impl Shared {
     /// The most recently decoded frame, if any.
     pub fn latest(&self) -> Option<Arc<YuvFrame>> {
+        self.latest
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, f)| Arc::clone(f))
+    }
+
+    /// The most recently decoded frame with its number (counting from 1 over the
+    /// worker's life).
+    pub fn latest_numbered(&self) -> Option<(u64, Arc<YuvFrame>)> {
         self.latest.lock().unwrap().clone()
+    }
+
+    /// How many times the status has changed; a different number means
+    /// [`status`](Self::status) may say something new.
+    pub fn status_changes(&self) -> u64 {
+        self.status_changes.load(Ordering::Relaxed)
     }
 
     pub fn status(&self) -> Status {
@@ -315,6 +336,7 @@ impl Shared {
             restart: AtomicBool::new(false),
             frames: AtomicU64::new(0),
             latest: Mutex::new(None),
+            status_changes: AtomicU64::new(0),
             status: Mutex::new(Status::Connecting),
             config: Mutex::new(config),
             cameras: Mutex::new(Vec::new()),
@@ -329,6 +351,7 @@ impl Shared {
 
     fn set_status(&self, status: Status) {
         *self.status.lock().unwrap() = status;
+        self.status_changes.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -611,8 +634,8 @@ fn deliver(
 ) -> squigl_core::Result<()> {
     // A copy per frame (12 MB at 4K, well under a millisecond) keeps the decoder
     // free to overwrite its buffers while the UI reads this one.
-    *shared.latest.lock().unwrap() = Some(Arc::new(frame.clone()));
-    shared.frames.fetch_add(1, Ordering::Relaxed);
+    let number = shared.frames.fetch_add(1, Ordering::Relaxed) + 1;
+    *shared.latest.lock().unwrap() = Some((number, Arc::new(frame.clone())));
     if let Some(sink) = tee.as_mut() {
         sink.frame(frame)?;
     }

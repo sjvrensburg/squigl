@@ -13,7 +13,7 @@ use imageproc::geometric_transformations::{warp_into, Border, Interpolation, Pro
 pub type Quad = [[f32; 2]; 4];
 
 /// One detected layout element, in view space, as the window shows it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Block {
     pub label: &'static str,
     pub score: f32,
@@ -51,10 +51,22 @@ impl Block {
 /// Something that finds blocks in a page image. Implementations run on a worker
 /// thread and may block.
 pub trait BlockDetector: Send + Sync {
+    /// What to call it in a list of models.
+    fn name(&self) -> &str {
+        "block detector"
+    }
     /// A line for the window about the detector's own state (downloading, loading,
     /// unavailable); `None` when it is ready.
     fn status(&self) -> Option<String>;
     fn ready(&self) -> bool;
+    /// Where its model is in getting ready; `None` if it has none to prepare.
+    fn phase(&self) -> Option<crate::model::ModelPhase> {
+        None
+    }
+    /// See [`crate::transcribe::Transcriber::prepare`].
+    fn prepare(&self) {}
+    /// See [`crate::transcribe::Transcriber::cancel_prepare`].
+    fn cancel_prepare(&self) {}
     /// Blocks in `img`, in reading order, in `img`'s pixels.
     fn detect(&self, img: &RgbImage) -> Result<Vec<Block>>;
 }

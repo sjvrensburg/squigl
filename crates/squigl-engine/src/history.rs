@@ -2,11 +2,13 @@
 //! from which capture, by which backend, when. Copyable as text and saved as
 //! Markdown, in page order for a "read all".
 
-use crate::transcribe::{Confidence, Reading, Transcription, UiConfig};
+use crate::config::UiConfig;
+use crate::transcribe::{Confidence, Reading, Transcription};
 use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 
 /// One finished read.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Entry {
     pub at: DateTime<Local>,
     /// Which capture of the session it came from (1-based).

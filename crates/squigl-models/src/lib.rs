@@ -3,14 +3,17 @@
 
 mod glmocr;
 pub mod layout;
+mod lifecycle;
 pub mod models;
 
 use anyhow::{anyhow, bail, Context, Result};
 pub use glmocr::Device;
 use glmocr::Model;
+use lifecycle::{Lifecycle, OnDevice, State};
 use ort::environment::Environment;
 use ort::ep::{ExecutionProviderDispatch, WebGPU, CPU};
 use ort::session::Session;
+use squigl_engine::model::{ModelContext, ModelPhase};
 use squigl_engine::transcribe::{Mode, Reading, Transcriber, Transcription};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,69 +104,38 @@ fn attempts(device: DevicePref) -> &'static [Device] {
 /// without the models.
 pub use squigl_engine::transcribe::LocalDevice as DevicePref;
 
-enum State {
-    /// Downloading or loading; the string is shown in the window.
-    Preparing(String),
-    Ready(Box<Model>),
-    Failed(String),
-}
-
-/// The bundled GLM-OCR. Preparation (download + load) starts on construction, on a
-/// thread; reads are refused with the current status until it is done. A lost GPU
-/// mid-read reloads it on the CPU.
+/// The bundled GLM-OCR. Prepared (found, downloaded if need be, loaded) on a thread:
+/// at once when built eagerly, else on [`Transcriber::prepare`]; reads are refused
+/// until it is ready. A lost GPU mid-read reloads it on the CPU.
 pub struct LocalBackend {
     name: String,
     max_tokens: usize,
-    max_image_tokens: usize,
-    device: DevicePref,
-    state: Arc<Mutex<State>>,
+    life: Arc<Lifecycle<Model>>,
+}
+
+impl OnDevice for Model {
+    fn device(&self) -> Device {
+        Model::device(self)
+    }
 }
 
 impl LocalBackend {
-    pub fn new(name: String, device: DevicePref, max_tokens: u32, max_image_tokens: u32) -> Self {
-        let backend = Self {
+    pub fn new(
+        name: String,
+        device: DevicePref,
+        max_tokens: u32,
+        max_image_tokens: u32,
+        ctx: &ModelContext,
+    ) -> Self {
+        let max_image_tokens = max_image_tokens as usize;
+        let life = Lifecycle::new(&models::GLM_OCR, "GLM-OCR", ctx, move |dir, report| {
+            load(dir, device, max_image_tokens, report)
+        });
+        Self {
             name,
             max_tokens: max_tokens as usize,
-            max_image_tokens: max_image_tokens as usize,
-            device,
-            state: Arc::new(Mutex::new(State::Preparing("locating model".into()))),
-        };
-        backend.prepare();
-        backend
-    }
-
-    /// Finds, downloads and loads the model on a thread; the state says how far.
-    fn prepare(&self) {
-        let worker_state = Arc::clone(&self.state);
-        let (device, max_image_tokens) = (self.device, self.max_image_tokens);
-        std::thread::Builder::new()
-            .name("squigl-model".into())
-            .spawn(move || {
-                let set = |s: String| {
-                    *worker_state.lock().unwrap() = State::Preparing(s);
-                };
-                let result = models::GLM_OCR
-                    .ensure(&set)
-                    .and_then(|dir| load(&dir, device, max_image_tokens, &set));
-                *worker_state.lock().unwrap() = match result {
-                    Ok(model) => {
-                        log::info!("GLM-OCR ready on {}", model.device().name());
-                        State::Ready(Box::new(model))
-                    }
-                    Err(e) => {
-                        log::error!("local model unavailable: {e:#}");
-                        State::Failed(format!("{e:#}"))
-                    }
-                };
-            })
-            .expect("spawning model thread");
-    }
-
-    /// Drops a model whose GPU is gone and reloads on the CPU. `state` is the
-    /// caller's lock on the state.
-    fn reload_after_gpu_loss(&self, state: &mut State) {
-        *state = State::Preparing("GPU lost — reloading on the CPU".into());
-        self.prepare();
+            life,
+        }
     }
 }
 
@@ -171,11 +143,13 @@ fn load(
     dir: &Path,
     device: DevicePref,
     max_image_tokens: usize,
-    progress: &dyn Fn(String),
+    report: &dyn Fn(ModelPhase),
 ) -> Result<Model> {
     let mut last = None;
     for &d in attempts(device) {
-        progress(format!("loading model on {}", d.name()));
+        report(ModelPhase::Loading {
+            device: d.name().to_string(),
+        });
         match Model::load(dir, VARIANT, d, max_image_tokens) {
             Ok(m) => return Ok(m),
             Err(e) => {
@@ -193,11 +167,19 @@ impl Transcriber for LocalBackend {
     }
 
     fn status(&self) -> Option<String> {
-        match &*self.state.lock().unwrap() {
-            State::Preparing(s) => Some(s.clone()),
-            State::Ready(m) => Some(format!("ready on {}", m.device().name())),
-            State::Failed(e) => Some(format!("unavailable: {e}")),
-        }
+        Some(self.life.phase.get().describe())
+    }
+
+    fn phase(&self) -> Option<ModelPhase> {
+        Some(self.life.phase.get())
+    }
+
+    fn prepare(&self) {
+        self.life.prepare();
+    }
+
+    fn cancel_prepare(&self) {
+        self.life.cancel();
     }
 
     fn read(
@@ -211,15 +193,17 @@ impl Transcriber for LocalBackend {
         let img = image::load_from_memory(png)
             .context("decoding the crop")?
             .to_rgb8();
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.life.state.lock().unwrap();
         let model = match &mut *state {
             State::Ready(m) => m,
-            State::Preparing(s) => bail!("model not ready yet: {s}"),
+            State::Idle | State::Preparing => {
+                bail!("model not ready yet: {}", self.life.not_ready())
+            }
             State::Failed(e) => bail!("model unavailable: {e}"),
         };
         // The other model may have lost the GPU under this one.
         if model.device() == Device::WebGpu && GPU_LOST.load(Ordering::SeqCst) {
-            self.reload_after_gpu_loss(&mut state);
+            self.life.reload(&mut state);
             bail!("the GPU was lost; the model is reloading on the CPU, try again shortly");
         }
         let out = {
@@ -229,7 +213,7 @@ impl Transcriber for LocalBackend {
         let out = match out {
             Ok(out) => out,
             Err(e) if note_gpu_loss(&e) => {
-                self.reload_after_gpu_loss(&mut state);
+                self.life.reload(&mut state);
                 bail!(
                     "the GPU was lost mid-read (a driver reset); the model is reloading on \
                      the CPU, try again shortly. A smaller region or image budget avoids it."
@@ -257,5 +241,46 @@ impl Transcriber for LocalBackend {
             samples: 1,
             elapsed: started.elapsed(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// Built lazily, the model only says where it is -- on disk or not, whichever
+    /// this machine has -- and refuses to read; nothing is downloaded or loaded.
+    #[test]
+    fn a_lazy_backend_waits_to_be_asked() {
+        let told = Arc::new(AtomicUsize::new(0));
+        let t = Arc::clone(&told);
+        let ctx = ModelContext {
+            eager: false,
+            notify: Arc::new(move || {
+                t.fetch_add(1, Ordering::Relaxed);
+            }),
+        };
+        let backend = LocalBackend::new("built in".into(), DevicePref::Cpu, 16, 64, &ctx);
+        let phase = backend.phase().unwrap();
+        assert!(
+            phase == ModelPhase::Installed
+                || phase
+                    == ModelPhase::NotInstalled {
+                        size: models::GLM_OCR.total_size()
+                    },
+            "{phase:?}"
+        );
+        assert!(phase.is_idle());
+        let mut png = Vec::new();
+        image::RgbImage::new(1, 1)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let err = backend
+            .read(&png, Mode::Crop, "", (1, 1))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not ready"), "{err}");
+        assert_eq!(told.load(Ordering::Relaxed), 0, "nothing happened to tell");
     }
 }
