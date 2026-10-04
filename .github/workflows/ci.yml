@@ -88,3 +88,62 @@ jobs:
 
       - name: Build release binaries
         run: cargo build --release -p squigl-cli -p squigl-egui ${{ matrix.args }}
+
+  # Windows and macOS: no V4L2 (squigl-v4l2 is empty there and squigl-cli is
+  # Linux-only), no ffmpeg (Linux-only by design). Roadmap spike S2 / Phase 3.
+  cross-os:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    env:
+      PACKAGES: -p squigl-core -p squigl-engine -p squigl-models -p squigl-math -p squigl-egui
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # openh264's x86 assembly; without nasm it builds the slower C fallback.
+      - name: Install nasm
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Cache scrcpy-server jar
+        id: jar
+        uses: actions/cache@v4
+        with:
+          path: .cache/scrcpy-server.jar
+          key: scrcpy-server-${{ hashFiles('crates/squigl-core/build.rs') }}
+
+      - name: Fetch scrcpy-server jar
+        if: steps.jar.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache
+          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' crates/squigl-core/build.rs)
+          curl -fsSL -o .cache/scrcpy-server.jar \
+            "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
+
+      - name: Clippy
+        run: cargo clippy $PACKAGES --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test $PACKAGES
+
+      - name: Build the window
+        run: cargo build --release -p squigl-egui
+
+      # Where ONNX Runtime's WebGPU provider library lands, for packaging (S2).
+      - name: List the release directory
+        run: ls -la target/release/
+
