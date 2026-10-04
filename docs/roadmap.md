@@ -166,6 +166,8 @@ crates/
 - **The Windows 11 VM (2026-10-04):**
   - Both apps build there.
   - `squigl-desktop` streams live from the phone over adb, with no extra USB driver needed for this Samsung on LineageOS.
+  - So does the egui window (25 fps at 2992x2992), once it drew with wgpu: OpenGL there is 1.1. It also downloaded the models and detected blocks.
+  - "auto" loaded the models on WebGPU over WARP, the software D3D12 adapter, and a read took minutes. Under llvmpipe here the same crop took 23 s on WebGPU against 2.2 s on the CPU. "auto" now skips WebGPU when the only adapters are software ones.
 - Still open:
   - `glmocr_handwriting` on CPU on those runners, which needs the model download (a manual job);
   - whether the WebGPU provider actually runs there, which needs a real GPU *(tester)*;

@@ -11,6 +11,10 @@ description = "Squigl's built-in models: GLM-OCR for reading and PP-DocLayoutV3 
 # fallback. Downloads pyke's prebuilt ONNX Runtime at build time and the models
 # (~650 MB + ~130 MB) on first use.
 [dependencies]
+# Only to ask the graphics system whether there is a real GPU (see `gpu_present`);
+# the same version eframe's wgpu renderer brings, so nothing new is compiled.
+wgpu = "30"
+pollster = "1"
 squigl-engine = { path = "../squigl-engine" }
 anyhow.workspace = true
 log.workspace = true
