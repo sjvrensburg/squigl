@@ -6080,6 +6080,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "squigl-core",
+ "squigl-v4l2",
  "tokenizers",
  "toml 1.1.6+spec-1.1.0",
  "typst",
@@ -6100,6 +6101,7 @@ dependencies = [
  "log",
  "rcgen",
  "squigl-core",
+ "squigl-v4l2",
  "tiny_http",
 ]
 
@@ -6117,6 +6119,16 @@ dependencies = [
  "str0m",
  "thiserror 2.0.20",
  "ureq 2.12.1",
+]
+
+[[package]]
+name = "squigl-v4l2"
+version = "0.10.0"
+dependencies = [
+ "env_logger",
+ "log",
+ "squigl-core",
+ "thiserror 2.0.20",
  "v4l",
 ]
 

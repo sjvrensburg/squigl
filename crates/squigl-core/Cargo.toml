@@ -4,14 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Stream an Android phone's camera to a Linux V4L2 (video4linux) device"
+description = "An Android phone's camera as decoded frames: scrcpy-server over ADB, or WebRTC from a browser"
 
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
 log.workspace = true
 openh264 = { workspace = true, features = ["source"] }
-v4l.workspace = true
 ffmpeg-next = { workspace = true, optional = true }
 str0m = { version = "0.23.1", default-features = false, features = ["rust-crypto"] }
 

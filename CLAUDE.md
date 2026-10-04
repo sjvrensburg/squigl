@@ -84,7 +84,8 @@ for `include_bytes!`. Consequences:
 
 ## Architecture
 
-The pipeline, in data-flow order (all in `crates/squigl-core/src/`):
+The pipeline, in data-flow order (1-6 in `crates/squigl-core/src/`, which has no
+Linux-specific code; 7 in `crates/squigl-v4l2/src/`):
 
 1. **`adb.rs`** — shells out to the system `adb` binary (not a Rust ADB lib; see the
    module doc for why). Pushes the jar, sets up `adb forward tcp:0 localabstract:scrcpy_<scid>`,
@@ -108,10 +109,13 @@ The pipeline, in data-flow order (all in `crates/squigl-core/src/`):
 5. **`convert.rs`** — I420 → packed YUYV422 (V4L2) and → RGBA8 (whole, cropped region, or
    decimated for a preview) for on-screen display.
 6. **`sink.rs`** — the `FrameSink` trait `run()` feeds (implemented by `V4l2Sink` and by any
-   `FnMut(&YuvFrame) -> Result<()>` closure, which is how a GUI gets frames), and
-   `V4l2Sink`: `v4l` crate mmap output stream to `/dev/videoN`.
-7. **`loopback.rs`** — auto-loads `v4l2loopback` via `pkexec modprobe` if the device
-   node is missing.
+   `FnMut(&YuvFrame) -> Result<()>` closure, which is how a GUI gets frames).
+7. **`squigl-v4l2`** — the Linux-only crate (empty on other targets): `V4l2Sink`, the
+   `v4l` crate's mmap output stream to `/dev/videoN`; `LazyV4l2Sink`, which opens one at
+   the first frame's size (for WebRTC, which announces no size up front); and
+   `loopback.rs`, which auto-loads `v4l2loopback` via `pkexec modprobe` if the device
+   node is missing. The GUI depends on it only on Linux (`--device` is cfg'd out
+   elsewhere).
 
 **`webrtc_source.rs`** is a second, independent camera source alongside `session.rs`,
 for phones that stream over the network instead of ADB (there's no squigl-side app to
@@ -119,7 +123,7 @@ push here, unlike scrcpy-server -- the phone side is a browser page doing
 `getUserMedia` and posting an SDP offer over HTTP, WHIP-style). `WebrtcSource::accept_offer`
 drives `str0m` (a sans-I/O WebRTC/ICE/DTLS/SRTP implementation, chosen because it fits
 this crate's synchronous style with no async runtime) to answer the offer, restricted to
-H.264 only (`clear_codecs().enable_h264(true)`); `run`/`run_to_v4l2` then block decoding
+H.264 only (`clear_codecs().enable_h264(true)`); `run` then blocks decoding
 frames the same way `CameraSession::run` does. str0m's H.264 depacketizer already hands
 back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` unchanged --
 no format conversion between the two sources. LAN-only by design: a host ICE candidate
@@ -266,7 +270,7 @@ messages (TYPE_CAMERA_ZOOM_IN/OUT = 19/20, step ×1.0625; TYPE_CAMERA_SET_TORCH 
 -- `ConnectOptions::control` opens that second connection (made right after the video
 socket's dummy byte; only the first connection gets one) and `CameraSession::control()`
 hands out a cloneable `CameraControl` usable from any thread while `run()` blocks
-(`crates/squigl-core/examples/control.rs` shows it). The phone never reports the zoom it
+(`crates/squigl-v4l2/examples/control.rs` shows it). The phone never reports the zoom it
 ends up at, so the GUI tracks the step count itself. No exposure, focus or
 white-balance control exists at any version.
 

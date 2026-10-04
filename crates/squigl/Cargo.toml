@@ -43,6 +43,10 @@ typst-layout = { version = "0.15", optional = true }
 typst-render = { version = "0.15", optional = true }
 mitex = { version = "0.2", optional = true }
 
+# --device: also write frames to a v4l2loopback device, so the stream is a webcam too.
+[target.'cfg(target_os = "linux")'.dependencies]
+squigl-v4l2 = { path = "../squigl-v4l2" }
+
 [features]
 default = ["local-model", "math"]
 ffmpeg = ["squigl-core/ffmpeg"]

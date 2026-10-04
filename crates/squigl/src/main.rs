@@ -61,6 +61,7 @@ struct Args {
 
     /// Also write every frame to this v4l2loopback device (e.g. /dev/video10), so the
     /// same stream is a webcam for other apps while the window is open.
+    #[cfg(target_os = "linux")]
     #[arg(long, value_name = "/dev/videoN")]
     device: Option<PathBuf>,
 
@@ -217,7 +218,10 @@ fn main() -> Result<()> {
             control: true,
         },
         resolution,
+        #[cfg(target_os = "linux")]
         tee_device: args.device,
+        #[cfg(not(target_os = "linux"))]
+        tee_device: None,
     };
     let save_dir = args.save_dir.unwrap_or_else(|| {
         let home = std::env::var_os("HOME")

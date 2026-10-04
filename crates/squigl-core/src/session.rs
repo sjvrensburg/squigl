@@ -5,11 +5,10 @@ use crate::adb::{self, AdbDevice};
 use crate::decode::{self, Decoder};
 use crate::error::{Error, Result};
 use crate::protocol;
-use crate::sink::{FrameSink, V4l2Sink};
+use crate::sink::FrameSink;
 use std::io::BufReader;
 use std::io::Read;
 use std::net::TcpStream;
-use std::path::Path;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -252,13 +251,6 @@ impl CameraSession {
         self.control.clone()
     }
 
-    /// Convenience for [`Self::run`]: opens `device_path` (a `/dev/videoN` v4l2loopback
-    /// node) at the stream's size and runs until the stream ends or fails.
-    pub fn run_to_v4l2(&mut self, device_path: &Path) -> Result<()> {
-        let mut sink = V4l2Sink::open(device_path, self.meta.width, self.meta.height)?;
-        self.run(&mut sink, &AtomicBool::new(false))
-    }
-
     /// Frames decoded so far by [`Self::run`] -- lets a reconnect loop tell a session
     /// that actually worked from one that failed right after the handshake.
     pub fn frames_decoded(&self) -> u64 {
@@ -266,7 +258,8 @@ impl CameraSession {
     }
 
     /// Blocks, decoding the camera stream and handing each frame to `sink` (a
-    /// [`V4l2Sink`] opened at [`Self::meta`]'s size, or any other [`FrameSink`]) until:
+    /// `squigl_v4l2::V4l2Sink` opened at [`Self::meta`]'s size, or any other
+    /// [`FrameSink`]) until:
     ///
     /// - `stop` becomes true (checked at least every 500 ms) -> `Ok(())`;
     /// - the phone closes the stream -> `Ok(())`;

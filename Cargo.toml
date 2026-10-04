@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/squigl-core", "crates/squigl-cli", "crates/squigl"]
+members = ["crates/squigl-core", "crates/squigl-v4l2", "crates/squigl-cli", "crates/squigl"]
 
 [workspace.package]
 version = "0.10.0"

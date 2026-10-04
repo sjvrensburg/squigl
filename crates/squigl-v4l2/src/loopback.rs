@@ -12,14 +12,18 @@
 //! agent every time. To avoid the prompt entirely, create the device at boot instead
 //! -- see `contrib/modprobe.d/` in the repository.
 
-use crate::error::{Error, Result};
 use std::path::Path;
 use std::process::Command;
+
+/// Creating the device node failed; the message says how to do it by hand.
+#[derive(Debug, thiserror::Error)]
+#[error("failed to load v4l2loopback module: {0}")]
+pub struct LoopbackError(String);
 
 const CONTROL_NODE: &str = "/dev/v4l2loopback";
 
 /// Ensures `/dev/video<video_nr>` exists, creating it via `pkexec` if it doesn't.
-pub fn ensure_device(video_nr: u32, card_label: &str) -> Result<()> {
+pub fn ensure_device(video_nr: u32, card_label: &str) -> Result<(), LoopbackError> {
     let path = format!("/dev/video{video_nr}");
     if Path::new(&path).exists() {
         return Ok(());
@@ -53,13 +57,13 @@ pub fn ensure_device(video_nr: u32, card_label: &str) -> Result<()> {
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => {
-            return Err(Error::Loopback(format!(
+            return Err(LoopbackError(format!(
                 "`pkexec {}` exited with {s}; you can create the device manually with:\n{manual}",
                 argv.join(" ")
             )));
         }
         Err(e) => {
-            return Err(Error::Loopback(format!(
+            return Err(LoopbackError(format!(
                 "failed to run pkexec ({e}); is polkit installed? \
                  you can create the device manually with:\n{manual}"
             )));
@@ -78,7 +82,7 @@ pub fn ensure_device(video_nr: u32, card_label: &str) -> Result<()> {
         {
             Ok(_) => return Ok(()),
             Err(e) if std::time::Instant::now() > deadline => {
-                return Err(Error::Loopback(format!(
+                return Err(LoopbackError(format!(
                     "`{}` succeeded but {path} is not usable: {e}",
                     argv.join(" ")
                 )));

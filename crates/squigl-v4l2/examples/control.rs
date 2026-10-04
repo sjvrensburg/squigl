@@ -2,14 +2,15 @@
 //! streaming to a V4L2 device:
 //!
 //! ```text
-//! cargo run --release -p squigl-core --example control -- /dev/video11
+//! cargo run --release -p squigl-v4l2 --example control -- /dev/video11
 //! ```
 //!
 //! Streams for ~9 s: after 2 s it zooms in eight steps (x1.0625 each, about 1.6x),
 //! at 5 s turns the torch on, at 7 s turns it off and zooms back out.
 
-use squigl_core::sink::{FrameSink, V4l2Sink};
+use squigl_core::sink::FrameSink;
 use squigl_core::{CameraSession, ConnectOptions};
+use squigl_v4l2::V4l2Sink;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
