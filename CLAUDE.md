@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **Squigl**: a Rust workspace built around using an Android phone as a Linux document
-camera with live handwriting OCR (`crates/squigl`, the GUI -- this is "the product").
+camera with live handwriting OCR (`crates/squigl-egui`, the GUI, binary `squigl` -- this
+is "the product").
 It also exposes the phone as a plain V4L2 (`/dev/videoN`) webcam (`crates/squigl-cli`,
 a headless CLI) and provides the shared pipeline both are built on (`crates/squigl-core`,
 formerly `phone-cam4linux` -- it's the plumbing: scrcpy protocol, H.264 decode, pixel
@@ -19,10 +20,10 @@ ADB. Everything from the socket down is implemented here.
 ```
 cargo build --release                 # fetches scrcpy-server.jar on first build (needs network)
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
-cargo build --release -p squigl --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
+cargo build --release -p squigl-egui --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
 cargo test --workspace                 # unit tests (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
 cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
-cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
+cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --workspace --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 ```
@@ -167,7 +168,7 @@ only ever drops its prefix -- "copy all" relies on that), Markdown export by cap
 `typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
 front end's).
 
-`crates/squigl` is the egui document-camera window (`app.rs`: preview, crop,
+`crates/squigl-egui` is the egui document-camera window (`app.rs`: preview, crop,
 capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path
 plus radius -- painted with a brush over the Zoom pane, whose size is in screen
 points, each point mapped back through the rectification by `zoom_to_view`; a
@@ -181,8 +182,8 @@ a draft `Config`, applied by `App::apply_config` (backends whose entry is unchan
 are kept, so the local model is not reloaded; the detector is rebuilt through the
 `DetectorFactory` main.rs passes in, backends through its `BackendFactory`; the scale is egui's zoom factor and the value
 in force is authoritative -- `track_zoom` writes any change into config and draft
-and saves it at once, so Save/Cancel never touch it); `mathtext.rs` (feature `math`): readings
-typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
+and saves it at once, so Save/Cancel never touch it). `crates/squigl-math` (the GUI's
+`math` feature): readings typeset by Typst -- `$…$`/`$$…$$`/`\(…\)`/`\[…\]` segments converted by the `mitex`
 crate and evaluated inside MiTeX's Typst scope (vendored under `assets/mitex/`, so
 `\operatorname` and friends resolve), the rest escaped as markup, rasterised by
 `typst-render` at the window's pixel density and cached per reading as a texture
@@ -196,22 +197,21 @@ nothing defines (models invent `\softmax`, `\Var`) is not a failure: MiTeX's
 `unknown command` makes `convert_math` retry it as `\operatorname{…}`, and a name
 MiTeX passes through that Typst lacks (`unknown variable`) makes `Renderer::render`
 recompile with it defined as `math.op`; `argmax`/`argmin` are defined in the
-template's `compat` scope (with limits);
-`local/`: the
-built-in models --
-`local/glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`
+template's `compat` scope (with limits). `crates/squigl-models` (the GUI's
+`local-model` feature): the built-in models --
+`glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`
 (vision encoder, embeddings, merged decoder with an explicit KV cache and the
 undocumented scalar `num_logits_to_keep` input; preprocessing and MRoPE position ids
-ported from oar-ocr-vl's Candle implementation), `local/layout.rs` is PP-DocLayoutV3
+ported from oar-ocr-vl's Candle implementation), `layout.rs` is PP-DocLayoutV3
 (official ONNX export: 800x800 stretched input, `[N,7]` boxes with a reading-order
 column plus `[N,200,200]` instance masks; mask → largest contour → approxPolyDP →
 min-area rect gives the quad, as PaddleX does; `suppress_overlaps` is the
 cross-class NMS PaddleX also runs, since the model reports the same lines twice at
-times), `local/models.rs` finds or downloads
+times), `models.rs` finds or downloads
 each model's files (pinned HF revision + sha256 manifest; `$SQUIGL_MODEL_DIR/<name>/`,
 `models/<name>/` beside `$APPIMAGE`, exe-adjacent `models/<name>/`, then
 `~/.cache/squigl/models/<name>/`), and
-`local/mod.rs` holds the one process-wide `ort` environment (`ort` refuses a second)
+`lib.rs` holds the one process-wide `ort` environment (`ort` refuses a second)
 and wraps GLM-OCR as a `Transcriber` that prepares on a thread, plus `RUNTIME`, the
 one lock every session load and run takes: the WebGPU EP segfaults on concurrent
 `run` across sessions (microsoft/onnxruntime#32561, open) -- keep it until the
@@ -228,7 +228,7 @@ to the new block with the highest IoU (`follow_selection`, so tab keeps its plac
 an untouched crop tracks its block); "read all" captures first, waits for the
 capture's own detection, then drains a snapshot queue one read at a time. `ort` is pinned to a git commit because the published rc.13 has a different
 API (the pin carries ONNX Runtime 1.30; after moving it, run `glmocr_handwriting`, which
-reads `crates/squigl/testdata/handwriting/` on WebGPU and CPU against the readings
+reads `crates/squigl-models/testdata/handwriting/` on WebGPU and CPU against the readings
 recorded there -- a near-tie can flip on a kernel change, so re-record with
 `SQUIGL_BLESS=1` only after looking at the diff); its `download-binaries` fetches pyke's prebuilt ONNX Runtime at build time, and
 the WebGPU provider is a separate `libwebgpu_dawn.so` that lands next to the binary

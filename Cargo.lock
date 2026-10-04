@@ -6059,36 +6059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "squigl"
-version = "0.10.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "eframe",
- "egui",
- "env_logger",
- "half",
- "image",
- "imageproc",
- "log",
- "mitex",
- "ndarray",
- "ort",
- "serde",
- "serde_json",
- "sha2",
- "squigl-core",
- "squigl-engine",
- "tokenizers",
- "typst",
- "typst-as-lib",
- "typst-layout",
- "typst-render",
- "ureq 3.4.1",
-]
-
-[[package]]
 name = "squigl-cli"
 version = "0.10.0"
 dependencies = [
@@ -6120,6 +6090,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "squigl-egui"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "eframe",
+ "egui",
+ "env_logger",
+ "image",
+ "log",
+ "squigl-core",
+ "squigl-engine",
+ "squigl-math",
+ "squigl-models",
+]
+
+[[package]]
 name = "squigl-engine"
 version = "0.10.0"
 dependencies = [
@@ -6134,6 +6122,40 @@ dependencies = [
  "squigl-core",
  "squigl-v4l2",
  "toml 1.1.6+spec-1.1.0",
+ "ureq 3.4.1",
+]
+
+[[package]]
+name = "squigl-math"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "log",
+ "mitex",
+ "squigl-engine",
+ "typst",
+ "typst-as-lib",
+ "typst-layout",
+ "typst-render",
+]
+
+[[package]]
+name = "squigl-models"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "half",
+ "image",
+ "imageproc",
+ "log",
+ "ndarray",
+ "ort",
+ "serde",
+ "serde_json",
+ "sha2",
+ "squigl-engine",
+ "tokenizers",
  "ureq 3.4.1",
 ]
 

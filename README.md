@@ -95,7 +95,7 @@ cargo build --release                      # or: cargo build --release --feature
 needs a Rust toolchain, `nasm` (OpenH264 assembly), `libclang` (bindgen for the V4L2
 bindings), and for the GUI `libxkbcommon` and `libwayland` development files. The first
 build downloads the pinned `scrcpy-server` jar and (for the GUI) prebuilt ONNX Runtime
-binaries; `cargo build --release -p squigl --no-default-features` skips the latter,
+binaries; `cargo build --release -p squigl-egui --no-default-features` skips the latter,
 the built-in models and the Typst typesetting. `squigl --fetch-model DIR` downloads the models into `DIR/` with
 checksum verification, for machines that will be offline (set `HF_TOKEN` to a Hugging
 Face token if anonymous downloads are being rate-limited; the files are public).

@@ -1,5 +1,5 @@
 //! Typesetting a reading: the [`Typesetter`] a front end may have (the egui window's
-//! is `mathtext::Renderer`, on Typst), and the text and tint spans handed to it.
+//! is `squigl_math::Renderer`, on Typst), and the text and tint spans handed to it.
 
 use crate::transcribe::{Confidence, Reading, UiConfig};
 

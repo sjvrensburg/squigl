@@ -1,0 +1,38 @@
+[package]
+name = "squigl-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The egui window: live view, crop, capture and read an Android phone's camera as a document camera"
+build = "build.rs"
+
+[[bin]]
+name = "squigl"
+path = "src/main.rs"
+
+[dependencies]
+squigl-core = { path = "../squigl-core" }
+squigl-engine = { path = "../squigl-engine" }
+anyhow.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui = "0.36"
+image = { version = "0.25", default-features = false, features = ["png"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+squigl-models = { path = "../squigl-models", optional = true }
+squigl-math = { path = "../squigl-math", optional = true }
+
+[features]
+default = ["local-model", "math"]
+ffmpeg = ["squigl-core/ffmpeg"]
+# The out-of-the-box models: GLM-OCR (onnx-community q4f16 export) for reading and
+# PP-DocLayoutV3 for block detection, run through ONNX Runtime, WebGPU (Vulkan on
+# Linux) with CPU fallback. Downloads pyke's prebuilt ONNX Runtime at build time and
+# the models (~650 MB + ~130 MB) on first use.
+local-model = ["dep:squigl-models"]
+# Readings shown typeset: the LaTeX the models emit is converted to Typst math by
+# MiTeX and rendered by Typst with its embedded fonts (adds ~40 MB to the binary).
+math = ["dep:squigl-math"]

@@ -678,7 +678,7 @@ mod tests {
     /// Runtime) is bumped:
     ///
     /// ```text
-    /// cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture
+    /// cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture
     /// ```
     ///
     /// Each `NAME.png` is read as the window reads a crop (`formula-*` with the
@@ -702,13 +702,11 @@ mod tests {
         samples.sort();
         assert!(!samples.is_empty(), "no samples in {}", dir.display());
         let bless = std::env::var_os("SQUIGL_BLESS").is_some();
-        let model_dir = crate::local::models::GLM_OCR
-            .ensure(&|s| println!("{s}"))
-            .unwrap();
+        let model_dir = crate::models::GLM_OCR.ensure(&|s| println!("{s}")).unwrap();
 
         let mut failures = Vec::new();
         for device in [Device::WebGpu, Device::Cpu] {
-            let mut model = Model::load(&model_dir, crate::local::VARIANT, device, 2048).unwrap();
+            let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
             for png in &samples {
                 let stem = png.file_stem().unwrap().to_string_lossy();
                 let prompt = if stem.starts_with("formula-") {
@@ -751,7 +749,7 @@ mod tests {
     /// stroke reads as the other two lines on both devices.
     ///
     /// ```text
-    /// cargo test -p squigl --release glmocr_skips_an_erased_line -- --ignored --nocapture
+    /// cargo test -p squigl-models --release glmocr_skips_an_erased_line -- --ignored --nocapture
     /// ```
     #[test]
     #[ignore = "needs the GLM-OCR model (~650 MB) and runs it"]
@@ -771,11 +769,9 @@ mod tests {
             )],
         );
         let img = image::DynamicImage::ImageRgba8(img).to_rgb8();
-        let model_dir = crate::local::models::GLM_OCR
-            .ensure(&|s| println!("{s}"))
-            .unwrap();
+        let model_dir = crate::models::GLM_OCR.ensure(&|s| println!("{s}")).unwrap();
         for device in [Device::WebGpu, Device::Cpu] {
-            let mut model = Model::load(&model_dir, crate::local::VARIANT, device, 2048).unwrap();
+            let mut model = Model::load(&model_dir, crate::VARIANT, device, 2048).unwrap();
             let text = model
                 .generate(&img, squigl_engine::transcribe::CROP_PROMPT, 1024)
                 .unwrap()

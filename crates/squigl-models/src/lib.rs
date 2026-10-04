@@ -71,7 +71,7 @@ fn open_session(path: &Path, device: Device) -> Result<Session> {
 pub static GPU_LOST: AtomicBool = AtomicBool::new(false);
 
 /// Whether `e` is the GPU being lost. Records it if so.
-pub(super) fn note_gpu_loss(e: &anyhow::Error) -> bool {
+pub(crate) fn note_gpu_loss(e: &anyhow::Error) -> bool {
     let text = format!("{e:#}");
     let lost = text.contains("DEVICE_LOST")
         || (text.contains("lost") && (text.contains("Device") || text.contains("device")));

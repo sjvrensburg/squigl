@@ -1,9 +1,9 @@
-Handwriting samples for the `glmocr_handwriting` test in `src/local/glmocr.rs`,
+Handwriting samples for the `glmocr_handwriting` test in `src/glmocr.rs`,
 which checks that GLM-OCR still reads them the same way after an ONNX Runtime
 (`ort`) bump:
 
 ```
-cargo test -p squigl --release glmocr_handwriting -- --ignored --nocapture
+cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture
 ```
 
 - `NAME.png` -- a crop as the window saves it (Save PNG, ctrl+S). Read with the
