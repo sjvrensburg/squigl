@@ -945,11 +945,20 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    /// A source that never delivers a frame (its file is missing) has nothing to
+    /// capture.
+    #[test]
+    fn there_is_nothing_to_capture_before_a_frame() {
+        let missing = std::env::temp_dir().join("squigl-engine-no-such-image.png");
+        let (mut engine, _) = start(SourceSpec::Image(missing), Config::default(), None);
+        assert!(engine.handle(Command::Freeze).is_err());
+        assert_eq!(engine.capture_seq(), 0);
+    }
+
     #[test]
     fn captures_are_numbered_and_keep_their_frame() {
         let path = image("capture", 8, 6);
         let (mut engine, _) = start(SourceSpec::Image(path.clone()), Config::default(), None);
-        assert!(engine.handle(Command::Freeze).is_err(), "no frame yet");
         pump_until(&mut engine, |e| matches!(e, Event::Frame { .. }));
         assert_eq!(engine.handle(Command::Freeze).unwrap(), Reply::Done);
         assert_eq!(engine.handle(Command::Freeze).unwrap(), Reply::Unchanged);
