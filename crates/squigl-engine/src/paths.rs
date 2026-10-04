@@ -36,13 +36,12 @@ pub fn pictures_dir() -> PathBuf {
     pictures.unwrap_or_default().join("squigl")
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
 
     /// The paths squigl used on Linux before this module, for whatever the
     /// environment is: an existing config and model cache must still be found.
-    #[cfg(target_os = "linux")]
     #[test]
     fn linux_paths_are_unchanged() {
         let old = |xdg: &str, fallback: &str| {
