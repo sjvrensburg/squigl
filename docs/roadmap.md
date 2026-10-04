@@ -146,6 +146,14 @@ crates/
 | **S6** WebCodecs probe | 0.5 day | Availability per webview (for the record only). |
 | **S7** LaTeX→MathML and maths speech | 2 days, before Phase 8 | `pulldown-latex`/`latex2mmlc` in Rust vs Temml in JS, measured on `testdata/handwriting` readings. Quality of MathCAT's ClearSpeak speech from that MathML through the `tts` crate on each OS. |
 
+**S1 findings (Fedora/AMD, Wayland and X11, 2026-10-04; `spikes/s1-transport`):**
+
+- **The localhost WebSocket is the transport.** It is the only one that keeps a 12 MB frame (4000x3000) at 30 fps on under one core (0.57 cores, p95 16 ms). At 3 MB it uses 0.2 cores, against about 0.5 for the custom URI scheme and for IPC.
+- **The scheme and IPC** pass up to 5.5 MB, but cost about 3 times the CPU per byte.
+- No frame was corrupted.
+- **Still to run:** the Ubuntu/Nvidia box (`./run.sh`). Windows and macOS are *(tester)*.
+- **For S3:** WebGL2 works under llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`), at 30 fps for 3 MB, but on 3.4 cores. Without a GPU, the front end must send smaller frames or use Canvas2D.
+
 **S2 findings (CI, 2026-10-04):**
 
 - core, engine, models, math and the egui window build, pass clippy and pass their tests on `windows-latest` and `macos-14` unchanged, apart from the per-OS rpath.
