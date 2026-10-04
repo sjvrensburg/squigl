@@ -21,6 +21,7 @@
   import { Renderer2D } from "./lib/renderer2d";
   import { keyFor, keyLabel, table, type Action } from "./lib/shortcuts";
   import { pan, turn, zoom, type View } from "./lib/viewport";
+  import Connection from "./Connection.svelte";
   import Settings from "./Settings.svelte";
 
   // The modes the toolbar cycles through; "custom" is reached in Settings.
@@ -32,7 +33,8 @@
   let capture = $state<CaptureSlice | null>(null);
   let config = $state<Config | null>(null);
   let view = $state<View>({ centre: [0.5, 0.5], magnification: 1 });
-  let notice = $state("Starting…");
+  // The status on the left says "Starting…"; this is for what happens after.
+  let notice = $state("");
   let failure = $state<string | null>(null);
   let settingsOpen = $state(false);
   let dropping = $state(false);
@@ -425,6 +427,13 @@
     <canvas bind:this={canvas} tabindex="0" aria-label="Magnified camera picture"></canvas>
     {#if config?.magnifier.reading_line}
       <div class="reading-line" aria-hidden="true"></div>
+    {/if}
+    {#if stream?.status.state === "waiting" && stream.status.problem}
+      <Connection
+        problem={stream.status.problem}
+        reason={stream.status.reason}
+        onopen={() => fileInput.click()}
+      />
     {/if}
     {#if dropping}
       <div class="drop" aria-hidden="true">Drop an image or a recording to open it</div>

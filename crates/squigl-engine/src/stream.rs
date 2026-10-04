@@ -31,6 +31,8 @@ pub enum Status {
     Waiting {
         reason: String,
         retry_at: Instant,
+        /// What a person can do about it, when it is something they can.
+        problem: Option<Problem>,
     },
     Stopped,
 }
@@ -40,6 +42,75 @@ pub enum Resolution {
     PhoneDefault,
     Max,
     Fixed(u32, u32),
+}
+
+/// Why a source is not delivering, in terms of what a person can do about it: a
+/// front end's guidance follows it. Worked out from the error by [`classify`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Problem {
+    /// Android's adb tool is not installed (or not found).
+    AdbMissing,
+    /// No phone is connected, or USB debugging is off.
+    NoPhone,
+    /// The phone is waiting for its user to allow USB debugging.
+    Unauthorized,
+    /// The phone is connected but not answering.
+    Offline,
+    /// More than one phone is connected.
+    SeveralPhones,
+    /// Another app has the phone's camera.
+    CameraInUse,
+    /// The phone's Android is older than the camera needs (12).
+    AndroidTooOld,
+    /// The file to show or play is not there or cannot be read.
+    FileMissing,
+    /// Something else; the reason says what.
+    Other,
+}
+
+/// What [`Problem`] an error from a source is.
+pub fn classify(error: &anyhow::Error) -> Problem {
+    use squigl_core::Error as E;
+    for cause in error.chain() {
+        if let Some(e) = cause.downcast_ref::<E>() {
+            match e {
+                E::AdbNotFound => return Problem::AdbMissing,
+                E::NoDevice => return Problem::NoPhone,
+                E::DeviceUnauthorized => return Problem::Unauthorized,
+                E::DeviceOffline => return Problem::Offline,
+                E::Recording(_) => return Problem::FileMissing,
+                _ => {}
+            }
+        }
+        if cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            || cause
+                .downcast_ref::<image::ImageError>()
+                .is_some_and(|e| matches!(e, image::ImageError::IoError(_)))
+        {
+            return Problem::FileMissing;
+        }
+    }
+    // The rest is in words: adb's own messages, and the scrcpy server's output
+    // folded into the error.
+    let text = format!("{error:#}");
+    if text.contains("multiple devices") || text.contains("more than one device") {
+        Problem::SeveralPhones
+    } else if text.contains("unauthorized") {
+        Problem::Unauthorized
+    } else if text.contains("device offline") {
+        Problem::Offline
+    } else if text.contains("not found") && text.contains("device") {
+        Problem::NoPhone
+    } else if text.contains("not supported before Android 12") {
+        Problem::AndroidTooOld
+    } else if text.contains("CAMERA_IN_USE") || text.contains("MAX_CAMERAS_IN_USE") {
+        Problem::CameraInUse
+    } else {
+        Problem::Other
+    }
 }
 
 /// Where the worker's frames come from.
@@ -427,19 +498,21 @@ fn run_loop(shared: &Arc<Shared>, wake: &dyn Fn()) {
             shared.set_status(Status::Waiting {
                 reason: "switching camera".to_string(),
                 retry_at: Instant::now() + RESTART_GRACE,
+                problem: None,
             });
             wake();
             sleep_unless(RESTART_GRACE, || shared.stop.load(Ordering::Relaxed));
             continue;
         }
-        let reason = match outcome {
-            Ok(()) => "stream ended".to_string(),
-            Err(e) => format!("{e:#}"),
+        let (reason, problem) = match outcome {
+            Ok(()) => ("stream ended".to_string(), None),
+            Err(e) => (format!("{e:#}"), Some(classify(&e))),
         };
         log::warn!("{reason}; reconnecting in {backoff:?}");
         shared.set_status(Status::Waiting {
             reason,
             retry_at: Instant::now() + backoff,
+            problem,
         });
         wake();
         sleep_unless(backoff, || {
@@ -816,6 +889,63 @@ mod tests {
     }
 
     #[test]
+    fn errors_are_classified_by_what_a_person_can_do() {
+        use anyhow::Context;
+        use squigl_core::Error as E;
+        let wrapped = |e: E| {
+            Err::<(), _>(e)
+                .context("connecting to phone camera")
+                .unwrap_err()
+        };
+        assert_eq!(classify(&wrapped(E::AdbNotFound)), Problem::AdbMissing);
+        assert_eq!(classify(&wrapped(E::NoDevice)), Problem::NoPhone);
+        assert_eq!(
+            classify(&wrapped(E::DeviceUnauthorized)),
+            Problem::Unauthorized
+        );
+        assert_eq!(classify(&wrapped(E::DeviceOffline)), Problem::Offline);
+        let adb = |m: &str| wrapped(E::AdbCommand(m.into()));
+        assert_eq!(
+            classify(&adb(
+                "multiple devices attached ([\"A\", \"B\"]); pass a serial explicitly"
+            )),
+            Problem::SeveralPhones
+        );
+        assert_eq!(
+            classify(&adb("`adb shell` failed: adb: device unauthorized.")),
+            Problem::Unauthorized
+        );
+        assert_eq!(
+            classify(&adb("`adb push` failed: adb: device 'XYZ' not found")),
+            Problem::NoPhone
+        );
+        // The server's own words, folded into the error.
+        let server = |m: &str| {
+            wrapped(E::Protocol(format!(
+                "no packets\nscrcpy server output:\n{m}"
+            )))
+        };
+        assert_eq!(
+            classify(&server(
+                "[server] ERROR: Camera mirroring is not supported before Android 12"
+            )),
+            Problem::AndroidTooOld
+        );
+        assert_eq!(
+            classify(&server(
+                "CameraAccessException: CAMERA_IN_USE (4): connect: camera in use"
+            )),
+            Problem::CameraInUse
+        );
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        assert_eq!(
+            classify(&anyhow::Error::from(missing).context("opening scan.png")),
+            Problem::FileMissing
+        );
+        assert_eq!(classify(&anyhow::anyhow!("something odd")), Problem::Other);
+    }
+
+    #[test]
     fn only_the_phone_has_camera_controls() {
         let all = Capabilities {
             zoom: true,
@@ -893,9 +1023,13 @@ mod tests {
         wait_for(|| matches!(worker.shared.status(), Status::Waiting { .. }));
         let status = worker.shared.status();
         worker.stop();
-        let Status::Waiting { reason, .. } = status else {
+        let Status::Waiting {
+            reason, problem, ..
+        } = status
+        else {
             panic!("{status:?}");
         };
         assert!(reason.contains("scan.png"), "{reason}");
+        assert_eq!(problem, Some(Problem::FileMissing));
     }
 }

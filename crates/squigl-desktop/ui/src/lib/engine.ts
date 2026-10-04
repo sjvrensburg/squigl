@@ -54,10 +54,34 @@ export interface Config {
   [section: string]: unknown;
 }
 
+/** Why the picture is not coming, in terms of what a person can do (squigl_engine::stream::Problem). */
+export type Problem =
+  | "adb-missing"
+  | "no-phone"
+  | "unauthorized"
+  | "offline"
+  | "several-phones"
+  | "camera-in-use"
+  | "android-too-old"
+  | "file-missing"
+  | "other";
+
+export const PROBLEMS: Problem[] = [
+  "adb-missing",
+  "no-phone",
+  "unauthorized",
+  "offline",
+  "several-phones",
+  "camera-in-use",
+  "android-too-old",
+  "file-missing",
+  "other",
+];
+
 export type StreamStatus =
   | { state: "connecting" }
   | { state: "streaming"; width: number; height: number }
-  | { state: "waiting"; reason: string; retry_in_ms: number }
+  | { state: "waiting"; reason: string; retry_in_ms: number; problem: Problem | null }
   | { state: "stopped" };
 
 export interface StreamSlice {
