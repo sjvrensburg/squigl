@@ -293,8 +293,15 @@ crates/
   - A first window: freeze, rotate, magnification, display mode, full screen, keyboard pan and zoom, and an `aria-live` notice line.
   - The `desktop` CI job on three OSes.
 - **Measured against the phone (2992x2992 live) on the Fedora box:** 30 fps drawn, on 0.62 cores for the whole app, decoding included.
+**Progress (4b, 2026-10-04):**
+
+- **Settings dialog:** colour mode, custom ink and paper, contrast, brightness and mid-tones, and a two-colour cut-off. Sliders preview through `Command::PreviewConfig` and save on release.
+- **View:** smoothing, the reading line, and the start magnification.
+- **Appearance:** the UI themes (dark, light, high-contrast yellow on black, high-contrast white on black), set in a new `[desktop]` config section.
+- **Keyboard:** single-key shortcuts that can be turned off or remapped (WCAG 2.1.4).
+- **Opening images:** Open image…, paste, drag-and-drop, and "Use phone" to go back.
+- **The Canvas2D fallback:** it matches WebGL2 to under 0.1/255 on average. With the phone, it draws 27.6 fps on 1.47 cores, against WebGL2's 30 fps on 0.62.
 - **Next:**
-  - 4b: the full magnifier controls (contrast, brightness, threshold, smoothing, the reading line), the high-contrast UI themes, remappable single-key shortcuts, the Canvas2D fallback, and image paste.
   - 4c: the connection screen.
   - Then the tests: `tauri-driver` end-to-end, and the per-mode pixel check.
 

@@ -37,10 +37,20 @@ export interface MagnifierConfig {
   reading_line: boolean;
 }
 
+export type Theme = "dark" | "light" | "high-contrast-yellow" | "high-contrast-white";
+
+export interface DesktopConfig {
+  theme: Theme;
+  single_key_shortcuts: boolean;
+  /** Action to key, for keys moved from their defaults. */
+  shortcuts: Record<string, string>;
+}
+
 /** The settings file; the page edits only these sections and sends the rest back as it came. */
 export interface Config {
   display: DisplayConfig;
   magnifier: MagnifierConfig;
+  desktop: DesktopConfig;
   [section: string]: unknown;
 }
 
@@ -99,6 +109,7 @@ export type Command =
   | { type: "set-torch"; on: boolean }
   | { type: "reconnect" }
   | { type: "set-config"; config: Config }
+  | { type: "preview-config"; config: Config }
   | { type: "prepare-model"; name: string }
   | { type: "cancel-model-download"; name: string };
 
@@ -131,4 +142,9 @@ export interface LutReply {
 
 export function lut(): Promise<LutReply> {
   return invoke("lut");
+}
+
+/** Shows an image the page holds as bytes (pasted, or picked with a file input). */
+export function openImage(bytes: Uint8Array): Promise<Reply> {
+  return invoke("open_image", bytes);
 }
