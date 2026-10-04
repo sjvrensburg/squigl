@@ -301,8 +301,12 @@ crates/
 - **Keyboard:** single-key shortcuts that can be turned off or remapped (WCAG 2.1.4).
 - **Opening images:** Open image…, paste, drag-and-drop, and "Use phone" to go back.
 - **The Canvas2D fallback:** it matches WebGL2 to under 0.1/255 on average. With the phone, it draws 27.6 fps on 1.47 cores, against WebGL2's 30 fps on 0.62.
+**Progress (4c, 2026-10-04):**
+
+- **The connection screen.** `stream::Problem` and `stream::classify` say what went wrong in terms a person can act on: adb missing, no phone, unauthorized, offline, several phones, camera in use, Android too old, file missing, other.
+- **Guidance.** Each problem has plain-language steps, with Try now, Open an image instead, and Hide.
+- **Device state.** `adb` now reports an unauthorized or offline phone as such, rather than as "no device".
 - **Next:**
-  - 4c: the connection screen.
   - Then the tests: `tauri-driver` end-to-end, and the per-mode pixel check.
 
 **Exit criteria:**

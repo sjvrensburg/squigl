@@ -19,7 +19,7 @@ use crate::display::{self, Lut};
 use crate::history;
 use crate::layout::{Block, BlockDetector};
 use crate::model::{ModelContext, ModelPhase};
-use crate::stream::{Capabilities, Shared, SourceSpec, Status, StreamConfig, Worker};
+use crate::stream::{Capabilities, Problem, Shared, SourceSpec, Status, StreamConfig, Worker};
 use crate::transcribe::{BackendConfig, Transcriber, Transcription};
 use crate::view::{render_planes, FrameRef, ViewPlanes, ViewRequest};
 use anyhow::{bail, Result};
@@ -177,6 +177,7 @@ pub enum StreamStatus {
     Waiting {
         reason: String,
         retry_in_ms: u64,
+        problem: Option<Problem>,
     },
     Stopped,
 }
@@ -186,8 +187,13 @@ impl StreamStatus {
         match status {
             Status::Connecting => StreamStatus::Connecting,
             Status::Streaming { width, height } => StreamStatus::Streaming { width, height },
-            Status::Waiting { reason, retry_at } => StreamStatus::Waiting {
+            Status::Waiting {
                 reason,
+                retry_at,
+                problem,
+            } => StreamStatus::Waiting {
+                reason,
+                problem,
                 retry_in_ms: retry_at.saturating_duration_since(now).as_millis() as u64,
             },
             Status::Stopped => StreamStatus::Stopped,

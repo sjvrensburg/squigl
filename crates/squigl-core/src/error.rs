@@ -14,6 +14,16 @@ pub enum Error {
     #[error("no Android device found (is USB debugging enabled and authorized, or the phone reachable over Wi-Fi?)")]
     NoDevice,
 
+    #[error(
+        "the phone has not allowed USB debugging from this computer yet: unlock it and tap Allow"
+    )]
+    DeviceUnauthorized,
+
+    #[error(
+        "the phone is connected but not responding (adb lists it as offline); reconnect the cable"
+    )]
+    DeviceOffline,
+
     #[error("unexpected scrcpy protocol data: {0}")]
     Protocol(String),
 

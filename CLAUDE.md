@@ -257,6 +257,14 @@ the cache's `opened/`, only the newest kept) and Tauri's drag-and-drop (paths, s
 missing at start (the same conversion and table on the CPU; it matched WebGL2 to
 under 0.1/255 on average in a side-by-side snapshot); a lost WebGL context is
 restored, not swapped (a canvas that gave a WebGL context cannot give a 2D one).
+When the stream waits on a `stream::Problem` (worked out by `stream::classify` from
+the error chain: core's `AdbNotFound`/`NoDevice`/`DeviceUnauthorized`/
+`DeviceOffline`, a missing file, then adb's and the scrcpy server's own words --
+"multiple devices", "not supported before Android 12", `CAMERA_IN_USE`),
+`Connection.svelte` shows `lib/guidance.ts`'s plain-language steps for it (adb's
+install advice per platform) with Try now / Open an image instead / Hide, and takes
+focus when the problem changes. `adb::pick_device` reports an unauthorized or
+offline phone as such rather than "no device".
 Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-path
 FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second, to
 the log) and `--dev-canvas2d` drive it from a script; page errors and warnings go to the app's log

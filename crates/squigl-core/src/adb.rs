@@ -29,30 +29,12 @@ pub struct AdbDevice {
 
 impl AdbDevice {
     /// Picks the sole device in the `device` (authorized, online) state, or fails if
-    /// zero or more than one are present. Offline/unauthorized entries are ignored,
-    /// as is the stale `host:port` entry adb keeps after a Wi-Fi device goes away.
+    /// zero or more than one are present. With none ready, a phone waiting for its
+    /// user to allow debugging, or one that is offline, says so rather than "no
+    /// device" -- the first is the commonest first-run state. The stale `host:port`
+    /// entry adb keeps after a Wi-Fi device goes away is ignored.
     pub fn autodetect() -> Result<Self> {
-        let out = adb(&[], &["devices"])?;
-        let serials: Vec<&str> = out
-            .lines()
-            .skip(1)
-            .filter_map(|l| {
-                let mut cols = l.split_whitespace();
-                match (cols.next(), cols.next()) {
-                    (Some(serial), Some("device")) => Some(serial),
-                    _ => None,
-                }
-            })
-            .collect();
-        match serials.len() {
-            0 => Err(Error::NoDevice),
-            1 => Ok(Self {
-                serial: Some(serials[0].to_string()),
-            }),
-            _ => Err(Error::AdbCommand(format!(
-                "multiple devices attached ({serials:?}); pass a serial explicitly"
-            ))),
-        }
+        pick_device(&adb(&[], &["devices"])?)
     }
 
     pub fn with_serial(serial: impl Into<String>) -> Self {
@@ -174,6 +156,41 @@ fn server_command(server_args: &[String]) -> String {
         env!("SCRCPY_SERVER_VERSION"),
         server_args.join(" ")
     )
+}
+
+/// The device [`AdbDevice::autodetect`] picks from `adb devices` output.
+fn pick_device(out: &str) -> Result<AdbDevice> {
+    let states: Vec<(&str, &str)> = out
+        .lines()
+        .skip(1)
+        .filter_map(|l| {
+            let mut cols = l.split_whitespace();
+            Some((cols.next()?, cols.next()?))
+        })
+        .collect();
+    let serials: Vec<&str> = states
+        .iter()
+        .filter(|(_, state)| *state == "device")
+        .map(|(serial, _)| *serial)
+        .collect();
+    // A Wi-Fi entry (`host:port`) adb keeps after the phone goes is not news.
+    let local = |s: &&str| !s.contains(':');
+    match serials.len() {
+        0 if states
+            .iter()
+            .any(|(s, st)| *st == "unauthorized" && local(s)) =>
+        {
+            Err(Error::DeviceUnauthorized)
+        }
+        0 if states.iter().any(|(s, st)| *st == "offline" && local(s)) => Err(Error::DeviceOffline),
+        0 => Err(Error::NoDevice),
+        1 => Ok(AdbDevice {
+            serial: Some(serials[0].to_string()),
+        }),
+        _ => Err(Error::AdbCommand(format!(
+            "multiple devices attached ({serials:?}); pass a serial explicitly"
+        ))),
+    }
 }
 
 /// The adb executable's file name on this OS.
@@ -313,6 +330,36 @@ pub fn close_stdin(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_phone_is_picked_or_its_state_reported() {
+        let head = "List of devices attached\n";
+        let pick = |rows: &str| pick_device(&format!("{head}{rows}"));
+        assert_eq!(
+            pick("RZ8M929G2NN\tdevice\n").unwrap().serial.as_deref(),
+            Some("RZ8M929G2NN")
+        );
+        assert!(matches!(pick(""), Err(Error::NoDevice)));
+        assert!(matches!(
+            pick("RZ8M929G2NN\tunauthorized\n"),
+            Err(Error::DeviceUnauthorized)
+        ));
+        assert!(matches!(
+            pick("RZ8M929G2NN\toffline\n"),
+            Err(Error::DeviceOffline)
+        ));
+        // A stale Wi-Fi entry is no phone at all.
+        assert!(matches!(
+            pick("192.168.1.5:5555\toffline\n"),
+            Err(Error::NoDevice)
+        ));
+        // One ready phone wins over one waiting.
+        assert!(pick("A\tunauthorized\nB\tdevice\n").is_ok());
+        assert!(matches!(
+            pick("A\tdevice\nB\tdevice\n"),
+            Err(Error::AdbCommand(m)) if m.contains("multiple devices")
+        ));
+    }
 
     #[test]
     fn adb_is_looked_for_in_order() {
