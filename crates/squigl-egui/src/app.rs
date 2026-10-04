@@ -1498,6 +1498,29 @@ impl App {
                 .unwrap_or_else(|| layout::rect_quad(sel.rect))
                 .map(|[x, y]| to_screen(x, y))
         });
+        // A press and release that reach us in the same frame (a VM's or a remote
+        // desktop's viewer can send them together; a fast click on a slow frame)
+        // start no drag, and this response senses drags only: take it as the click
+        // it was -- the same as a drag too small to be a box, below.
+        if self.drag.is_none()
+            && response.hovered()
+            && !response.drag_started()
+            && ui.input(|i| i.pointer.primary_clicked())
+        {
+            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                let at = to_view(pos);
+                // As a drag would: on a corner or inside the box it moves nothing.
+                let on_handle =
+                    corners.is_some_and(|c| c.iter().any(|h| h.distance(pos) <= HANDLE_PX));
+                let in_box = self.crop.is_some_and(|c| c.contains(at.0, at.1));
+                if !on_handle && !in_box {
+                    match self.block_at(at) {
+                        Some(i) => self.select_block(i),
+                        None => self.set_rect(None),
+                    }
+                }
+            }
+        }
         if response.drag_started() {
             if let Some(pos) = response.interact_pointer_pos() {
                 let start = to_view(pos);
