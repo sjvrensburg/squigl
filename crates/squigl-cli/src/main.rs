@@ -3,8 +3,10 @@ use clap::Parser;
 use squigl_core::adb::AdbDevice;
 use squigl_core::cameras::{is_usable_size, largest_usable_size};
 use squigl_core::decode::Backend;
-use squigl_core::{ConnectOptions, Facing};
+use squigl_core::{ConnectOptions, Facing, Replay};
 use squigl_v4l2::{loopback, V4l2Sink};
+use std::fs::File;
+use std::io::BufWriter;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -96,6 +98,18 @@ struct Args {
     #[arg(long, conflicts_with_all = ["serial", "connect", "facing", "zoom", "torch", "test_pattern", "resolution"])]
     webrtc: bool,
 
+    /// Also save the phone's stream to FILE, for --replay (and `squigl --replay`) to
+    /// play back with no phone. Records the first connection only: a reconnect ends
+    /// the recording. A static scene at a modest --bitrate keeps the file small (a few
+    /// hundred KB a second at 2 Mbit/s).
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["webrtc", "test_pattern"])]
+    record: Option<PathBuf>,
+
+    /// Skip ADB/phone entirely and play a recording made with --record into the V4L2
+    /// device, looping until Ctrl-C.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["serial", "connect", "facing", "zoom", "torch", "test_pattern", "resolution", "webrtc", "record"])]
+    replay: Option<PathBuf>,
+
     /// Address to bind the WebRTC capture server to. Defaults to this machine's
     /// LAN-facing IP (auto-detected).
     #[arg(long, requires = "webrtc")]
@@ -166,6 +180,10 @@ fn main() -> Result<()> {
 
     if args.test_pattern {
         return run_test_pattern(&args.device, &stop);
+    }
+
+    if let Some(path) = &args.replay {
+        return run_replay(path, &args.device, decoder, &stop);
     }
 
     if args.webrtc {
@@ -260,6 +278,7 @@ fn stream_loop(
 
     let device = args.device.as_path();
     let reconnect = !args.no_reconnect;
+    let mut record = args.record.clone();
     let mut sink: Option<V4l2Sink> = None;
     let mut backoff = MIN_BACKOFF;
     while !stop.load(Ordering::Relaxed) {
@@ -285,6 +304,14 @@ fn stream_loop(
                         sink.insert(V4l2Sink::open(device, w, h).context("opening V4L2 sink")?)
                     }
                 };
+                if let Some(path) = record.take() {
+                    let file = File::create(&path)
+                        .with_context(|| format!("creating {}", path.display()))?;
+                    session.record_to(BufWriter::new(file))?;
+                    log::info!("recording to {}", path.display());
+                } else if args.record.is_some() {
+                    log::warn!("not recording this connection: --record keeps the first");
+                }
                 let result = session
                     .run(sink, stop)
                     .context("streaming camera to V4L2 device");
@@ -409,6 +436,26 @@ fn parse_resolution(s: &str) -> Result<(u32, u32)> {
         .split_once('x')
         .with_context(|| format!("--resolution {s:?} must look like WIDTHxHEIGHT"))?;
     Ok((w.parse()?, h.parse()?))
+}
+
+/// Plays a `--record` recording into the V4L2 sink, looping until `stop`.
+fn run_replay(
+    path: &std::path::Path,
+    device: &std::path::Path,
+    decoder: Backend,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let mut replay = Replay::open(path, decoder)?.looping(true);
+    let (w, h) = (replay.meta.width, replay.meta.height);
+    let mut sink = V4l2Sink::open(device, w, h).context("opening V4L2 sink")?;
+    log::info!(
+        "replaying {} ({w}x{h}) to {} (Ctrl-C to stop)",
+        path.display(),
+        device.display()
+    );
+    replay
+        .run(&mut sink, stop)
+        .context("replaying to V4L2 device")
 }
 
 /// Drives the V4L2 sink with a synthetic, cycling color-bar frame -- exercises the

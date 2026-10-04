@@ -58,6 +58,11 @@ struct Args {
     #[arg(long, value_name = "/dev/videoN")]
     device: Option<PathBuf>,
 
+    /// Play a recording made with `squigl-cli --record`, looping, instead of using a
+    /// phone: for demos, and for trying the window with no phone attached.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["serial", "connect"])]
+    replay: Option<PathBuf>,
+
     /// Camera zoom ratio at startup (the phone's own zoom; a slider in the window
     /// changes it later).
     #[arg(long)]
@@ -215,6 +220,7 @@ fn main() -> Result<()> {
         tee_device: args.device,
         #[cfg(not(target_os = "linux"))]
         tee_device: None,
+        replay: args.replay,
     };
     let save_dir = args.save_dir.unwrap_or_else(|| {
         let home = std::env::var_os("HOME")

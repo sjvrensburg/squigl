@@ -186,6 +186,10 @@ crates/
 - Structured `ModelPhase` and lazy `PrepareModel`; egui keeps eager loading via a flag.
 - egui uses the engine for stream, freeze and rotation only. Reads and crop stay in `app.rs` for now.
 
+**Progress:** the replay source and recorder are done.
+- `squigl_core::replay`, with `--record` and `--replay` on the CLI and `squigl --replay`.
+- The worker takes it as `StreamConfig::replay`. `SourceSpec` will fold that in.
+
 **Exit criteria:**
 
 - Engine tests cover the stream state machine, freeze seq, `render_planes` (every rotation × region × step against `render_region`), the table for each mode, and config path compatibility.

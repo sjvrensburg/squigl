@@ -1,13 +1,15 @@
-//! The camera worker thread: connects to the phone, decodes, and publishes the latest
-//! frame for the UI, reconnecting with backoff when the stream drops (the same
-//! policy as the `squigl-cli` CLI). Optionally tees every frame to a V4L2 device too.
+//! The camera worker thread: connects to the phone (or plays a recording of it),
+//! decodes, and publishes the latest frame for the UI, reconnecting with backoff when
+//! the stream drops (the same policy as the `squigl-cli` CLI). Optionally tees every
+//! frame to a V4L2 device too.
 
 use anyhow::{Context, Result};
 use squigl_core::cameras::is_usable_size;
 use squigl_core::decode::YuvFrame;
 use squigl_core::sink::FrameSink;
 use squigl_core::{
-    adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, ZOOM_STEP,
+    adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, Replay,
+    ZOOM_STEP,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -47,6 +49,9 @@ pub struct StreamConfig {
     /// Also write frames to this v4l2loopback device (Linux only; always `None`
     /// elsewhere).
     pub tee_device: Option<PathBuf>,
+    /// Play this recording (`squigl-cli --record`), looping, instead of using a
+    /// phone; `options` then supplies only the decoder.
+    pub replay: Option<PathBuf>,
 }
 
 pub struct Shared {
@@ -339,6 +344,9 @@ fn run_session(
     // The session's own stop flag: raised by the outer stop or by a restart request,
     // both of which end `run()` at the next packet.
     let session_stop = AtomicBool::new(false);
+    if let Some(path) = &config.replay {
+        return run_replay(shared, config, path, &session_stop, tee, wake, backoff);
+    }
     // List the cameras once: it answers both "what is max" and "what zoom is there".
     if shared.cameras.lock().unwrap().is_empty() {
         let device = select_device(&config.options)?;
@@ -388,20 +396,7 @@ fn run_session(
         width: w,
         height: h,
     });
-    let mut sink = |frame: &YuvFrame| -> squigl_core::Result<()> {
-        // A copy per frame (12 MB at 4K, well under a millisecond) keeps the decoder
-        // free to overwrite its buffers while the UI reads this one.
-        *shared.latest.lock().unwrap() = Some(Arc::new(frame.clone()));
-        shared.frames.fetch_add(1, Ordering::Relaxed);
-        if let Some(sink) = tee.as_mut() {
-            sink.frame(frame)?;
-        }
-        if shared.stop.load(Ordering::Relaxed) || shared.restart.load(Ordering::Relaxed) {
-            session_stop.store(true, Ordering::Relaxed);
-        }
-        wake();
-        Ok(())
-    };
+    let mut sink = |frame: &YuvFrame| deliver(shared, tee, &session_stop, wake, frame);
     let result = session.run(&mut sink, &session_stop).context("streaming");
     *shared.control.lock().unwrap() = None;
     // Only a session that delivered frames resets the backoff; one that fails right
@@ -410,6 +405,59 @@ fn run_session(
         *backoff = Duration::from_secs(1);
     }
     result
+}
+
+/// Plays [`StreamConfig::replay`] in place of a phone session, looping until a stop
+/// or restart.
+fn run_replay(
+    shared: &Arc<Shared>,
+    config: &StreamConfig,
+    path: &Path,
+    session_stop: &AtomicBool,
+    tee: &mut Option<Tee>,
+    wake: &dyn Fn(),
+    backoff: &mut Duration,
+) -> Result<()> {
+    let mut replay = Replay::open(path, config.options.decoder)?.looping(true);
+    let (w, h) = (replay.meta.width, replay.meta.height);
+    log::info!("replaying {} ({w}x{h})", path.display());
+    if let Some(path) = &config.tee_device {
+        open_tee(tee, path, w, h)?;
+    }
+    shared.set_status(Status::Streaming {
+        width: w,
+        height: h,
+    });
+    let mut sink = |frame: &YuvFrame| deliver(shared, tee, session_stop, wake, frame);
+    let result = replay.run(&mut sink, session_stop).context("replaying");
+    if replay.frames_decoded() > 0 {
+        *backoff = Duration::from_secs(1);
+    }
+    result
+}
+
+/// Publishes a decoded frame to the window (and the tee), and turns a stop or
+/// restart request into `session_stop`, which ends the source's `run` at its next
+/// packet.
+fn deliver(
+    shared: &Shared,
+    tee: &mut Option<Tee>,
+    session_stop: &AtomicBool,
+    wake: &dyn Fn(),
+    frame: &YuvFrame,
+) -> squigl_core::Result<()> {
+    // A copy per frame (12 MB at 4K, well under a millisecond) keeps the decoder
+    // free to overwrite its buffers while the UI reads this one.
+    *shared.latest.lock().unwrap() = Some(Arc::new(frame.clone()));
+    shared.frames.fetch_add(1, Ordering::Relaxed);
+    if let Some(sink) = tee.as_mut() {
+        sink.frame(frame)?;
+    }
+    if shared.stop.load(Ordering::Relaxed) || shared.restart.load(Ordering::Relaxed) {
+        session_stop.store(true, Ordering::Relaxed);
+    }
+    wake();
+    Ok(())
 }
 
 /// The optional V4L2 copy of the stream ([`StreamConfig::tee_device`]).
@@ -468,7 +516,70 @@ mod tests {
             options: ConnectOptions::default(),
             resolution: Resolution::PhoneDefault,
             tee_device: None,
+            replay: None,
         })
+    }
+
+    /// A worker given a recording streams it with no phone: the status reports its
+    /// size and frames keep arriving past the end, since it loops.
+    #[test]
+    fn a_worker_plays_a_recording_in_a_loop() {
+        use openh264::encoder::Encoder;
+        use openh264::formats::YUVBuffer;
+        use squigl_core::protocol::{CodecMeta, FramePacket};
+
+        let (w, h) = (64, 48);
+        let path = std::env::temp_dir().join(format!("squigl-replay-{}.sqrec", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut rec = squigl_core::Recorder::new(
+            file,
+            CodecMeta {
+                width: w as u32,
+                height: h as u32,
+            },
+        )
+        .unwrap();
+        let mut encoder = Encoder::new().unwrap();
+        for i in 0..3u64 {
+            let yuv = YUVBuffer::from_vec(vec![128; w * h * 3 / 2], w, h);
+            rec.packet(&FramePacket {
+                is_config: false,
+                is_key_frame: i == 0,
+                pts_us: i * 1_000,
+                data: encoder.encode(&yuv).unwrap().to_vec(),
+            })
+            .unwrap();
+        }
+        rec.finish().unwrap();
+
+        let mut worker = Worker::start(
+            StreamConfig {
+                options: ConnectOptions::default(),
+                resolution: Resolution::PhoneDefault,
+                tee_device: None,
+                replay: Some(path.clone()),
+            },
+            || {},
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while worker.shared.frames() < 10 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let status = worker.shared.status();
+        worker.stop();
+        std::fs::remove_file(&path).unwrap();
+        assert!(worker.shared.frames() >= 10, "{status:?}");
+        assert!(
+            matches!(
+                status,
+                Status::Streaming {
+                    width: 64,
+                    height: 48
+                }
+            ),
+            "{status:?}"
+        );
+        assert_eq!(worker.shared.latest().unwrap().width, w);
     }
 
     /// The zoom slider shows the target rounded to two decimals and writes that back

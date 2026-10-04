@@ -273,6 +273,18 @@ being installed (`cargo install --path crates/squigl-cli [--features ffmpeg]`).
 Writes a synthetic cycling color-bar pattern instead of a real camera stream --
 exercises the loopback/format-negotiation/write path independently of ADB/hardware.
 
+### Recording the phone and playing it back
+
+```
+./target/release/squigl-cli --resolution 1920x1080 --bitrate 4 --record desk.sqrec
+./target/release/squigl-cli --replay desk.sqrec --device /dev/video10
+./target/release/squigl --replay desk.sqrec
+```
+
+`--record` saves the stream while it runs (stop with Ctrl-C). `--replay` plays it back
+in a loop, to the V4L2 device or in the window, with no phone attached -- for demos,
+and for testing on a machine with no phone.
+
 ## Troubleshooting
 
 - **`CAMERA_IN_USE`** (server fails immediately): the phone's own camera app is open
