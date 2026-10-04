@@ -28,6 +28,7 @@ cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
 cargo build --release -p squigl-desktop   # the Tauri app (needs WebKitGTK 4.1 headers on Linux)
+# Windows: the Visual Studio 2026 C++ Build Tools -- with 2022's, the prebuilt ONNX Runtime fails to link (__std_rotate)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --lib   # CI enforces this too (libraries only: the binaries' docs are --help text)
 ```
 
