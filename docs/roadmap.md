@@ -146,6 +146,19 @@ crates/
 | **S6** WebCodecs probe | 0.5 day | Availability per webview (for the record only). |
 | **S7** LaTeX→MathML and maths speech | 2 days, before Phase 8 | `pulldown-latex`/`latex2mmlc` in Rust vs Temml in JS, measured on `testdata/handwriting` readings. Quality of MathCAT's ClearSpeak speech from that MathML through the `tts` crate on each OS. |
 
+**S2 findings (CI, 2026-10-04):**
+
+- core, engine, models, math and the egui window build, pass clippy and pass their tests on `windows-latest` and `macos-14` unchanged, apart from the per-OS rpath.
+- The ort git pin's prebuilt binaries include the WebGPU provider on both:
+  - **Windows x64:** `webgpu_dawn.dll`, plus `dxcompiler.dll` and `dxil.dll` (the D3D12 shader compiler), next to the exe.
+  - **macOS arm64:** `libwebgpu_dawn.dylib`, next to the binary (found through `@executable_path`).
+
+  On both, as on Linux, they are symlinks into ort's cache, so packaging copies the real files (Phase 6: all three DLLs on Windows).
+- Still open:
+  - `glmocr_handwriting` on CPU on those runners, which needs the model download (a manual job);
+  - whether the WebGPU provider actually runs there, which needs a real GPU *(tester)*;
+  - the Windows VM's checks.
+
 ### Phase 1: Mechanical restructure (no behaviour change)
 
 - **1a. Rename `phone-cam4linux/` to `crates/squigl-core`.**
