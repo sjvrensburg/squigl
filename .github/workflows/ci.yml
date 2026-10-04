@@ -68,8 +68,10 @@ jobs:
       # Typst may reach it (they implement its traits from outside).
       - name: Engine stays UI-independent
         run: |
-          if cargo tree -p squigl-engine -e normal --prefix none \
-              | grep -E '^(egui|eframe|ort|typst|typst-[a-z-]+|mitex) '; then
+          # Captured first so a failing `cargo tree` fails the step instead of
+          # reading as "no match".
+          tree=$(cargo tree -p squigl-engine -e normal --prefix none)
+          if grep -E '^(egui|eframe|ort|typst|typst-[a-z-]+|mitex) ' <<<"$tree"; then
             echo "squigl-engine must not depend on the crates above" >&2
             exit 1
           fi

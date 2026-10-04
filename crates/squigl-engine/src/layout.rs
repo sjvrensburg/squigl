@@ -1,6 +1,6 @@
 //! Layout blocks: what a block detector reports, and the geometry the window needs
 //! to use it -- independent of which detector (the built-in PP-DocLayoutV3 lives in
-//! `local::layout`) so the window compiles without one.
+//! `squigl_models::layout`) so the window compiles without one.
 
 use crate::geometry::Crop;
 use anyhow::Result;
