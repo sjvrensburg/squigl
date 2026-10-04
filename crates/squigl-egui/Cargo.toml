@@ -18,7 +18,7 @@ anyhow.workspace = true
 clap.workspace = true
 log.workspace = true
 env_logger.workspace = true
-eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wgpu", "wayland", "x11"] }
 egui = "0.36"
 image = { version = "0.25", default-features = false, features = ["png"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -36,3 +36,7 @@ local-model = ["dep:squigl-models"]
 # Readings shown typeset: the LaTeX the models emit is converted to Typst math by
 # MiTeX and rendered by Typst with its embedded fonts (adds ~40 MB to the binary).
 math = ["dep:squigl-math"]
+
+# A startup failure in a release build (no console on Windows) goes to a message box.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
