@@ -216,6 +216,35 @@ jobs:
       - name: Test
         run: cargo test -p squigl-desktop
 
+      # The app through WebDriver (tauri-driver over WebKitWebDriver or msedgedriver)
+      # on a synthetic recording: the keyboard, each display mode's pixels against
+      # the engine's, text size and theme contrast. macOS has no WebDriver for WKWebView.
+      - name: End-to-end tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends webkit2gtk-driver xvfb
+          cargo install tauri-driver --locked
+
+      - name: End-to-end tools (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo install tauri-driver --locked
+          # msedgedriver matching the installed WebView2, into the working directory.
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          msedgedriver-tool
+          echo "NATIVE_DRIVER=$PWD/msedgedriver.exe" >> "$GITHUB_ENV"
+
+      - name: End-to-end tests
+        if: runner.os != 'macOS'
+        run: |
+          cargo build --release -p squigl-desktop
+          cargo build --release -p squigl-core --example synth_recording
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1920x1080x24" node --test crates/squigl-desktop/e2e/app.test.mjs
+          else
+            node --test crates/squigl-desktop/e2e/app.test.mjs
+          fi
+
   # GLM-OCR against the recorded readings, on the CPU (the runners have no GPU), on
   # every OS: on demand only, since it downloads the models (~790 MB, cached).
   models:

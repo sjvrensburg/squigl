@@ -1,5 +1,6 @@
 // The frame transport's client: one WebSocket to the app (see
-// crates/squigl-desktop/src/transport.rs), one request at a time.
+// crates/squigl-desktop/src/transport.rs), with up to MAX_IN_FLIGHT requests
+// outstanding, answered in order.
 import type { Endpoint, Rotation } from "./engine";
 
 export interface Viewport {
@@ -62,37 +63,40 @@ export function parseFrame(buf: ArrayBuffer): Frame {
   return { header, y, u, v };
 }
 
+/**
+ * Requests outstanding at once. One leaves the socket idle while the webview takes
+ * in a reply (about 40 ms for 3 MB in WebKitGTK on the Ubuntu box); with two, the
+ * app builds the next frame meanwhile.
+ */
+export const MAX_IN_FLIGHT = 2;
+
 export class FrameClient {
   private ws: WebSocket;
-  private waiting: ((reply: ArrayBuffer | string) => void) | null = null;
+  private waiting: ((reply: ArrayBuffer | string) => void)[] = [];
   readonly ready: Promise<void>;
 
   constructor(endpoint: Endpoint) {
     this.ws = new WebSocket(`ws://127.0.0.1:${endpoint.port}/?token=${endpoint.token}`);
     this.ws.binaryType = "arraybuffer";
-    this.ws.onmessage = (ev) => {
-      const done = this.waiting;
-      this.waiting = null;
-      done?.(ev.data);
-    };
+    this.ws.onmessage = (ev) => this.waiting.shift()?.(ev.data);
     this.ready = new Promise((ok, fail) => {
       this.ws.onopen = () => ok();
       this.ws.onerror = () => fail(new Error("the frame connection failed"));
     });
   }
 
+  /** Whether another request must wait for a reply. */
   get busy(): boolean {
-    return this.waiting !== null;
+    return this.waiting.length >= MAX_IN_FLIGHT;
   }
 
   /** The planes for `viewport`, or null when there is no frame yet. */
   async request(viewport: Viewport, format: PlaneFormat): Promise<Frame | null> {
-    if (this.busy) throw new Error("one frame request at a time");
+    if (this.busy) throw new Error(`at most ${MAX_IN_FLIGHT} frame requests at a time`);
+    const reply = new Promise<ArrayBuffer | string>((ok) => this.waiting.push(ok));
     await this.ready;
-    const reply = await new Promise<ArrayBuffer | string>((ok) => {
-      this.waiting = ok;
-      this.ws.send(JSON.stringify({ viewport, frame: "shown", format }));
-    });
-    return typeof reply === "string" ? null : parseFrame(reply);
+    this.ws.send(JSON.stringify({ viewport, frame: "shown", format }));
+    const data = await reply;
+    return typeof data === "string" ? null : parseFrame(data);
   }
 }

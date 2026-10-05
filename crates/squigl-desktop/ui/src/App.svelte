@@ -15,7 +15,7 @@
     type Event,
     type StreamSlice,
   } from "./lib/engine";
-  import { FrameClient, type Viewport } from "./lib/frames";
+  import { FrameClient, type FrameHeader, type Viewport } from "./lib/frames";
   import { MODES, modeLabel } from "./lib/modes";
   import { Renderer, type FrameRenderer } from "./lib/renderer";
   import { Renderer2D } from "./lib/renderer2d";
@@ -41,11 +41,14 @@
 
   let renderer: FrameRenderer | null = null;
   let client: FrameClient | null = null;
-  // A frame is wanted (something changed) while one is being fetched.
+  // A frame is wanted (something changed) while as many as may be are being fetched.
   let wanted = false;
   let firstFrame: (() => void) | null = null;
-  // Frames drawn so far (for --dev-stats).
+  // Frames drawn so far (for --dev-stats), and the last one's header.
   let drawn = 0;
+  let shown: FrameHeader | null = null;
+  // Milliseconds from asking for each frame to having drawn it (for --dev-stats).
+  let fetchTimes: number[] = [];
 
   const maxMagnification = $derived(config?.magnifier.max_magnification ?? 30);
   const frozen = $derived(capture?.frozen != null);
@@ -96,10 +99,13 @@
     }
     wanted = false;
     try {
+      const asked = performance.now();
       const frame = await client.request(viewport(), renderer.wantsLumaOnly ? "luma" : "yuv420");
       if (frame) {
         renderer.show(frame);
         drawn++;
+        shown = frame.header;
+        fetchTimes.push(performance.now() - asked);
         firstFrame?.();
         firstFrame = null;
       }
@@ -279,7 +285,13 @@
       setInterval(() => {
         const rate = (drawn - last) / 5;
         last = drawn;
-        invoke("page_log", { level: "info", message: `drew ${rate.toFixed(1)} frames/s` });
+        const times = fetchTimes.sort((a, b) => a - b);
+        fetchTimes = [];
+        const at = (q: number) => (times[Math.floor(q * (times.length - 1))] ?? 0).toFixed(1);
+        invoke("page_log", {
+          level: "info",
+          message: `drew ${rate.toFixed(1)} frames/s; request to drawn ${at(0.5)} ms median, ${at(0.95)} ms 95th percentile`,
+        });
       }, 5000);
     }
     if (dev.keys.length === 0 && dev.snapshot_after_ms === null) return;
@@ -300,9 +312,45 @@
     await invoke("dev_save_snapshot", png);
   }
 
+  /**
+   * For --dev-probe: what a WebDriver test reads. `sample` takes points as
+   * fractions of the view and gives, for each, the view pixel there, the colour
+   * drawn at its centre on the canvas, and the engine's reference for it.
+   */
+  function installProbe() {
+    (window as unknown as { squiglProbe: object }).squiglProbe = {
+      renderer: () => (renderer instanceof Renderer ? "webgl2" : "canvas2d"),
+      drawn: () => drawn,
+      header: () => shown,
+      async sample(points: [number, number][]) {
+        const header = shown;
+        const r = renderer;
+        if (!header || !r) return null;
+        const [vw, vh] = header.view;
+        const { origin, scale } = header.placement;
+        const at = points.map(([fx, fy]) => {
+          const view: [number, number] = [
+            Math.min(Math.floor(fx * vw), vw - 1),
+            Math.min(Math.floor(fy * vh), vh - 1),
+          ];
+          const canvasAt: [number, number] = [
+            Math.floor((view[0] + 0.5 - origin[0]) * scale),
+            Math.floor((view[1] + 0.5 - origin[1]) * scale),
+          ];
+          return { view, canvas: canvasAt, drawn: r.pixel(...canvasAt) };
+        });
+        const expected = await invoke<([number, number, number] | null)[]>("dev_reference", {
+          points: at.map((p) => p.view),
+        });
+        return at.map((p, i) => ({ ...p, expected: expected[i] }));
+      },
+    };
+  }
+
   /** WebGL2 if there is one (and --dev-canvas2d is not given), else Canvas2D. */
   async function makeRenderer(): Promise<FrameRenderer> {
-    const dev = await invoke<{ canvas2d: boolean }>("dev_options");
+    const dev = await invoke<{ canvas2d: boolean; probe: boolean }>("dev_options");
+    if (dev.probe) installProbe();
     if (!dev.canvas2d) {
       try {
         return new Renderer(canvas);

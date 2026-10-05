@@ -64,6 +64,20 @@ struct Args {
     /// Development aid: draw with the Canvas2D fallback even where WebGL2 works.
     #[arg(long, hide = true)]
     dev_canvas2d: bool,
+
+    /// Development aid: the page offers `window.squiglProbe` (the last frame's
+    /// header, drawn pixels and the engine's reference for them) to a WebDriver test.
+    #[arg(long, hide = true)]
+    dev_probe: bool,
+
+    /// Development aid: zoom the page by this factor, as the OS text size would.
+    #[arg(long, hide = true, value_name = "FACTOR")]
+    dev_text_scale: Option<f64>,
+
+    /// Development aid: start from the default settings and save them to FILE,
+    /// leaving the real configuration alone.
+    #[arg(long, hide = true, value_name = "FILE")]
+    dev_config: Option<PathBuf>,
 }
 
 /// The development aids the page acts on.
@@ -73,6 +87,7 @@ struct DevOptions {
     snapshot_after_ms: Option<u64>,
     stats: bool,
     canvas2d: bool,
+    probe: bool,
     #[serde(skip)]
     snapshot_path: Option<PathBuf>,
 }
@@ -147,9 +162,37 @@ fn dev_save_snapshot(
     Ok(())
 }
 
+/// The engine's colours for view pixels of the shown frame, for `--dev-probe`.
+#[tauri::command]
+fn dev_reference(host: State<'_, Host>, points: Vec<(usize, usize)>) -> Vec<Option<[u8; 3]>> {
+    points
+        .into_iter()
+        .map(|(x, y)| host.reference(x, y))
+        .collect()
+}
+
 #[tauri::command]
 fn lut(host: State<'_, Host>) -> Result<LutReply, String> {
     host.lut().ok_or_else(|| "the engine has stopped".into())
+}
+
+/// The OS's text size as a zoom for the page. Windows keeps it apart from the
+/// display scale (Settings > Accessibility > Text size, 100-225 %) and WebView2 does
+/// not apply it. WebKitGTK already follows GNOME's text scaling, which arrives as the
+/// device pixel ratio; macOS has no system-wide text size.
+fn os_text_scale() -> f64 {
+    #[cfg(windows)]
+    {
+        use winreg::enums::HKEY_CURRENT_USER;
+        let percent: Option<u32> = winreg::RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(r"Software\Microsoft\Accessibility")
+            .and_then(|key| key.get_value("TextScaleFactor"))
+            .ok();
+        if let Some(percent) = percent {
+            return f64::from(percent.clamp(100, 225)) / 100.0;
+        }
+    }
+    1.0
 }
 
 fn main() -> anyhow::Result<()> {
@@ -164,6 +207,7 @@ fn main() -> anyhow::Result<()> {
         snapshot_after_ms: args.dev_snapshot_after.map(|s| (s * 1000.0) as u64),
         stats: args.dev_stats,
         canvas2d: args.dev_canvas2d,
+        probe: args.dev_probe,
         snapshot_path: args.dev_snapshot_path,
     };
     let source = match (args.open, args.replay) {
@@ -172,10 +216,16 @@ fn main() -> anyhow::Result<()> {
         (None, None) if args.test_pattern => SourceSpec::TestPattern,
         (None, None) => SourceSpec::Phone,
     };
-    let config = Config::load_or_create().unwrap_or_else(|e| {
-        log::error!("{e:#}; using the defaults");
-        Config::default()
-    });
+    let (config, config_file) = match args.dev_config {
+        Some(file) => (Config::default(), file),
+        None => (
+            Config::load_or_create().unwrap_or_else(|e| {
+                log::error!("{e:#}; using the defaults");
+                Config::default()
+            }),
+            Config::path(),
+        ),
+    };
     let stream = StreamConfig {
         source,
         options: ConnectOptions {
@@ -194,12 +244,25 @@ fn main() -> anyhow::Result<()> {
         config,
         stream,
         EngineDeps::remote_only,
-        EngineOptions::default(),
+        EngineOptions {
+            config_file: Some(config_file),
+            ..EngineOptions::default()
+        },
     );
     let frames = transport::start(host.clone())?;
     log::info!("frames on ws://127.0.0.1:{}", frames.port);
 
+    let text_scale = args.dev_text_scale.unwrap_or_else(os_text_scale);
     let app = tauri::Builder::default()
+        .setup(move |app| {
+            if text_scale != 1.0 {
+                log::info!("text scale {text_scale}: zooming the page");
+                if let Some(window) = app.get_webview_window("main") {
+                    window.set_zoom(text_scale)?;
+                }
+            }
+            Ok(())
+        })
         .on_page_load(|webview, payload| {
             log::debug!(
                 "page {:?}: {}",
@@ -218,7 +281,8 @@ fn main() -> anyhow::Result<()> {
             open_image,
             page_log,
             dev_options,
-            dev_save_snapshot
+            dev_save_snapshot,
+            dev_reference
         ])
         .build(tauri::generate_context!())?;
     app.run(|handle, event| {

@@ -165,10 +165,18 @@ pub fn i420_region_planes(
         "region outside frame"
     );
     let (ow, oh) = region_size(w, h, step);
+    // Every `step`-th of `n` bytes from `start`: a row of the output. A whole row
+    // at step 1 is one copy (a magnified 4K frame is ~3 MB a request).
+    let pick = |out: &mut Vec<u8>, plane: &[u8], start: usize, n: usize| {
+        if step == 1 {
+            out.extend_from_slice(&plane[start..start + n]);
+        } else {
+            out.extend(plane[start..].iter().step_by(step).take(n));
+        }
+    };
     let mut luma = Vec::with_capacity(ow * oh);
     for row in 0..oh {
-        let src = &frame.y[(y + row * step) * frame.width..];
-        luma.extend((0..ow).map(|col| src[x + col * step]));
+        pick(&mut luma, &frame.y, (y + row * step) * frame.width + x, ow);
     }
     let (mut u, mut v) = (Vec::new(), Vec::new());
     if format == PlaneFormat::Yuv420 {
@@ -176,13 +184,12 @@ pub fn i420_region_planes(
         let (cw, ch) = (ow.div_ceil(2), oh.div_ceil(2));
         u.reserve(cw * ch);
         v.reserve(cw * ch);
+        // Output chroma (c, r) is at ((x + 2c step) / 2, (y + 2r step) / 2), which
+        // is (x / 2 + c step, y / 2 + r step).
         for row in 0..ch {
-            let sy = (y + 2 * row * step) / 2;
-            for col in 0..cw {
-                let sx = (x + 2 * col * step) / 2;
-                u.push(frame.u[sy * uv_w + sx]);
-                v.push(frame.v[sy * uv_w + sx]);
-            }
+            let start = (y / 2 + row * step) * uv_w + x / 2;
+            pick(&mut u, &frame.u, start, cw);
+            pick(&mut v, &frame.v, start, cw);
         }
     }
     Planes {

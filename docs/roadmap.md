@@ -151,7 +151,7 @@ crates/
 - **The localhost WebSocket is the transport.** It is the only one that keeps a 12 MB frame (4000x3000) at 30 fps on under one core (0.57 cores, p95 16 ms). At 3 MB it uses 0.2 cores, against about 0.5 for the custom URI scheme and for IPC.
 - **The scheme and IPC** pass up to 5.5 MB, but cost about 3 times the CPU per byte.
 - No frame was corrupted.
-- **Still to run:** the Ubuntu/Nvidia box (`./run.sh`). Windows and macOS are *(tester)*.
+- **The Ubuntu/Nvidia box (X11, 2026-10-05, part of the sweep, uncapped):** the WebSocket did 35 fps at 3 MB (p95 58 ms, 2.4 cores) and 10 fps at 12 MB. That is about 110 MB/s, far below the Fedora box. At 3 MB the custom scheme did 22 fps and IPC 15. The WebSocket is still the best transport here. Windows and macOS are *(tester)*.
 - **For S3:** WebGL2 works under llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`), at 30 fps for 3 MB, but on 3.4 cores. Without a GPU, the front end must send smaller frames or use Canvas2D.
 
 **S2 findings (CI, 2026-10-04):**
@@ -315,8 +315,24 @@ crates/
 - **The connection screen.** `stream::Problem` and `stream::classify` say what went wrong in terms a person can act on: adb missing, no phone, unauthorized, offline, several phones, camera in use, Android too old, file missing, other.
 - **Guidance.** Each problem has plain-language steps, with Try now, Open an image instead, and Hide.
 - **Device state.** `adb` now reports an unauthorized or offline phone as such, rather than as "no device".
-- **Next:**
-  - Then the tests: `tauri-driver` end-to-end, and the per-mode pixel check.
+
+**Progress (4d, 2026-10-05):**
+
+- **End-to-end tests** (`crates/squigl-desktop/e2e/`, Node's own test runner and `fetch`, no dependencies) drive the release app through `tauri-driver` against a synthetic recording (`squigl-core`'s `synth_recording` example). Their 18 tests pass on the Ubuntu box in about 30 s. They cover:
+  - playing live; freeze and live, rotate, magnify, pan and reset, the next display mode, and Settings, all from the keyboard;
+  - Tab reaching every toolbar control, and Enter working one.
+- **The per-mode pixel check.** Each of the 7 modes is drawn, unrotated and turned right, by WebGL2 and by Canvas2D. 64 points are compared with `Engine::displayed_pixel` (the source pixel under a view point, converted and passed through `Lut::apply`), to within 3/255. With the shader's red coefficient broken on purpose, `normal` fails at 32 of 64 points.
+- **Text size.** WebKitGTK already follows GNOME's text scaling: it arrives as the device pixel ratio (1.25 at a 1.25 factor). Windows' separate Text size setting (`TextScaleFactor`) now zooms the webview. A test at `--dev-text-scale 2` checks that nothing scrolls, every control is on screen and the picture keeps at least 40% of the height.
+- **Themes.** A test checks WCAG contrast in each theme: text at least 4.5:1 (7:1 in the high-contrast ones), and control edges and the focus ring at least 3:1.
+- **CI:** the `desktop` job runs the tests on Linux (WebKitWebDriver under Xvfb) and Windows (msedgedriver). macOS has no WebDriver for WKWebView.
+- **Faster frames:** up to two frame requests in flight (the design's number; the app had kept one), and plane rows copied as slices.
+- **The 4K criterion is not met on the Ubuntu box: 21 fps.** That's a 3840x2160 replay, magnified 2x (3 MB a frame), with WebGL2, on 1.4 cores; 50 ms median from request to drawn, 60 ms at the 95th percentile.
+  - **openh264 is the first limit.** On its own it decodes that recording at 18.6 fps (11.6 without `nasm`: `openh264-sys2` quietly drops its assembly), so the app drew 18.
+  - **With the `ffmpeg` feature (new for `squigl-desktop`)** the app draws 21.
+  - **The WebSocket is the next limit.** WebKitGTK here takes in about 105-120 MB/s (spike S1's `ws` run on this box: 35 fps at 3 MB, 10 fps at 12 MB; the custom scheme 22 fps and IPC 15 fps at 3 MB), against the Fedora box's 30 fps at 12 MB.
+  - **Canvas2D draws 4.4 fps at that size.**
+  - **Still to measure:** the Fedora box, and the phone's own 2992x2992 stream on this box.
+- **Not testable here:** GNOME Zoom and Windows Magnifier following focus, and the two low-vision testers.
 
 **Exit criteria:**
 

@@ -93,6 +93,8 @@ export interface FrameRenderer {
   setSmooth(smooth: boolean): void;
   show(frame: Frame): void;
   draw(): void;
+  /** Redraws, then reads the canvas pixel (device pixels from the top left) as RGB. */
+  pixel(x: number, y: number): [number, number, number];
 }
 
 /** The screen rectangle (device pixels) a frame's region is drawn into. */
@@ -215,5 +217,14 @@ export class Renderer implements FrameRenderer {
     gl.uniform1i(gl.getUniformLocation(this.prog, "lumaMode"), this.lumaMode ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, "hasChroma"), format === "yuv420" ? 1 : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  pixel(x: number, y: number): [number, number, number] {
+    // Read in the task that drew: the drawing buffer is not kept after it.
+    this.draw();
+    const gl = this.gl;
+    const out = new Uint8Array(4);
+    gl.readPixels(x, this.canvas.height - 1 - y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    return [out[0]!, out[1]!, out[2]!];
   }
 }

@@ -65,6 +65,7 @@ enum Request {
     Subscribe(Channel<Event>),
     Frame(FrameRequest, Sender<Option<FrameReply>>),
     Lut(Sender<LutReply>),
+    Reference(usize, usize, Sender<Option<[u8; 3]>>),
     Wake,
     /// Stop the engine (ending a phone session cleanly) and the thread; answered
     /// when done.
@@ -141,6 +142,14 @@ impl Host {
         self.tx.send(Request::Lut(tx)).ok()?;
         rx.recv().ok()
     }
+
+    /// The colour the shown frame should have on screen at view pixel (`x`, `y`)
+    /// ([`Engine::displayed_pixel`]); `None` before a frame or outside the view.
+    pub fn reference(&self, x: usize, y: usize) -> Option<[u8; 3]> {
+        let (tx, rx) = mpsc::channel();
+        self.tx.send(Request::Reference(x, y, tx)).ok()?;
+        rx.recv().ok().flatten()
+    }
 }
 
 /// Every slice, as events: what a new subscriber starts from.
@@ -213,6 +222,9 @@ fn serve(mut engine: Engine, rx: Receiver<Request>) {
             }
             Ok(Request::Lut(reply)) => {
                 let _ = reply.send(lut(&engine));
+            }
+            Ok(Request::Reference(x, y, reply)) => {
+                let _ = reply.send(engine.displayed_pixel(FrameRef::Shown, x, y));
             }
             Ok(Request::Wake) | Err(RecvTimeoutError::Timeout) => {}
             Ok(Request::Stop(done)) => {
