@@ -195,9 +195,46 @@ fn os_text_scale() -> f64 {
     1.0
 }
 
+/// The command line. On Windows an argument the app does not know is logged and
+/// skipped rather than fatal: a release build has no console to show clap's error
+/// in, and msedgedriver (WebDriver, for the end-to-end tests) starts the app with
+/// Chromium's switches (`--remote-debugging-port=0`, `--user-data-dir=...`).
+fn parse_args() -> Args {
+    if cfg!(windows) {
+        parse_lenient(std::env::args().collect()).unwrap_or_else(|e| e.exit())
+    } else {
+        Args::parse()
+    }
+}
+
+/// Parses `argv`, dropping (with a warning) each argument clap does not know.
+fn parse_lenient(mut argv: Vec<String>) -> Result<Args, clap::Error> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    loop {
+        let e = match Args::try_parse_from(&argv) {
+            Ok(args) => return Ok(args),
+            Err(e) if e.kind() == ErrorKind::UnknownArgument => e,
+            Err(e) => return Err(e),
+        };
+        let Some(ContextValue::String(bad)) = e.get(ContextKind::InvalidArg) else {
+            return Err(e);
+        };
+        // Reported as `--name` even when given as `--name=value`.
+        let name = bad.split('=').next().unwrap_or(bad);
+        let Some(at) = argv
+            .iter()
+            .position(|a| a == name || a.starts_with(&format!("{name}=")))
+        else {
+            return Err(e);
+        };
+        log::warn!("ignoring the unknown argument {}", argv[at]);
+        argv.remove(at);
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let args = Args::parse();
+    let args = parse_args();
     let dev = DevOptions {
         keys: args
             .dev_keys
@@ -291,4 +328,37 @@ fn main() -> anyhow::Result<()> {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(args: &[&str]) -> Vec<String> {
+        std::iter::once("squigl-desktop")
+            .chain(args.iter().copied())
+            .map(String::from)
+            .collect()
+    }
+
+    #[test]
+    fn unknown_switches_are_skipped_and_known_ones_kept() {
+        let args = parse_lenient(argv(&[
+            "--remote-debugging-port=0",
+            "--replay",
+            "a.sqrec",
+            "--no-first-run",
+            "--user-data-dir=C:\\x",
+            "--dev-probe",
+            "data:,",
+        ]))
+        .unwrap();
+        assert_eq!(args.replay, Some(PathBuf::from("a.sqrec")));
+        assert!(args.dev_probe);
+    }
+
+    #[test]
+    fn other_mistakes_still_fail() {
+        assert!(parse_lenient(argv(&["--replay"])).is_err());
+    }
 }
