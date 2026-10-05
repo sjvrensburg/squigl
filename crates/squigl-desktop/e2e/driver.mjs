@@ -43,8 +43,11 @@ export async function until(check, what, ms = 15000) {
 export async function startDriver() {
   const args = ["--port", String(PORT)];
   if (process.env.NATIVE_DRIVER) args.push("--native-driver", process.env.NATIVE_DRIVER);
+  // The app's log, wherever its console is (none for a Windows release build).
+  const env = { ...process.env, SQUIGL_LOG_FILE: process.env.SQUIGL_LOG_FILE ?? join(SCRATCH, "app.log") };
   const child = spawn(process.env.TAURI_DRIVER ?? "tauri-driver", args, {
     stdio: ["ignore", "inherit", "inherit"],
+    env,
   });
   let exited = null;
   child.on("exit", (code) => (exited = code));

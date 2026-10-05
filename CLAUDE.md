@@ -278,7 +278,9 @@ engine's reference -- what `e2e/app.test.mjs` checks each display mode with) dri
 from a script; page errors and warnings go to the app's log (target `page`). The page
 keeps up to two frame requests in flight (`frames.ts`'s `MAX_IN_FLIGHT`): with one,
 the socket idled while WebKitGTK took in a reply. Windows' Text size setting zooms the
-webview (`os_text_scale`); WebKitGTK follows GNOME's by itself. Without `nasm` on
+webview (`os_text_scale`); WebKitGTK follows GNOME's by itself. `SQUIGL_LOG_FILE=FILE`
+sends the app's log (and panics) to a file -- a Windows release build has no console --
+and on Windows an unknown argument is logged and skipped (msedgedriver passes Chromium's). Without `nasm` on
 PATH, `openh264-sys2` quietly builds without its assembly (~40% slower decoding). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
 for a window that is not being drawn.
 

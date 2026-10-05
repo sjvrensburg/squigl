@@ -232,8 +232,33 @@ fn parse_lenient(mut argv: Vec<String>) -> Result<Args, clap::Error> {
     }
 }
 
+/// Logging to stderr, or to the file `SQUIGL_LOG_FILE` names (appended): a release
+/// build on Windows has no console, so its log is otherwise lost. Panics are logged.
+fn init_logging() {
+    let mut builder =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
+    if let Some(path) = std::env::var_os("SQUIGL_LOG_FILE") {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(file) => {
+                builder.target(env_logger::Target::Pipe(Box::new(file)));
+            }
+            Err(e) => eprintln!("cannot log to {}: {e}", path.to_string_lossy()),
+        }
+    }
+    builder.init();
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("{info}");
+        default(info);
+    }));
+}
+
 fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    init_logging();
     let args = parse_args();
     let dev = DevOptions {
         keys: args
