@@ -59,6 +59,25 @@ export async function startDriver() {
   return { stop: () => child.kill() };
 }
 
+/**
+ * `--name value` pairs as `--name=value`: msedgedriver passes the app's arguments
+ * as Chromium switches, putting `--` before (and lowercasing) any that lacks it, so
+ * a separate value would arrive as a switch of its own.
+ */
+function joined(args) {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const next = args[i + 1];
+    if (args[i].startsWith("--") && next !== undefined && !next.startsWith("--")) {
+      out.push(`${args[i]}=${next}`);
+      i++;
+    } else {
+      out.push(args[i]);
+    }
+  }
+  return out;
+}
+
 export const ELEMENT = "element-6066-11e4-a52e-4f735466cecf";
 
 /** Keys WebDriver spells as private-use characters. */
@@ -83,7 +102,7 @@ export class Session {
     const body = {
       capabilities: {
         alwaysMatch: {
-          "tauri:options": { application: APP, args: [...args, "--dev-config", config] },
+          "tauri:options": { application: APP, args: joined([...args, "--dev-config", config]) },
         },
       },
     };
