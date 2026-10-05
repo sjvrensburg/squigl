@@ -954,7 +954,10 @@ mod tests {
                 kinds(&first)
             );
         }
-        pump_until(&mut engine, |e| matches!(e, Event::Frame { .. }));
+        // The image's one frame can land before the first pump; then it was in `first`.
+        if !first.iter().any(|e| matches!(e, Event::Frame { .. })) {
+            pump_until(&mut engine, |e| matches!(e, Event::Frame { .. }));
+        }
         assert!(counts.wakes.load(Ordering::Relaxed) > 0);
         // An image sends one frame; once its status and size are in, all is quiet.
         let quiet = (0..200).any(|_| {
