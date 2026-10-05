@@ -259,6 +259,12 @@ fn init_logging() {
 
 fn main() -> anyhow::Result<()> {
     init_logging();
+    // What WebView2 is told from outside (msedgedriver passes its settings so).
+    for (name, value) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("WEBVIEW2_") {
+            log::info!("{} = {}", name.to_string_lossy(), value.to_string_lossy());
+        }
+    }
     let args = parse_args();
     let dev = DevOptions {
         keys: args
