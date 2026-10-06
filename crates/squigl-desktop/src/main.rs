@@ -176,6 +176,30 @@ fn lut(host: State<'_, Host>) -> Result<LutReply, String> {
     host.lut().ok_or_else(|| "the engine has stopped".into())
 }
 
+/// WebView2's `WEBVIEW2_USER_DATA_FOLDER` and `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
+/// applied to the window. wry sets its own data folder and arguments, and with
+/// them in place msedgedriver (WebDriver, for the end-to-end tests), which passes
+/// its remote-debugging switch and scoped folder in these variables, never finds
+/// the browser's DevTools port. Elsewhere, and when they are unset, nothing changes.
+fn webview2_from_environment<R: tauri::Runtime, M: Manager<R>>(
+    builder: tauri::WebviewWindowBuilder<'_, R, M>,
+) -> tauri::WebviewWindowBuilder<'_, R, M> {
+    if !cfg!(windows) {
+        return builder;
+    }
+    let mut builder = builder;
+    if let Some(folder) = std::env::var_os("WEBVIEW2_USER_DATA_FOLDER") {
+        builder = builder.data_directory(PathBuf::from(folder));
+    }
+    if let Ok(extra) = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") {
+        // wry's own defaults, which giving any arguments replaces.
+        let args =
+            format!("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection {extra}");
+        builder = builder.additional_browser_args(&args);
+    }
+    builder
+}
+
 /// The OS's text size as a zoom for the page. Windows keeps it apart from the
 /// display scale (Settings > Accessibility > Text size, 100-225 %) and WebView2 does
 /// not apply it. WebKitGTK already follows GNOME's text scaling, which arrives as the
@@ -323,11 +347,21 @@ fn main() -> anyhow::Result<()> {
     let text_scale = args.dev_text_scale.unwrap_or_else(os_text_scale);
     let app = tauri::Builder::default()
         .setup(move |app| {
+            // The window is made here, not from the config, so that WebView2's own
+            // settings can be honoured (see `webview2_from_environment`).
+            let config = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|w| w.label == "main")
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("tauri.conf.json has no main window"))?;
+            let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            let window = webview2_from_environment(builder).build()?;
             if text_scale != 1.0 {
                 log::info!("text scale {text_scale}: zooming the page");
-                if let Some(window) = app.get_webview_window("main") {
-                    window.set_zoom(text_scale)?;
-                }
+                window.set_zoom(text_scale)?;
             }
             Ok(())
         })

@@ -280,7 +280,10 @@ keeps up to two frame requests in flight (`frames.ts`'s `MAX_IN_FLIGHT`): with o
 the socket idled while WebKitGTK took in a reply. Windows' Text size setting zooms the
 webview (`os_text_scale`); WebKitGTK follows GNOME's by itself. `SQUIGL_LOG_FILE=FILE`
 sends the app's log (and panics) to a file -- a Windows release build has no console --
-and on Windows an unknown argument is logged and skipped (msedgedriver passes Chromium's). Without `nasm` on
+and on Windows an unknown argument is logged and skipped (msedgedriver passes Chromium's).
+The main window is built in `setup` (`"create": false` in `tauri.conf.json`) so that,
+on Windows, `WEBVIEW2_USER_DATA_FOLDER`/`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (how
+msedgedriver passes its DevTools port and folder) are applied over wry's own. Without `nasm` on
 PATH, `openh264-sys2` quietly builds without its assembly (~40% slower decoding). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
 for a window that is not being drawn.
 
