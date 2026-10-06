@@ -1,0 +1,29 @@
+[package]
+name = "squigl-pairing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pairs a phone's browser with squigl: the HTTPS capture page and WHIP endpoint for the WebRTC source, and the QR code that leads there"
+
+[dependencies]
+squigl-core = { path = "../squigl-core" }
+anyhow.workspace = true
+log.workspace = true
+tiny_http = { version = "0.12.0", features = ["ssl-rustls"] }
+rcgen = "0.14.10"
+getrandom = "0.3"
+# The pairing address as a QR code, drawn as SVG (no raster image crates).
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+# `testing`: a phone's browser played by str0m, sending openh264-encoded colour
+# bars, for tests here and in the crates the sessions go to.
+openh264 = { workspace = true, optional = true }
+str0m = { version = "0.23.1", default-features = false, features = ["rust-crypto"], optional = true }
+
+[features]
+testing = ["dep:openh264", "dep:str0m"]
+
+[dev-dependencies]
+openh264.workspace = true
+str0m = { version = "0.23.1", default-features = false, features = ["rust-crypto"] }

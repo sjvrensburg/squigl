@@ -361,6 +361,18 @@ crates/
 - **Optional, behind S4's findings:** zoom and torch over a data channel using `track.applyConstraints({zoom, torch})` in `webrtc_capture.html`.
 - **CLI:** `squigl-cli --webrtc` uses the shared crate, with unchanged behaviour.
 
+**Progress (5a, 2026-10-06):**
+
+- **`squigl-pairing`** holds the server the CLI had. `PairingServer::start(options, on_session)` with `url()`, `qr_svg()` and `stop()`. The page and `/whip` answer only with the start's random token (`?t=`), and the certificate is kept (`cert_dir`) and remade only when the address changes. The CLI streams each session to V4L2 as before, now with the token in the address it prints.
+- **The engine:** `SourceSpec::Network`. `Engine::pair` hands a session over (a second phone replaces the first), and the worker streams it at whatever size the browser chose, then waits for the next. No zoom, torch or facing.
+- **The desktop app:** Pair phone. The server runs only while the dialog is open. The dialog shows the QR code (with alt text), the address with Copy, and what the browser will ask; a phone that pairs closes it.
+- **Tests, no phone needed:** str0m plays the phone's browser (`squigl-pairing`'s `testing::FakePhone`), and openh264 colour bars stream through a real WHIP exchange, ICE, DTLS and SRTP into a decoded frame. An engine test pairs one fake phone and then a second. An end-to-end test opens the dialog, fetches the page at the address it shows (and is refused without the token), and checks the server is gone once the dialog closes.
+- **Still to do:**
+  - pairing from a real phone (Linux, then the Windows VM);
+  - the firewall notes;
+  - the overlay-aware addresses (PR #29);
+  - zoom and torch over a data channel.
+
 **Exit criteria:**
 
 - QR pairing works on Linux and on Windows (in the VM). On macOS *(tester)*.

@@ -7,10 +7,12 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod host;
+mod pairing;
 mod transport;
 
 use clap::Parser;
 use host::{Host, LutReply};
+use pairing::{Pairing, PairingInfo};
 use squigl_core::{ConnectOptions, Facing};
 use squigl_engine::config::Config;
 use squigl_engine::engine::{Command, EngineDeps, EngineOptions, Event, Reply};
@@ -69,6 +71,11 @@ struct Args {
     /// header, drawn pixels and the engine's reference for them) to a WebDriver test.
     #[arg(long, hide = true)]
     dev_probe: bool,
+
+    /// Development aid: pair phones at this address, not the LAN's (127.0.0.1 lets
+    /// a browser on this machine pair).
+    #[arg(long, hide = true, value_name = "IP")]
+    dev_pairing_bind: Option<std::net::IpAddr>,
 
     /// Development aid: zoom the page by this factor, as the OS text size would.
     #[arg(long, hide = true, value_name = "FACTOR")]
@@ -135,6 +142,21 @@ fn open_image(host: State<'_, Host>, request: tauri::ipc::Request<'_>) -> Result
 
 /// The page's errors and warnings, into the app's log (the web inspector is not at
 /// hand in a release build).
+/// Opens pairing (the dialog is showing): the address and its QR code.
+#[tauri::command]
+fn pairing_start(
+    host: State<'_, Host>,
+    pairing: State<'_, Pairing>,
+) -> Result<PairingInfo, String> {
+    pairing.start(&host)
+}
+
+/// Closes pairing (the dialog is gone); a paired phone keeps streaming.
+#[tauri::command]
+fn pairing_stop(pairing: State<'_, Pairing>) {
+    pairing.stop();
+}
+
 #[tauri::command]
 fn page_log(level: String, message: String) {
     match level.as_str() {
@@ -341,6 +363,13 @@ fn main() -> anyhow::Result<()> {
         resolution: Resolution::Max,
         tee_device: None,
     };
+    let pairing = Pairing::new(
+        args.dev_pairing_bind,
+        stream.options.decoder,
+        config_file
+            .parent()
+            .map_or_else(squigl_engine::paths::config_dir, Into::into),
+    );
     // The magnifier needs no models yet; reading arrives in a later phase.
     let host = Host::start(
         config,
@@ -388,6 +417,7 @@ fn main() -> anyhow::Result<()> {
         })
         .manage(host)
         .manage(frames)
+        .manage(pairing)
         .manage(dev)
         .invoke_handler(tauri::generate_handler![
             dispatch,
@@ -395,6 +425,8 @@ fn main() -> anyhow::Result<()> {
             endpoint,
             lut,
             open_image,
+            pairing_start,
+            pairing_stop,
             page_log,
             dev_options,
             dev_save_snapshot,

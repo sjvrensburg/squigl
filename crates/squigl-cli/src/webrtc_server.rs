@@ -1,30 +1,20 @@
-//! The "policy" half of the WebRTC camera source: an HTTPS server serving the phone
-//! browser's capture page and a minimal WHIP-shaped ingest endpoint
-//! ([`squigl_core::webrtc_source`] handles the WebRTC/ICE/DTLS side once an offer
-//! is accepted). LAN-only: no auth, no STUN/TURN, one session at a time.
-//!
-//! Self-signed and generated fresh each run (browsers require a secure context for
-//! `getUserMedia`, and a LAN IP isn't a domain a real CA will certify) -- the phone's
-//! browser will show a certificate warning once per server restart, which is expected
-//! and must be accepted to proceed.
+//! `--webrtc`: [`squigl_pairing`]'s server, with each session streamed to the V4L2
+//! device (opened lazily at whatever size the browser's camera negotiated). One
+//! session at a time: a second phone is turned away (503) while one streams.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use squigl_core::decode::Backend;
-use squigl_core::WebrtcSource;
+use squigl_pairing::{PairingOptions, PairingServer};
 use squigl_v4l2::LazyV4l2Sink;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tiny_http::{Header, Method, Response, Server, SslConfig};
 
-const CAPTURE_PAGE: &str = include_str!("webrtc_capture.html");
+pub use squigl_pairing::detect_lan_ip;
 
-/// Runs the capture-page/WHIP HTTPS server until `stop` is raised. Accepted sessions
-/// stream straight to `device` (opened lazily at whatever size the browser's camera
-/// negotiated); only one session runs at a time, a second `POST /whip` while one is
-/// active is rejected with 503 so the phone can retry after reloading.
+/// Serves the capture page until `stop` is raised.
 pub fn run(
     device: &Path,
     bind: IpAddr,
@@ -32,140 +22,44 @@ pub fn run(
     decoder: Backend,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
-    let cert = generate_cert(bind).context("generating a self-signed TLS certificate")?;
-    let server = Server::https(
-        (bind, port),
-        SslConfig {
-            certificate: cert.cert_pem.into_bytes(),
-            private_key: cert.key_pem.into_bytes(),
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("starting HTTPS server on {bind}:{port}: {e}"))?;
-
-    log::info!(
-        "open https://{bind}:{port}/ in the phone's browser (same network as this machine); \
-         accept the self-signed certificate warning, then tap \"Start streaming\""
-    );
-
     let busy = Arc::new(AtomicBool::new(false));
-
-    while !stop.load(Ordering::Relaxed) {
-        let request = match server.recv_timeout(Duration::from_millis(500)) {
-            Ok(Some(r)) => r,
-            Ok(None) => continue,
-            Err(e) => {
-                log::warn!("HTTP server error: {e}");
-                continue;
+    let options = PairingOptions {
+        bind,
+        port,
+        decoder,
+        cert_dir: None,
+    };
+    let server = PairingServer::start(options, {
+        let (device, stop) = (device.to_path_buf(), Arc::clone(stop));
+        move |mut session| {
+            if busy.swap(true, Ordering::SeqCst) {
+                return Err(
+                    "a streaming session is already active; end it before starting another"
+                        .to_string(),
+                );
             }
-        };
-        handle_request(request, device, bind, decoder, &busy, stop);
-    }
-    Ok(())
-}
-
-fn handle_request(
-    request: tiny_http::Request,
-    device: &Path,
-    bind: IpAddr,
-    decoder: Backend,
-    busy: &Arc<AtomicBool>,
-    stop: &Arc<AtomicBool>,
-) {
-    match (request.method(), request.url()) {
-        (Method::Get, "/") => {
-            let header = html_header();
-            let _ = request.respond(Response::from_string(CAPTURE_PAGE).with_header(header));
-        }
-        (Method::Post, "/whip") => handle_whip(request, device, bind, decoder, busy, stop),
-        _ => {
-            let _ = request.respond(Response::from_string("not found").with_status_code(404));
-        }
-    }
-}
-
-fn handle_whip(
-    mut request: tiny_http::Request,
-    device: &Path,
-    bind: IpAddr,
-    decoder: Backend,
-    busy: &Arc<AtomicBool>,
-    stop: &Arc<AtomicBool>,
-) {
-    if busy.swap(true, Ordering::SeqCst) {
-        let _ = request.respond(
-            Response::from_string(
-                "a streaming session is already active; end it before starting another",
-            )
-            .with_status_code(503),
-        );
-        return;
-    }
-
-    let mut offer_sdp = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut offer_sdp) {
-        busy.store(false, Ordering::SeqCst);
-        let _ = request
-            .respond(Response::from_string(format!("reading offer: {e}")).with_status_code(400));
-        return;
-    }
-
-    match WebrtcSource::accept_offer(&offer_sdp, bind, decoder) {
-        Ok((mut session, answer_sdp)) => {
-            let device = device.to_path_buf();
-            let stop = Arc::clone(stop);
-            let busy = Arc::clone(busy);
+            let (device, stop, busy) = (device.clone(), Arc::clone(&stop), Arc::clone(&busy));
             std::thread::spawn(move || {
                 log::info!("WebRTC session started");
                 let mut sink = LazyV4l2Sink::new(device);
-                if let Err(e) = session.run(&mut sink, &stop) {
-                    log::warn!("WebRTC session ended: {e}");
-                } else {
-                    log::info!("WebRTC session ended");
+                match session.run(&mut sink, &stop) {
+                    Ok(()) => log::info!("WebRTC session ended"),
+                    Err(e) => log::warn!("WebRTC session ended: {e}"),
                 }
                 busy.store(false, Ordering::SeqCst);
             });
-            let header = Header::from_bytes(&b"Content-Type"[..], &b"application/sdp"[..]).unwrap();
-            let _ = request.respond(
-                Response::from_string(answer_sdp)
-                    .with_status_code(201)
-                    .with_header(header),
-            );
+            Ok(())
         }
-        Err(e) => {
-            busy.store(false, Ordering::SeqCst);
-            let _ = request.respond(Response::from_string(format!("{e}")).with_status_code(400));
-        }
+    })?;
+
+    log::info!(
+        "open {} in the phone's browser (same network as this machine); \
+         accept the self-signed certificate warning, then tap \"Start streaming\"",
+        server.url()
+    );
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(200));
     }
-}
-
-fn html_header() -> Header {
-    Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap()
-}
-
-struct Cert {
-    cert_pem: String,
-    key_pem: String,
-}
-
-/// A fresh self-signed certificate valid for `bind`'s IP (the SAN a browser checks
-/// against the address it connected to).
-fn generate_cert(bind: IpAddr) -> Result<Cert> {
-    let rcgen::CertifiedKey { cert, signing_key } =
-        rcgen::generate_simple_self_signed(vec![bind.to_string()])
-            .context("generating self-signed certificate")?;
-    Ok(Cert {
-        cert_pem: cert.pem(),
-        key_pem: signing_key.serialize_pem(),
-    })
-}
-
-/// Guesses this machine's LAN-facing IP (the one that would be used to reach the
-/// public internet) without sending any traffic -- `connect` on a UDP socket just
-/// picks a route, it doesn't require the peer to be reachable.
-pub fn detect_lan_ip() -> Result<IpAddr> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").context("binding a probe socket")?;
-    socket
-        .connect("8.8.8.8:80")
-        .context("resolving the outbound route")?;
-    Ok(socket.local_addr()?.ip())
+    server.stop();
+    Ok(())
 }

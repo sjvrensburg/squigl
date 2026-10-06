@@ -22,6 +22,7 @@
   import { keyFor, keyLabel, table, type Action } from "./lib/shortcuts";
   import { pan, turn, zoom, type View } from "./lib/viewport";
   import Connection from "./Connection.svelte";
+  import Pair from "./Pair.svelte";
   import Settings from "./Settings.svelte";
   // Lucide's outline icons, drawn in currentColor so they follow the theme.
   import FolderOpen from "@lucide/svelte/icons/folder-open";
@@ -29,6 +30,7 @@
   import Palette from "@lucide/svelte/icons/palette";
   import Pause from "@lucide/svelte/icons/pause";
   import Play from "@lucide/svelte/icons/play";
+  import QrCode from "@lucide/svelte/icons/qr-code";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
   import SettingsIcon from "@lucide/svelte/icons/settings";
@@ -48,6 +50,7 @@
   let notice = $state("");
   let failure = $state<string | null>(null);
   let settingsOpen = $state(false);
+  let pairOpen = $state(false);
   let dropping = $state(false);
 
   let renderer: FrameRenderer | null = null;
@@ -75,7 +78,14 @@
     if (!s) return "Starting…";
     switch (s.state) {
       case "connecting":
-        return stream?.source.kind === "phone" ? "Connecting to the phone…" : "Opening…";
+        switch (stream?.source.kind) {
+          case "phone":
+            return "Connecting to the phone…";
+          case "network":
+            return "Waiting for the paired phone…";
+          default:
+            return "Opening…";
+        }
       case "streaming":
         return frozen ? "Frozen" : "Live";
       case "waiting":
@@ -272,7 +282,7 @@
     // Keys belong to a focused control or an open dialog; the shortcuts are for
     // the picture.
     const target = e.target as HTMLElement;
-    if (settingsOpen || target.closest("input, select, textarea, button, dialog")) return;
+    if (settingsOpen || pairOpen || target.closest("input, select, textarea, button, dialog")) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const action = keys.get(e.key);
     if (!action) return;
@@ -485,6 +495,9 @@
         <Smartphone class="icon" /><span class="long">Use phone</span>
       </button>
     {/if}
+    <button onclick={() => (pairOpen = true)}>
+      <QrCode class="icon" /><span class="long">Pair phone</span>
+    </button>
     <button onclick={() => (settingsOpen = true)}>
       <SettingsIcon class="icon" /><span class="long">Settings</span>
       <kbd>{shortcut("settings")}</kbd>
@@ -525,6 +538,7 @@
 {#if config}
   <Settings {config} bind:open={settingsOpen} onnotice={say} />
 {/if}
+<Pair bind:open={pairOpen} {stream} />
 
 <style>
   /* Themes: every colour comes from these. */
