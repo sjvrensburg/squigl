@@ -427,10 +427,16 @@
     <button onclick={toggleFreeze} aria-pressed={frozen}>
       {frozen ? "Live" : "Freeze"} <kbd>{shortcut("freeze")}</kbd>
     </button>
-    <button onclick={() => rotate(-1)}>Rotate left <kbd>{shortcut("rotate-ccw")}</kbd></button>
-    <button onclick={() => rotate(1)}>Rotate right <kbd>{shortcut("rotate-cw")}</kbd></button>
+    <button onclick={() => rotate(-1)}>
+      <span class="long">Rotate left</span><span class="short" aria-hidden="true">↺</span>
+      <kbd>{shortcut("rotate-ccw")}</kbd>
+    </button>
+    <button onclick={() => rotate(1)}>
+      <span class="long">Rotate right</span><span class="short" aria-hidden="true">↻</span>
+      <kbd>{shortcut("rotate-cw")}</kbd>
+    </button>
     <label>
-      Magnification
+      <span class="long">Magnification</span>
       <input
         type="range"
         min="1"
@@ -442,7 +448,7 @@
       <output>{view.magnification.toFixed(1)}×</output>
     </label>
     <label>
-      Colours
+      <span class="long">Colours</span>
       <select
         value={config?.display.mode ?? "normal"}
         onchange={(e) => setMode(e.currentTarget.value as DisplayMode)}
@@ -453,7 +459,7 @@
       </select>
     </label>
     <label class="button">
-      Open image…
+      <span class="long">Open image…</span><span class="short" aria-hidden="true">Open…</span>
       <input
         bind:this={fileInput}
         type="file"
@@ -464,11 +470,17 @@
     </label>
     {#if stream && stream.source.kind !== "phone"}
       <button onclick={() => dispatch({ type: "use-source", source: { kind: "phone" } })}>
-        Use phone
+        <span class="long">Use phone</span><span class="short" aria-hidden="true">Phone</span>
       </button>
     {/if}
-    <button onclick={() => (settingsOpen = true)}>Settings <kbd>{shortcut("settings")}</kbd></button>
-    <button onclick={toggleFullscreen}>Full screen <kbd>{shortcut("fullscreen")}</kbd></button>
+    <button onclick={() => (settingsOpen = true)}>
+      <span class="long">Settings</span><span class="short" aria-hidden="true">⚙︎</span>
+      <kbd>{shortcut("settings")}</kbd>
+    </button>
+    <button onclick={toggleFullscreen}>
+      <span class="long">Full screen</span><span class="short" aria-hidden="true">⛶</span>
+      <kbd>{shortcut("fullscreen")}</kbd>
+    </button>
   </header>
 
   <div class="picture">
@@ -578,6 +590,24 @@
     color: var(--text);
     cursor: pointer;
   }
+  /* WebKitGTK draws a native select in the GTK theme's colours, whatever these
+     say (white on light grey), so it draws its own, arrow and all. */
+  :global(select) {
+    appearance: none;
+    padding-right: 1.8em;
+    background-image:
+      linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      calc(100% - 1.1em) 55%,
+      calc(100% - 0.75em) 55%;
+    background-size: 0.35em 0.35em;
+    background-repeat: no-repeat;
+  }
+  :global(select option) {
+    background: var(--control);
+    color: var(--text);
+  }
   .button:focus-within {
     outline: 0.2rem solid var(--focus);
     outline-offset: 0.15rem;
@@ -630,6 +660,44 @@
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
+  }
+  /* Short labels for a small window -- a small screen, or large text: the long
+     ones stay for screen readers and OS magnifiers, only out of sight, so every
+     control keeps its full name; the text keeps the size the person chose. */
+  .short {
+    display: none;
+  }
+  @media (max-width: 48rem), (max-height: 28rem) {
+    .long {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    .short {
+      display: inline;
+    }
+    kbd {
+      display: none;
+    }
+    header,
+    footer {
+      gap: 0.25rem 0.4rem;
+      padding: 0.25rem 0.5rem;
+    }
+    header :global(button),
+    header :global(select),
+    .button {
+      padding: 0.15rem 0.45rem;
+    }
+    header :global(select) {
+      padding-right: 1.8em;
+    }
+    input[type="range"] {
+      width: 5rem;
+    }
   }
   .failure {
     position: fixed;

@@ -214,7 +214,11 @@ for (const renderer of ["webgl2", "canvas2d"]) {
 describe("at twice the text size", () => {
   let s;
   before(async () => {
-    s = await Session.start(["--test-pattern", "--dev-probe", "--dev-text-scale", "2"]);
+    // A small screen as well: CI's Windows runner has 1024x768, which at 2x
+    // leaves the page 512 by about 380 CSS pixels.
+    s = await Session.start([
+      "--test-pattern", "--dev-probe", "--dev-text-scale", "2", "--dev-window-size", "1024x768",
+    ]);
     await until(() => s.probe("drawn"), "the first frame", 30000);
   });
   after(() => s?.quit());
@@ -234,8 +238,7 @@ describe("at twice the text size", () => {
     assert.ok(layout.dpr >= 2, `zoomed (device pixel ratio ${layout.dpr})`);
     assert.equal(layout.overflow, false, "nothing scrolls");
     assert.deepEqual(layout.offscreen, [], "every control is on screen");
-    // A third, not more: CI's Xvfb has no window manager to maximise the window,
-    // and there the picture had 36% at 2x (the toolbar wraps in a small window).
+    // The toolbar goes compact in a window this small (short labels, no key hints).
     assert.ok(
       layout.picture >= 1 / 3,
       `the picture has ${Math.round(layout.picture * 100)}% of the height of a ${layout.window.join("x")} window`,
@@ -286,11 +289,15 @@ describe("each UI theme", () => {
              return getComputedStyle(probe).color;
            };
            const button = getComputedStyle(document.querySelector("header button"));
+           const select = getComputedStyle(document.querySelector("header select"));
            const footer = getComputedStyle(document.querySelector("footer"));
            const panel = footer.backgroundColor;
            const out = {
              theme: document.documentElement.dataset.theme,
              button: ratio(button.color, button.backgroundColor),
+             // Its own colours only when it is not drawn natively.
+             selectDrawn: select.appearance,
+             select: ratio(select.color, select.backgroundColor),
              footer: ratio(footer.color, panel),
              edge: ratio(button.borderTopColor, panel),
              focus: ratio(resolve("var(--focus)"), panel),
@@ -302,6 +309,8 @@ describe("each UI theme", () => {
       );
       assert.equal(ratios.theme, theme);
       assert.ok(ratios.button >= text, `button text ${ratios.button.toFixed(1)}:1`);
+      assert.equal(ratios.selectDrawn, "none", "the select draws its own colours");
+      assert.ok(ratios.select >= text, `select text ${ratios.select.toFixed(1)}:1`);
       assert.ok(ratios.footer >= text, `status text ${ratios.footer.toFixed(1)}:1`);
       assert.ok(ratios.edge >= 3, `control edges ${ratios.edge.toFixed(1)}:1`);
       assert.ok(ratios.focus >= 3, `focus ring ${ratios.focus.toFixed(1)}:1`);

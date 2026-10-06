@@ -74,6 +74,10 @@ struct Args {
     #[arg(long, hide = true, value_name = "FACTOR")]
     dev_text_scale: Option<f64>,
 
+    /// Development aid: open the window at this size (logical pixels), not maximised.
+    #[arg(long, hide = true, value_name = "WxH", value_parser = parse_size)]
+    dev_window_size: Option<(f64, f64)>,
+
     /// Development aid: start from the default settings and save them to FILE,
     /// leaving the real configuration alone.
     #[arg(long, hide = true, value_name = "FILE")]
@@ -174,6 +178,12 @@ fn dev_reference(host: State<'_, Host>, points: Vec<(usize, usize)>) -> Vec<Opti
 #[tauri::command]
 fn lut(host: State<'_, Host>) -> Result<LutReply, String> {
     host.lut().ok_or_else(|| "the engine has stopped".into())
+}
+
+fn parse_size(s: &str) -> Result<(f64, f64), String> {
+    let (w, h) = s.split_once('x').ok_or("expected WxH")?;
+    let num = |v: &str| v.parse::<f64>().map_err(|e| format!("{v}: {e}"));
+    Ok((num(w)?, num(h)?))
 }
 
 /// WebView2's `WEBVIEW2_USER_DATA_FOLDER` and `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
@@ -345,6 +355,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("frames on ws://127.0.0.1:{}", frames.port);
 
     let text_scale = args.dev_text_scale.unwrap_or_else(os_text_scale);
+    let window_size = args.dev_window_size;
     let app = tauri::Builder::default()
         .setup(move |app| {
             // The window is made here, not from the config, so that WebView2's own
@@ -357,7 +368,10 @@ fn main() -> anyhow::Result<()> {
                 .find(|w| w.label == "main")
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("tauri.conf.json has no main window"))?;
-            let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            let mut builder = tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?;
+            if let Some((w, h)) = window_size {
+                builder = builder.maximized(false).inner_size(w, h);
+            }
             let window = webview2_from_environment(builder).build()?;
             if text_scale != 1.0 {
                 log::info!("text scale {text_scale}: zooming the page");
