@@ -236,8 +236,12 @@ jobs:
 
       - name: End-to-end tests
         if: runner.os != 'macOS'
+        # A hang (a driver left holding the test runner's output) once ran to the
+        # six-hour job limit; the whole run takes about two minutes.
+        timeout-minutes: 30
         env:
           SQUIGL_LOG_FILE: ${{ runner.temp }}/squigl-e2e.log
+          SQUIGL_DRIVER_LOG: ${{ runner.temp }}/squigl-driver.log
         run: |
           cargo build --release -p squigl-desktop
           cargo build --release -p squigl-core --example synth_recording
@@ -247,9 +251,21 @@ jobs:
             node --test crates/squigl-desktop/e2e/app.test.mjs
           fi
 
-      - name: The app's log from the end-to-end tests
+      - name: The app's and drivers' logs from the end-to-end tests
         if: failure() && runner.os != 'macOS'
-        run: tail -n 200 "$RUNNER_TEMP/squigl-e2e.log" || true
+        run: |
+          tail -n 200 "$RUNNER_TEMP/squigl-e2e.log" || true
+          echo "--- drivers"
+          tail -n 100 "$RUNNER_TEMP/squigl-driver.log" || true
+
+      # Where WebView2 wrote its DevTools port, if anywhere: msedgedriver looks
+      # under WEBVIEW2_USER_DATA_FOLDER (a scoped dir in SystemTemp).
+      - name: WebView2's DevToolsActivePort files (Windows)
+        if: failure() && runner.os == 'Windows'
+        run: |
+          find "$LOCALAPPDATA" /c/Windows/SystemTemp "$RUNNER_TEMP" -name DevToolsActivePort 2>/dev/null \
+            | while read -r f; do echo "$f: $(head -1 "$f")"; done
+          ls "$LOCALAPPDATA" | grep -i squigl || true
 
       # The app as msedgedriver starts it (with a Chromium switch), alone, after the
       # tests: a WebView2 browser process outlives its app for a moment and is shared.

@@ -6,8 +6,8 @@
 //   TAURI_DRIVER      tauri-driver (default: from PATH)
 //   NATIVE_DRIVER     the platform's driver, if not on PATH (WebKitWebDriver on
 //                     Linux, msedgedriver on Windows)
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, openSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -45,9 +45,14 @@ export async function startDriver() {
   if (process.env.NATIVE_DRIVER) args.push("--native-driver", process.env.NATIVE_DRIVER);
   // The app's log, wherever its console is (none for a Windows release build).
   const env = { ...process.env, SQUIGL_LOG_FILE: process.env.SQUIGL_LOG_FILE ?? join(SCRATCH, "app.log") };
+  // The drivers' output goes to a file, not this process's pipes: a driver or app
+  // left running would hold them open and the test runner would wait on it for
+  // ever. In a group of its own (POSIX), so stopping it stops what it started.
+  const log = openSync(process.env.SQUIGL_DRIVER_LOG ?? join(SCRATCH, "driver.log"), "a");
   const child = spawn(process.env.TAURI_DRIVER ?? "tauri-driver", args, {
-    stdio: ["ignore", "inherit", "inherit"],
+    stdio: ["ignore", log, log],
     env,
+    detached: process.platform !== "win32",
   });
   let exited = null;
   child.on("exit", (code) => (exited = code));
@@ -56,7 +61,20 @@ export async function startDriver() {
     const r = await fetch(`http://127.0.0.1:${PORT}/status`);
     return r.ok;
   }, "tauri-driver to listen");
-  return { stop: () => child.kill() };
+  return {
+    stop() {
+      if (exited !== null) return;
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" });
+      } else {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill();
+        }
+      }
+    },
+  };
 }
 
 /**
