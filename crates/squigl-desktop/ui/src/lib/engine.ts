@@ -9,7 +9,8 @@ export type SourceSpec =
   | { kind: "phone" }
   | { kind: "replay"; path: string }
   | { kind: "image"; path: string }
-  | { kind: "test-pattern" };
+  | { kind: "test-pattern" }
+  | { kind: "network" };
 
 export type DisplayMode =
   | "normal"

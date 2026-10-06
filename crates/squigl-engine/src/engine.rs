@@ -516,6 +516,14 @@ impl Engine {
         display::lut(&self.config().display)
     }
 
+    /// Shows a phone that paired over the network (a session from
+    /// `squigl-pairing`), in place of whatever was showing.
+    pub fn pair(&mut self, session: squigl_core::WebrtcSource) {
+        self.capture = None;
+        self.worker.shared.pair(session);
+        self.notice(Level::Info, "phone paired");
+    }
+
     /// Stops the stream worker (shutting a phone session down); the engine is done.
     pub fn stop(&mut self) {
         self.worker.stop();

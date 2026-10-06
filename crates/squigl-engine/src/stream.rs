@@ -11,7 +11,7 @@ use squigl_core::decode::YuvFrame;
 use squigl_core::sink::FrameSink;
 use squigl_core::{
     adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, Replay,
-    TestPattern, ZOOM_STEP,
+    TestPattern, WebrtcSource, ZOOM_STEP,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -125,6 +125,9 @@ pub enum SourceSpec {
     Image(PathBuf),
     /// Synthetic colour bars.
     TestPattern,
+    /// A phone's browser over WebRTC, paired by QR code: the sessions
+    /// [`Shared::pair`] hands over, one after another.
+    Network,
 }
 
 /// Which camera controls the current source has; a front end shows only these.
@@ -167,6 +170,7 @@ impl SourceSpec {
                 |n| n.to_string_lossy().into(),
             ),
             SourceSpec::TestPattern => "test pattern".to_string(),
+            SourceSpec::Network => "paired phone".to_string(),
         }
     }
 }
@@ -206,6 +210,8 @@ pub struct Shared {
     /// one message at a time, so a fast slider drag queues one step, not fifty.
     zoom: Mutex<ZoomState>,
     zoom_changed: Condvar,
+    /// A paired phone's session, from [`Shared::pair`] until the worker takes it.
+    paired: Mutex<Option<WebrtcSource>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -268,11 +274,27 @@ impl Shared {
 
     /// Switches to `source` (through a restart) unless it is already in use.
     pub fn use_source(&self, source: SourceSpec) {
+        if source != SourceSpec::Network {
+            // A session handed over but not yet taken would be stale by the time
+            // the paired phone is the source again.
+            self.paired.lock().unwrap().take();
+        }
         let mut cfg = self.config.lock().unwrap();
         if cfg.source != source {
             cfg.source = source;
             drop(cfg);
             self.restart();
+        }
+    }
+
+    /// Shows a paired phone's session ([`SourceSpec::Network`]), in place of
+    /// whatever was showing (another paired phone included).
+    pub fn pair(&self, session: WebrtcSource) {
+        *self.paired.lock().unwrap() = Some(session);
+        if self.source() == SourceSpec::Network {
+            self.restart();
+        } else {
+            self.use_source(SourceSpec::Network);
         }
     }
 
@@ -417,6 +439,7 @@ impl Shared {
                 target: start,
             }),
             zoom_changed: Condvar::new(),
+            paired: Mutex::new(None),
         }
     }
 
@@ -574,6 +597,7 @@ fn run_session(
                 |sink| pattern.run(sink, session_stop),
             )
         }
+        SourceSpec::Network => run_paired(shared, config, session_stop, tee, wake),
     };
     // Only a session that delivered frames resets the backoff; one that fails right
     // after the handshake must keep backing off.
@@ -667,6 +691,69 @@ fn run_local(
     });
     let mut sink = |frame: &YuvFrame| deliver(shared, tee, session_stop, wake, frame);
     run(&mut sink).with_context(|| config.source.describe())
+}
+
+/// Paired phones, one session after another: each ends when its phone goes, and
+/// the next waits for [`Shared::pair`]. The size is the browser's choice, known at
+/// the first frame (and it may change: a phone turned on its side).
+fn run_paired(
+    shared: &Shared,
+    config: &StreamConfig,
+    session_stop: &AtomicBool,
+    tee: &mut Option<Tee>,
+    wake: &dyn Fn(),
+) -> Result<()> {
+    let ended = || shared.stop.load(Ordering::Relaxed) || shared.restart.load(Ordering::Relaxed);
+    loop {
+        let mut session = loop {
+            if let Some(session) = shared.paired.lock().unwrap().take() {
+                break session;
+            }
+            if ended() {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let mut size = None;
+        let mut sink = |frame: &YuvFrame| {
+            let now = (frame.width as u32, frame.height as u32);
+            if size != Some(now) {
+                size = Some(now);
+                if let Some(path) = &config.tee_device {
+                    open_tee(tee, path, now.0, now.1).map_err(|e| {
+                        squigl_core::Error::Io(std::io::Error::other(format!("{e:#}")))
+                    })?;
+                }
+                shared.set_status(Status::Streaming {
+                    width: now.0,
+                    height: now.1,
+                });
+            }
+            deliver(shared, tee, session_stop, wake, frame)
+        };
+        // Until frames flow, nothing else would pass a stop or a restart on.
+        let done = AtomicBool::new(false);
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !done.load(Ordering::Relaxed) {
+                    if ended() {
+                        session_stop.store(true, Ordering::Relaxed);
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            let result = session.run(&mut sink, session_stop);
+            done.store(true, Ordering::Relaxed);
+            result
+        });
+        result.context("paired phone")?;
+        if ended() {
+            return Ok(());
+        }
+        log::info!("the paired phone went; waiting for another");
+        shared.set_status(Status::Connecting);
+        wake();
+    }
 }
 
 /// A still image as a frame: turned upright by its EXIF orientation (a phone photo
@@ -957,6 +1044,7 @@ mod tests {
             SourceSpec::Replay("a.sqrec".into()),
             SourceSpec::Image("a.png".into()),
             SourceSpec::TestPattern,
+            SourceSpec::Network,
         ] {
             assert_eq!(
                 other.capabilities(),
@@ -1015,6 +1103,63 @@ mod tests {
         ));
         worker.stop();
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn the_network_source_waits_for_a_phone_and_lets_go_at_once() {
+        assert_eq!(
+            serde_json::to_string(&SourceSpec::Network).unwrap(),
+            r#"{"kind":"network"}"#
+        );
+        let mut worker = worker(SourceSpec::Network);
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(matches!(worker.shared.status(), Status::Connecting));
+        assert_eq!(worker.shared.frames(), 0);
+
+        let t = Instant::now();
+        worker.shared.use_source(SourceSpec::TestPattern);
+        wait_for(|| worker.shared.frames() > 0);
+        assert!(t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        worker.stop();
+    }
+
+    /// A session as `squigl-pairing` hands one over, from a fake phone.
+    fn paired_phone(size: (usize, usize)) -> (WebrtcSource, squigl_pairing::testing::FakePhone) {
+        let mut session = None;
+        let phone = squigl_pairing::testing::FakePhone::connect(size, |offer| {
+            let local = std::net::Ipv4Addr::LOCALHOST.into();
+            let (accepted, answer) = WebrtcSource::accept_offer(offer, local, Default::default())
+                .map_err(|e| e.to_string())?;
+            session = Some(accepted);
+            Ok(answer)
+        })
+        .unwrap();
+        (session.unwrap(), phone)
+    }
+
+    #[test]
+    fn a_paired_phone_shows_and_a_second_takes_its_place() {
+        let mut worker = worker(SourceSpec::TestPattern);
+        wait_for(|| worker.shared.frames() > 0);
+
+        let (session, _first) = paired_phone((320, 240));
+        worker.shared.pair(session);
+        assert_eq!(worker.shared.source(), SourceSpec::Network);
+        assert!(!worker.shared.capabilities().zoom);
+        wait_for(|| worker.shared.latest().is_some_and(|f| f.width == 320));
+        assert!(matches!(
+            worker.shared.status(),
+            Status::Streaming {
+                width: 320,
+                height: 240
+            }
+        ));
+
+        let (session, _second) = paired_phone((160, 120));
+        worker.shared.pair(session);
+        wait_for(|| worker.shared.latest().is_some_and(|f| f.width == 160));
+        assert_eq!(worker.shared.latest().unwrap().height, 120);
+        worker.stop();
     }
 
     #[test]

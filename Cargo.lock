@@ -6292,6 +6292,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7743,10 +7749,9 @@ dependencies = [
  "ctrlc",
  "env_logger",
  "log",
- "rcgen",
  "squigl-core",
+ "squigl-pairing",
  "squigl-v4l2",
- "tiny_http",
 ]
 
 [[package]]
@@ -7779,6 +7784,7 @@ dependencies = [
  "serde_json",
  "squigl-core",
  "squigl-engine",
+ "squigl-pairing",
  "tauri",
  "tauri-build",
  "tungstenite",
@@ -7819,6 +7825,7 @@ dependencies = [
  "serde",
  "serde_json",
  "squigl-core",
+ "squigl-pairing",
  "squigl-v4l2",
  "toml 1.1.6+spec-1.1.0",
  "ureq 3.4.1",
@@ -7858,6 +7865,21 @@ dependencies = [
  "tokenizers",
  "ureq 3.4.1",
  "wgpu",
+]
+
+[[package]]
+name = "squigl-pairing"
+version = "0.10.0"
+dependencies = [
+ "anyhow",
+ "getrandom 0.3.4",
+ "log",
+ "openh264",
+ "qrcode",
+ "rcgen",
+ "squigl-core",
+ "str0m",
+ "tiny_http",
 ]
 
 [[package]]
