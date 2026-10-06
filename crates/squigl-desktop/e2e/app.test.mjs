@@ -68,7 +68,7 @@ describe("the magnifier on a recording", () => {
     // is loopback on Linux and Windows).
     s = await Session.start([
       "--replay", recording, "--dev-probe",
-      "--dev-pairing-bind", "127.0.0.1", "--dev-pairing-bind", "127.0.0.2",
+      "--dev-pairing-bind", "127.0.0.1,127.0.0.2",
     ]);
     await until(() => s.probe("drawn"), "the first frame", 30000);
   });

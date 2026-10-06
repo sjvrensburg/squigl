@@ -303,7 +303,7 @@ Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-pat
 FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second and the
 request-to-drawn times, to the log), `--dev-canvas2d`, `--dev-config FILE` (start from
 the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH`,
-`--dev-pairing-bind IP` (repeatable: pair at 127.0.0.1, say, not this machine's addresses) and `--dev-probe` (`window.squiglProbe`:
+`--dev-pairing-bind IP,...` (pair at 127.0.0.1, say, not this machine's addresses; comma-separated, since msedgedriver keeps only the last of a repeated switch) and `--dev-probe` (`window.squiglProbe`:
 the last frame's header, and drawn pixels beside `Engine::displayed_pixel`, the
 engine's reference -- what `e2e/app.test.mjs` checks each display mode with) drive it
 from a script; page errors and warnings go to the app's log (target `page`). The page

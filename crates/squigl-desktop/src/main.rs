@@ -72,9 +72,10 @@ struct Args {
     #[arg(long, hide = true)]
     dev_probe: bool,
 
-    /// Development aid: pair phones at this address (repeatable), not this
-    /// machine's own (127.0.0.1 lets a browser on this machine pair).
-    #[arg(long, hide = true, value_name = "IP")]
+    /// Development aid: pair phones at these addresses (comma-separated), not
+    /// this machine's own (127.0.0.1 lets a browser on this machine pair). One
+    /// switch, not repeated: msedgedriver keeps only the last of a repeated one.
+    #[arg(long, hide = true, value_name = "IP,...", value_delimiter = ',')]
     dev_pairing_bind: Vec<std::net::IpAddr>,
 
     /// Development aid: zoom the page by this factor, as the OS text size would.
