@@ -30,3 +30,5 @@ squigl-v4l2 = { path = "../squigl-v4l2" }
 
 [dev-dependencies]
 openh264.workspace = true
+# A phone's browser played by str0m, for the paired-phone source.
+squigl-pairing = { path = "../squigl-pairing", features = ["testing"] }

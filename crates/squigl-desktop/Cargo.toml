@@ -25,6 +25,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 squigl-core = { path = "../squigl-core" }
 squigl-engine = { path = "../squigl-engine" }
+squigl-pairing = { path = "../squigl-pairing" }
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

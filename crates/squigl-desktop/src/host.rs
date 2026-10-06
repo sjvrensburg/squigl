@@ -66,6 +66,8 @@ enum Request {
     Frame(FrameRequest, Sender<Option<FrameReply>>),
     Lut(Sender<LutReply>),
     Reference(usize, usize, Sender<Option<[u8; 3]>>),
+    /// A phone that paired over the network, to show.
+    Pair(Box<squigl_core::WebrtcSource>),
     Wake,
     /// Stop the engine (ending a phone session cleanly) and the thread; answered
     /// when done.
@@ -141,6 +143,11 @@ impl Host {
         let (tx, rx) = mpsc::channel();
         self.tx.send(Request::Lut(tx)).ok()?;
         rx.recv().ok()
+    }
+
+    /// Shows a phone that paired over the network ([`Engine::pair`]).
+    pub fn pair(&self, session: squigl_core::WebrtcSource) {
+        let _ = self.tx.send(Request::Pair(Box::new(session)));
     }
 
     /// The colour the shown frame should have on screen at view pixel (`x`, `y`)
@@ -226,6 +233,7 @@ fn serve(mut engine: Engine, rx: Receiver<Request>) {
             Ok(Request::Reference(x, y, reply)) => {
                 let _ = reply.send(engine.displayed_pixel(FrameRef::Shown, x, y));
             }
+            Ok(Request::Pair(session)) => engine.pair(*session),
             Ok(Request::Wake) | Err(RecvTimeoutError::Timeout) => {}
             Ok(Request::Stop(done)) => {
                 engine.stop();

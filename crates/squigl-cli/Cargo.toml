@@ -13,13 +13,12 @@ path = "src/main.rs"
 [dependencies]
 squigl-core = { path = "../squigl-core" }
 squigl-v4l2 = { path = "../squigl-v4l2" }
+squigl-pairing = { path = "../squigl-pairing" }
 anyhow.workspace = true
 clap.workspace = true
 log.workspace = true
 env_logger.workspace = true
 ctrlc.workspace = true
-tiny_http = { version = "0.12.0", features = ["ssl-rustls"] }
-rcgen = "0.14.10"
 
 [features]
 default = []

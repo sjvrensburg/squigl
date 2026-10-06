@@ -19,6 +19,9 @@
 while streaming; closing it or locking the phone ends the session.</div>
 <script>
 const statusEl = document.getElementById('status');
+// The pairing code's token (from the QR code's address): the server takes an offer
+// only with it.
+const token = new URLSearchParams(location.search).get('t') ?? '';
 const log = (msg) => { statusEl.textContent += '\n' + msg; };
 
 document.getElementById('start').addEventListener('click', start, { once: true });
@@ -60,7 +63,7 @@ async function start() {
     await waitForIceGathering(pc);
 
     log('sending offer...');
-    const res = await fetch('/whip', {
+    const res = await fetch('/whip?t=' + encodeURIComponent(token), {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp' },
       body: pc.localDescription.sdp,

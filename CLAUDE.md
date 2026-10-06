@@ -163,13 +163,27 @@ on the bound interface, no STUN/TURN, no auth.
 policy bits: Ctrl-C/SIGTERM
 handling, the reconnect-with-backoff loop (keeping the V4L2 sink open across sessions),
 `--list-sizes` and `--resolution max`. `--webrtc` switches to the WebRTC source instead of
-ADB: `webrtc_server.rs` runs a `tiny_http` HTTPS server (a fresh `rcgen` self-signed cert
-per run -- `getUserMedia` needs a secure context and a LAN IP isn't CA-certifiable, so the
-phone's browser shows a one-time-per-restart warning to accept) serving `webrtc_capture.html`
-(the `getUserMedia` + `RTCPeerConnection` page, with `setCodecPreferences` steering the
-browser to H.264 since that's all squigl decodes) at `/` and a minimal WHIP-shaped ingest
-endpoint at `POST /whip` (one session at a time; a second POST while one is active gets a
-503). `contrib/` has boot-time loopback config and a systemd user unit.
+ADB: `webrtc_server.rs` runs `squigl-pairing`'s server and streams each session to the
+V4L2 device (one at a time: its `on_session` turns a second phone away with a 503).
+`contrib/` has boot-time loopback config and a systemd user unit.
+
+`crates/squigl-pairing` is the phone-pairing server both the CLI and the desktop app use:
+`PairingServer::start(PairingOptions { bind, port, decoder, cert_dir }, on_session)`
+runs a `tiny_http` HTTPS server serving `capture.html` (the `getUserMedia` +
+`RTCPeerConnection` page, with `setCodecPreferences` steering the browser to H.264 since
+that's all squigl decodes) at `/` and a minimal WHIP-shaped ingest endpoint at
+`POST /whip`, both answering only with this start's random `?t=` token (403 otherwise);
+an accepted offer's `WebrtcSource` goes to `on_session` before the answer is sent (an
+`Err` there is a 503). `url()` is the address, token included, and `qr_svg()` that as a QR
+code (`qrcode`, black on white). The certificate is `rcgen` self-signed (`getUserMedia`
+needs a secure context and a LAN IP isn't CA-certifiable, so the phone's browser warns);
+with `cert_dir` it is kept (`pairing.crt`/`.key`/`.names`, the key 0600) and remade only
+when the address changes, so each phone warns once; the CLI passes none (a fresh one per
+run). Port 8443 unless taken (Firefox keys its exception on host and port). Its
+`testing` feature has `FakePhone`: str0m as the browser, sending openh264 colour bars
+from 127.0.0.1, which the pairing and engine tests stream through a real session.
+Stopping the server closes the listener, but a connection kept alive goes on hanging
+(tiny_http keeps its thread): a test's request needs a connection of its own.
 
 `crates/squigl-engine` is the window's UI-independent half -- no egui, ONNX Runtime or
 Typst (`cargo tree -p squigl-engine` must show none: the built-in models and the
@@ -199,8 +213,11 @@ fields);
 `stream.rs`: worker thread with the reconnect loop, publishing the latest `YuvFrame`
 from the `SourceSpec` in `StreamConfig::source` -- `Phone` (the ADB session, per the
 config's `options`/`resolution`, which are kept while another source is in use),
-`Replay`, `Image` (EXIF-oriented, trimmed to even size, published once) or
-`TestPattern`; `SourceSpec::capabilities()` says which camera controls exist (only
+`Replay`, `Image` (EXIF-oriented, trimmed to even size, published once),
+`TestPattern` or `Network` (a phone paired by QR code: `Shared::pair`/`Engine::pair`
+hands a session over -- a second replaces the first -- and the worker streams it,
+sized at its first frame, then waits for the next; until one comes the status is
+`Connecting`); `SourceSpec::capabilities()` says which camera controls exist (only
 the phone has zoom, torch and facing; `set_zoom` is a no-op without), and
 `Shared::use_source` switches through a restart (the 1.5 s camera-release grace only
 between two phone sessions);
@@ -272,7 +289,8 @@ offline phone as such rather than "no device".
 Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-path
 FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second and the
 request-to-drawn times, to the log), `--dev-canvas2d`, `--dev-config FILE` (start from
-the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH` and `--dev-probe` (`window.squiglProbe`:
+the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH`,
+`--dev-pairing-bind IP` (pair at 127.0.0.1, say, not the LAN address) and `--dev-probe` (`window.squiglProbe`:
 the last frame's header, and drawn pixels beside `Engine::displayed_pixel`, the
 engine's reference -- what `e2e/app.test.mjs` checks each display mode with) drive it
 from a script; page errors and warnings go to the app's log (target `page`). The page
@@ -284,6 +302,10 @@ and on Windows an unknown argument is logged and skipped (msedgedriver passes Ch
 The main window is built in `setup` (`"create": false` in `tauri.conf.json`) so that,
 on Windows, `WEBVIEW2_USER_DATA_FOLDER`/`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (how
 msedgedriver passes its DevTools port and folder) are applied over wry's own.
+Pair phone (`Pair.svelte`, `pairing.rs`) runs the pairing server only while its dialog
+is open (`pairing_start`/`pairing_stop`; the certificate beside the settings file) and
+shows the QR code, the address with Copy, and what the phone's browser will ask; a phone
+that pairs goes to the engine through the host (`Host::pair`) and closes the dialog.
 Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
 so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
 a small screen or large text) the toolbar goes compact -- icons alone, no key hints --

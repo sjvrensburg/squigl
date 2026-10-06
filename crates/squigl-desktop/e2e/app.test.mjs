@@ -8,6 +8,7 @@
 // Needs tauri-driver and the platform's WebDriver (see driver.mjs); macOS has none.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import https from "node:https";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { ELEMENT, KEY, SCRATCH, Session, sleep, startDriver, until } from "./driver.mjs";
@@ -34,6 +35,25 @@ async function canvas(s) {
   return s.find("canvas");
 }
 
+/**
+ * GETs `url` over HTTPS on a connection of its own (a kept-alive one would outlive
+ * the server), taking any certificate: the pairing server's is self-signed.
+ */
+function get(url) {
+  return new Promise((ok, fail) => {
+    https
+      .get(url, { rejectUnauthorized: false, agent: false, timeout: 5000 }, (r) => {
+        let body = "";
+        r.on("data", (chunk) => (body += chunk));
+        r.on("end", () => ok({ status: r.statusCode, body }));
+      })
+      .on("timeout", function () {
+        this.destroy(new Error(`no answer from ${url}`));
+      })
+      .on("error", fail);
+  });
+}
+
 describe("the magnifier on a recording", () => {
   let s;
   before(async () => {
@@ -44,7 +64,7 @@ describe("the magnifier on a recording", () => {
         .concat([recording, "640x480", "2"]),
       { cwd: ROOT, stdio: "inherit" },
     );
-    s = await Session.start(["--replay", recording, "--dev-probe"]);
+    s = await Session.start(["--replay", recording, "--dev-probe", "--dev-pairing-bind", "127.0.0.1"]);
     await until(() => s.probe("drawn"), "the first frame", 30000);
   });
   after(() => s?.quit());
@@ -118,6 +138,28 @@ describe("the magnifier on a recording", () => {
     await until(async () => (await s.findAll("dialog[open]")).length === 1, "the dialog");
     await s.press(KEY.Escape);
     await until(async () => (await s.findAll("dialog[open]")).length === 0, "the dialog closed");
+  });
+
+  test("Pair phone shows a code and an address serving the phone's page while open", async () => {
+    const button = await s.execute(
+      `return [...document.querySelectorAll("header button")].find((b) => b.textContent.includes("Pair phone"));`,
+    );
+    await s.click(button[ELEMENT]);
+    const code = await until(async () => (await s.findAll("dialog[open] code"))[0], "the address");
+    const url = await s.text(code);
+    assert.match(url, /^https:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32}$/);
+    assert.equal((await s.findAll("dialog[open] .qr svg")).length, 1);
+    const page = await get(url);
+    assert.equal(page.status, 200);
+    assert.match(page.body, /getUserMedia/);
+    assert.equal((await get(url.replace(/t=.*/, "t=0"))).status, 403);
+    await s.press(KEY.Escape);
+    await until(async () => (await s.findAll("dialog[open]")).length === 0, "the dialog closed");
+    await until(
+      () => get(url).then(() => false, () => true),
+      "the pairing server to stop",
+    );
+    assert.equal(await status(s), "Live", "the recording still shows");
   });
 
   test("Tab reaches every toolbar control, and Enter works one", async () => {
