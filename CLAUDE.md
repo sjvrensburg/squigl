@@ -284,11 +284,15 @@ and on Windows an unknown argument is logged and skipped (msedgedriver passes Ch
 The main window is built in `setup` (`"create": false` in `tauri.conf.json`) so that,
 on Windows, `WEBVIEW2_USER_DATA_FOLDER`/`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (how
 msedgedriver passes its DevTools port and folder) are applied over wry's own.
-In a small window (`max-width: 48rem` or `max-height: 28rem`: a small screen or large
-text) the toolbar goes compact -- short labels (↺ ↻ Open… ⚙︎ ⛶), no key hints -- with
-the long labels visually hidden, not removed, so names stay whole. `<select>` is
-`appearance: none` with its own arrow: WebKitGTK paints a native one in GTK's colours
-(white on light grey) while reporting the CSS ones, which fooled the contrast test. Without `nasm` on
+Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
+so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
+a small screen or large text) the toolbar goes compact -- icons alone, no key hints --
+with the labels visually hidden, not removed, so names stay whole. `<select>` and the
+range slider are `appearance: none` and draw themselves (the track `--edge`, the thumb
+`--text`): WebKitGTK paints native ones in GTK's colours (a white-on-light-grey select)
+while reporting the CSS ones, which fooled the contrast test. Under WebKitGTK's page
+zoom (`--dev-text-scale`) the icons' strokes render thick; GNOME's text scale arrives
+as the device pixel ratio instead, so real use is unaffected. Without `nasm` on
 PATH, `openh264-sys2` quietly builds without its assembly (~40% slower decoding). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
 for a window that is not being drawn.
 

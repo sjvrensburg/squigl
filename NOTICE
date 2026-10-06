@@ -89,6 +89,10 @@ Svelte (https://github.com/sveltejs/svelte)
   other npm dependencies are listed with their licenses in
   crates/squigl-desktop/ui/package-lock.json.
 
+Lucide (https://github.com/lucide-icons/lucide)
+  Copyright Lucide Icons and Contributors. ISC License. The desktop app's toolbar
+  icons (@lucide/svelte), bundled into the UI.
+
 v4l2loopback (https://github.com/umlaeute/v4l2loopback)
   GNU General Public License v2.0. A kernel module the user installs separately;
   this project talks to it through the V4L2 device interface only and neither

@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lucide/svelte": "1.52.0",
     "@tauri-apps/api": "2.12.1"
   },
   "devDependencies": {

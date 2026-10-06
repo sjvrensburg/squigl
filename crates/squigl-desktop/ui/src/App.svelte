@@ -23,6 +23,17 @@
   import { pan, turn, zoom, type View } from "./lib/viewport";
   import Connection from "./Connection.svelte";
   import Settings from "./Settings.svelte";
+  // Lucide's outline icons, drawn in currentColor so they follow the theme.
+  import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import Maximize from "@lucide/svelte/icons/maximize";
+  import Palette from "@lucide/svelte/icons/palette";
+  import Pause from "@lucide/svelte/icons/pause";
+  import Play from "@lucide/svelte/icons/play";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import RotateCw from "@lucide/svelte/icons/rotate-cw";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
+  import Smartphone from "@lucide/svelte/icons/smartphone";
+  import ZoomIn from "@lucide/svelte/icons/zoom-in";
 
   // The modes the toolbar cycles through; "custom" is reached in Settings.
   const QUICK_MODES = MODES.filter(([m]) => m !== "custom");
@@ -425,18 +436,19 @@
 <main>
   <header>
     <button onclick={toggleFreeze} aria-pressed={frozen}>
-      {frozen ? "Live" : "Freeze"} <kbd>{shortcut("freeze")}</kbd>
+      {#if frozen}<Play class="icon" />{:else}<Pause class="icon" />{/if}
+      <span class="long">{frozen ? "Live" : "Freeze"}</span> <kbd>{shortcut("freeze")}</kbd>
     </button>
     <button onclick={() => rotate(-1)}>
-      <span class="long">Rotate left</span><span class="short" aria-hidden="true">↺</span>
+      <RotateCcw class="icon" /><span class="long">Rotate left</span>
       <kbd>{shortcut("rotate-ccw")}</kbd>
     </button>
     <button onclick={() => rotate(1)}>
-      <span class="long">Rotate right</span><span class="short" aria-hidden="true">↻</span>
+      <RotateCw class="icon" /><span class="long">Rotate right</span>
       <kbd>{shortcut("rotate-cw")}</kbd>
     </button>
     <label>
-      <span class="long">Magnification</span>
+      <ZoomIn class="icon" /><span class="named">Magnification</span>
       <input
         type="range"
         min="1"
@@ -448,7 +460,7 @@
       <output>{view.magnification.toFixed(1)}×</output>
     </label>
     <label>
-      <span class="long">Colours</span>
+      <Palette class="icon" /><span class="named">Colours</span>
       <select
         value={config?.display.mode ?? "normal"}
         onchange={(e) => setMode(e.currentTarget.value as DisplayMode)}
@@ -459,7 +471,7 @@
       </select>
     </label>
     <label class="button">
-      <span class="long">Open image…</span><span class="short" aria-hidden="true">Open…</span>
+      <FolderOpen class="icon" /><span class="long">Open image…</span>
       <input
         bind:this={fileInput}
         type="file"
@@ -470,15 +482,15 @@
     </label>
     {#if stream && stream.source.kind !== "phone"}
       <button onclick={() => dispatch({ type: "use-source", source: { kind: "phone" } })}>
-        <span class="long">Use phone</span><span class="short" aria-hidden="true">Phone</span>
+        <Smartphone class="icon" /><span class="long">Use phone</span>
       </button>
     {/if}
     <button onclick={() => (settingsOpen = true)}>
-      <span class="long">Settings</span><span class="short" aria-hidden="true">⚙︎</span>
+      <SettingsIcon class="icon" /><span class="long">Settings</span>
       <kbd>{shortcut("settings")}</kbd>
     </button>
     <button onclick={toggleFullscreen}>
-      <span class="long">Full screen</span><span class="short" aria-hidden="true">⛶</span>
+      <Maximize class="icon" /><span class="long">Full screen</span>
       <kbd>{shortcut("fullscreen")}</kbd>
     </button>
   </header>
@@ -661,12 +673,47 @@
     overflow: hidden;
     clip-path: inset(50%);
   }
-  /* Short labels for a small window -- a small screen, or large text: the long
-     ones stay for screen readers and OS magnifiers, only out of sight, so every
-     control keeps its full name; the text keeps the size the person chose. */
-  .short {
-    display: none;
+  /* Icons sit with their labels, in the text's colour and at its size. */
+  header :global(.icon) {
+    width: 1.25em;
+    height: 1.25em;
+    vertical-align: -0.25em;
+    margin-right: 0.35em;
+    flex: none;
   }
+  /* What the icon already says: a name for assistive tech, out of sight. */
+  .named {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* The slider draws itself too: a native one is GTK's, a faint track on dark. */
+  input[type="range"] {
+    appearance: none;
+    background: transparent;
+    height: 1.6rem;
+    vertical-align: middle;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 0.35rem;
+    border-radius: 0.2rem;
+    background: var(--edge);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 1.2rem;
+    height: 1.2rem;
+    margin-top: -0.425rem;
+    border-radius: 50%;
+    border: 0.15rem solid var(--panel);
+    background: var(--text);
+  }
+  /* In a small window -- a small screen, or large text -- the icons stand alone:
+     the labels stay for screen readers and OS magnifiers, only out of sight, so
+     every control keeps its full name; the text keeps the size chosen. */
   @media (max-width: 48rem), (max-height: 28rem) {
     .long {
       position: absolute;
@@ -676,21 +723,25 @@
       clip-path: inset(50%);
       white-space: nowrap;
     }
-    .short {
-      display: inline;
+    header :global(.icon) {
+      margin-right: 0;
+    }
+    /* The slider's and the select's icons are labels; the room goes to the picture. */
+    header label:not(.button) > :global(.icon) {
+      display: none;
     }
     kbd {
       display: none;
     }
     header,
     footer {
-      gap: 0.25rem 0.4rem;
-      padding: 0.25rem 0.5rem;
+      gap: 0.25rem 0.3rem;
+      padding: 0.25rem 0.4rem;
     }
     header :global(button),
     header :global(select),
     .button {
-      padding: 0.15rem 0.45rem;
+      padding: 0.15rem 0.35rem;
     }
     header :global(select) {
       padding-right: 1.8em;

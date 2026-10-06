@@ -290,6 +290,8 @@ describe("each UI theme", () => {
            };
            const button = getComputedStyle(document.querySelector("header button"));
            const select = getComputedStyle(document.querySelector("header select"));
+           const slider = document.querySelector("header input[type=range]");
+           const icon = getComputedStyle(document.querySelector("header button svg"));
            const footer = getComputedStyle(document.querySelector("footer"));
            const panel = footer.backgroundColor;
            const out = {
@@ -298,6 +300,8 @@ describe("each UI theme", () => {
              // Its own colours only when it is not drawn natively.
              selectDrawn: select.appearance,
              select: ratio(select.color, select.backgroundColor),
+             sliderDrawn: getComputedStyle(slider).appearance,
+             icon: ratio(icon.stroke, button.backgroundColor),
              footer: ratio(footer.color, panel),
              edge: ratio(button.borderTopColor, panel),
              focus: ratio(resolve("var(--focus)"), panel),
@@ -311,6 +315,10 @@ describe("each UI theme", () => {
       assert.ok(ratios.button >= text, `button text ${ratios.button.toFixed(1)}:1`);
       assert.equal(ratios.selectDrawn, "none", "the select draws its own colours");
       assert.ok(ratios.select >= text, `select text ${ratios.select.toFixed(1)}:1`);
+      // Its track is --edge and its thumb --text, both checked against the panel
+      // here; WebKit gives no computed style for the slider's parts to read.
+      assert.equal(ratios.sliderDrawn, "none", "the slider draws its own colours");
+      assert.ok(ratios.icon >= 3, `icons ${ratios.icon.toFixed(1)}:1`);
       assert.ok(ratios.footer >= text, `status text ${ratios.footer.toFixed(1)}:1`);
       assert.ok(ratios.edge >= 3, `control edges ${ratios.edge.toFixed(1)}:1`);
       assert.ok(ratios.focus >= 3, `focus ring ${ratios.focus.toFixed(1)}:1`);
