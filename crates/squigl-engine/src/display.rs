@@ -120,6 +120,16 @@ impl Lut {
             Lut::Luma(t) => t.iter().flat_map(|&[r, g, b]| [r, g, b, 255]).collect(),
         }
     }
+
+    /// The colour shown for a pixel whose luma byte (as in the Y plane) is `y` and
+    /// which converts to `rgb`: what a front end's lookup must produce, and so what
+    /// its drawing is checked against.
+    pub fn apply(&self, y: u8, rgb: [u8; 3]) -> [u8; 3] {
+        match self {
+            Lut::Tone(t) => rgb.map(|c| t[usize::from(c)]),
+            Lut::Luma(t) => t[usize::from(y)],
+        }
+    }
 }
 
 /// The adjustments, on a lightness in 0..=1.
@@ -204,6 +214,16 @@ mod tests {
                 |c: [u8; 3]| -> i32 { (0..3).map(|i| (c[i] as i32 - ink[i] as i32).abs()).sum() };
             assert!(t.windows(2).all(|w| dist(w[1]) >= dist(w[0])), "{mode:?}");
         }
+    }
+
+    #[test]
+    fn a_tone_table_maps_each_channel_and_a_luma_table_the_luma() {
+        let inverted = lut(&with(DisplayMode::Inverted));
+        assert_eq!(inverted.apply(16, [255, 0, 100]), [0, 255, 155]);
+        let grey = lut(&with(DisplayMode::Grey));
+        // The colour plays no part; only the luma does.
+        assert_eq!(grey.apply(235, [255, 0, 0]), [255, 255, 255]);
+        assert_eq!(grey.apply(16, [255, 255, 255]), [0, 0, 0]);
     }
 
     #[test]

@@ -27,7 +27,10 @@ cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocaptur
 cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
-cargo build --release -p squigl-desktop   # the Tauri app (needs WebKitGTK 4.1 headers on Linux)
+cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 headers on Linux)
+cargo build --release -p squigl-core --example synth_recording && node --test crates/squigl-desktop/e2e/app.test.mjs
+    # the app end to end through tauri-driver (needs tauri-driver, and WebKitWebDriver / msedgedriver;
+    # NATIVE_DRIVER=path if not on PATH); CI runs it on Linux under Xvfb and on Windows
 # Windows: the Visual Studio 2026 C++ Build Tools -- with 2022's, the prebuilt ONNX Runtime fails to link (__std_rotate)
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --lib   # CI enforces this too (libraries only: the binaries' docs are --help text)
 ```
@@ -267,9 +270,30 @@ install advice per platform) with Try now / Open an image instead / Hide, and ta
 focus when the problem changes. `adb::pick_device` reports an unauthorized or
 offline phone as such rather than "no device".
 Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-path
-FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second, to
-the log) and `--dev-canvas2d` drive it from a script; page errors and warnings go to the app's log
-(target `page`). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
+FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second and the
+request-to-drawn times, to the log), `--dev-canvas2d`, `--dev-config FILE` (start from
+the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH` and `--dev-probe` (`window.squiglProbe`:
+the last frame's header, and drawn pixels beside `Engine::displayed_pixel`, the
+engine's reference -- what `e2e/app.test.mjs` checks each display mode with) drive it
+from a script; page errors and warnings go to the app's log (target `page`). The page
+keeps up to two frame requests in flight (`frames.ts`'s `MAX_IN_FLIGHT`): with one,
+the socket idled while WebKitGTK took in a reply. Windows' Text size setting zooms the
+webview (`os_text_scale`); WebKitGTK follows GNOME's by itself. `SQUIGL_LOG_FILE=FILE`
+sends the app's log (and panics) to a file -- a Windows release build has no console --
+and on Windows an unknown argument is logged and skipped (msedgedriver passes Chromium's).
+The main window is built in `setup` (`"create": false` in `tauri.conf.json`) so that,
+on Windows, `WEBVIEW2_USER_DATA_FOLDER`/`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` (how
+msedgedriver passes its DevTools port and folder) are applied over wry's own.
+Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
+so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
+a small screen or large text) the toolbar goes compact -- icons alone, no key hints --
+with the labels visually hidden, not removed, so names stay whole. `<select>` and the
+range slider are `appearance: none` and draw themselves (the track `--edge`, the thumb
+`--text`): WebKitGTK paints native ones in GTK's colours (a white-on-light-grey select)
+while reporting the CSS ones, which fooled the contrast test. Under WebKitGTK's page
+zoom (`--dev-text-scale`) the icons' strokes render thick; GNOME's text scale arrives
+as the device pixel ratio instead, so real use is unaffected. Without `nasm` on
+PATH, `openh264-sys2` quietly builds without its assembly (~40% slower decoding). `ResizeObserver` alone does not size the canvas: WebKitGTK skips it
 for a window that is not being drawn.
 
 `crates/squigl-egui` is the egui document-camera window, on an `Engine` (eager

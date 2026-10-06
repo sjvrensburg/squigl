@@ -90,4 +90,10 @@ export class Renderer2D implements FrameRenderer {
     ctx.rotate((turns * Math.PI) / 2);
     ctx.drawImage(this.image, -dw / 2, -dh / 2, dw, dh);
   }
+
+  pixel(x: number, y: number): [number, number, number] {
+    this.draw();
+    const d = this.ctx.getImageData(x, y, 1, 1).data;
+    return [d[0]!, d[1]!, d[2]!];
+  }
 }

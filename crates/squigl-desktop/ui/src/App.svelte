@@ -15,7 +15,7 @@
     type Event,
     type StreamSlice,
   } from "./lib/engine";
-  import { FrameClient, type Viewport } from "./lib/frames";
+  import { FrameClient, type FrameHeader, type Viewport } from "./lib/frames";
   import { MODES, modeLabel } from "./lib/modes";
   import { Renderer, type FrameRenderer } from "./lib/renderer";
   import { Renderer2D } from "./lib/renderer2d";
@@ -23,6 +23,17 @@
   import { pan, turn, zoom, type View } from "./lib/viewport";
   import Connection from "./Connection.svelte";
   import Settings from "./Settings.svelte";
+  // Lucide's outline icons, drawn in currentColor so they follow the theme.
+  import FolderOpen from "@lucide/svelte/icons/folder-open";
+  import Maximize from "@lucide/svelte/icons/maximize";
+  import Palette from "@lucide/svelte/icons/palette";
+  import Pause from "@lucide/svelte/icons/pause";
+  import Play from "@lucide/svelte/icons/play";
+  import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
+  import RotateCw from "@lucide/svelte/icons/rotate-cw";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
+  import Smartphone from "@lucide/svelte/icons/smartphone";
+  import ZoomIn from "@lucide/svelte/icons/zoom-in";
 
   // The modes the toolbar cycles through; "custom" is reached in Settings.
   const QUICK_MODES = MODES.filter(([m]) => m !== "custom");
@@ -41,11 +52,14 @@
 
   let renderer: FrameRenderer | null = null;
   let client: FrameClient | null = null;
-  // A frame is wanted (something changed) while one is being fetched.
+  // A frame is wanted (something changed) while as many as may be are being fetched.
   let wanted = false;
   let firstFrame: (() => void) | null = null;
-  // Frames drawn so far (for --dev-stats).
+  // Frames drawn so far (for --dev-stats), and the last one's header.
   let drawn = 0;
+  let shown: FrameHeader | null = null;
+  // Milliseconds from asking for each frame to having drawn it (for --dev-stats).
+  let fetchTimes: number[] = [];
 
   const maxMagnification = $derived(config?.magnifier.max_magnification ?? 30);
   const frozen = $derived(capture?.frozen != null);
@@ -96,10 +110,13 @@
     }
     wanted = false;
     try {
+      const asked = performance.now();
       const frame = await client.request(viewport(), renderer.wantsLumaOnly ? "luma" : "yuv420");
       if (frame) {
         renderer.show(frame);
         drawn++;
+        shown = frame.header;
+        fetchTimes.push(performance.now() - asked);
         firstFrame?.();
         firstFrame = null;
       }
@@ -279,7 +296,13 @@
       setInterval(() => {
         const rate = (drawn - last) / 5;
         last = drawn;
-        invoke("page_log", { level: "info", message: `drew ${rate.toFixed(1)} frames/s` });
+        const times = fetchTimes.sort((a, b) => a - b);
+        fetchTimes = [];
+        const at = (q: number) => (times[Math.floor(q * (times.length - 1))] ?? 0).toFixed(1);
+        invoke("page_log", {
+          level: "info",
+          message: `drew ${rate.toFixed(1)} frames/s; request to drawn ${at(0.5)} ms median, ${at(0.95)} ms 95th percentile`,
+        });
       }, 5000);
     }
     if (dev.keys.length === 0 && dev.snapshot_after_ms === null) return;
@@ -300,9 +323,45 @@
     await invoke("dev_save_snapshot", png);
   }
 
+  /**
+   * For --dev-probe: what a WebDriver test reads. `sample` takes points as
+   * fractions of the view and gives, for each, the view pixel there, the colour
+   * drawn at its centre on the canvas, and the engine's reference for it.
+   */
+  function installProbe() {
+    (window as unknown as { squiglProbe: object }).squiglProbe = {
+      renderer: () => (renderer instanceof Renderer ? "webgl2" : "canvas2d"),
+      drawn: () => drawn,
+      header: () => shown,
+      async sample(points: [number, number][]) {
+        const header = shown;
+        const r = renderer;
+        if (!header || !r) return null;
+        const [vw, vh] = header.view;
+        const { origin, scale } = header.placement;
+        const at = points.map(([fx, fy]) => {
+          const view: [number, number] = [
+            Math.min(Math.floor(fx * vw), vw - 1),
+            Math.min(Math.floor(fy * vh), vh - 1),
+          ];
+          const canvasAt: [number, number] = [
+            Math.floor((view[0] + 0.5 - origin[0]) * scale),
+            Math.floor((view[1] + 0.5 - origin[1]) * scale),
+          ];
+          return { view, canvas: canvasAt, drawn: r.pixel(...canvasAt) };
+        });
+        const expected = await invoke<([number, number, number] | null)[]>("dev_reference", {
+          points: at.map((p) => p.view),
+        });
+        return at.map((p, i) => ({ ...p, expected: expected[i] }));
+      },
+    };
+  }
+
   /** WebGL2 if there is one (and --dev-canvas2d is not given), else Canvas2D. */
   async function makeRenderer(): Promise<FrameRenderer> {
-    const dev = await invoke<{ canvas2d: boolean }>("dev_options");
+    const dev = await invoke<{ canvas2d: boolean; probe: boolean }>("dev_options");
+    if (dev.probe) installProbe();
     if (!dev.canvas2d) {
       try {
         return new Renderer(canvas);
@@ -377,12 +436,19 @@
 <main>
   <header>
     <button onclick={toggleFreeze} aria-pressed={frozen}>
-      {frozen ? "Live" : "Freeze"} <kbd>{shortcut("freeze")}</kbd>
+      {#if frozen}<Play class="icon" />{:else}<Pause class="icon" />{/if}
+      <span class="long">{frozen ? "Live" : "Freeze"}</span> <kbd>{shortcut("freeze")}</kbd>
     </button>
-    <button onclick={() => rotate(-1)}>Rotate left <kbd>{shortcut("rotate-ccw")}</kbd></button>
-    <button onclick={() => rotate(1)}>Rotate right <kbd>{shortcut("rotate-cw")}</kbd></button>
+    <button onclick={() => rotate(-1)}>
+      <RotateCcw class="icon" /><span class="long">Rotate left</span>
+      <kbd>{shortcut("rotate-ccw")}</kbd>
+    </button>
+    <button onclick={() => rotate(1)}>
+      <RotateCw class="icon" /><span class="long">Rotate right</span>
+      <kbd>{shortcut("rotate-cw")}</kbd>
+    </button>
     <label>
-      Magnification
+      <ZoomIn class="icon" /><span class="named">Magnification</span>
       <input
         type="range"
         min="1"
@@ -394,7 +460,7 @@
       <output>{view.magnification.toFixed(1)}×</output>
     </label>
     <label>
-      Colours
+      <Palette class="icon" /><span class="named">Colours</span>
       <select
         value={config?.display.mode ?? "normal"}
         onchange={(e) => setMode(e.currentTarget.value as DisplayMode)}
@@ -405,7 +471,7 @@
       </select>
     </label>
     <label class="button">
-      Open image…
+      <FolderOpen class="icon" /><span class="long">Open image…</span>
       <input
         bind:this={fileInput}
         type="file"
@@ -416,11 +482,17 @@
     </label>
     {#if stream && stream.source.kind !== "phone"}
       <button onclick={() => dispatch({ type: "use-source", source: { kind: "phone" } })}>
-        Use phone
+        <Smartphone class="icon" /><span class="long">Use phone</span>
       </button>
     {/if}
-    <button onclick={() => (settingsOpen = true)}>Settings <kbd>{shortcut("settings")}</kbd></button>
-    <button onclick={toggleFullscreen}>Full screen <kbd>{shortcut("fullscreen")}</kbd></button>
+    <button onclick={() => (settingsOpen = true)}>
+      <SettingsIcon class="icon" /><span class="long">Settings</span>
+      <kbd>{shortcut("settings")}</kbd>
+    </button>
+    <button onclick={toggleFullscreen}>
+      <Maximize class="icon" /><span class="long">Full screen</span>
+      <kbd>{shortcut("fullscreen")}</kbd>
+    </button>
   </header>
 
   <div class="picture">
@@ -530,6 +602,24 @@
     color: var(--text);
     cursor: pointer;
   }
+  /* WebKitGTK draws a native select in the GTK theme's colours, whatever these
+     say (white on light grey), so it draws its own, arrow and all. */
+  :global(select) {
+    appearance: none;
+    padding-right: 1.8em;
+    background-image:
+      linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      calc(100% - 1.1em) 55%,
+      calc(100% - 0.75em) 55%;
+    background-size: 0.35em 0.35em;
+    background-repeat: no-repeat;
+  }
+  :global(select option) {
+    background: var(--control);
+    color: var(--text);
+  }
   .button:focus-within {
     outline: 0.2rem solid var(--focus);
     outline-offset: 0.15rem;
@@ -582,6 +672,83 @@
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
+  }
+  /* Icons sit with their labels, in the text's colour and at its size. */
+  header :global(.icon) {
+    width: 1.25em;
+    height: 1.25em;
+    vertical-align: -0.25em;
+    margin-right: 0.35em;
+    flex: none;
+  }
+  /* What the icon already says: a name for assistive tech, out of sight. */
+  .named {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  /* The slider draws itself too: a native one is GTK's, a faint track on dark. */
+  input[type="range"] {
+    appearance: none;
+    background: transparent;
+    height: 1.6rem;
+    vertical-align: middle;
+  }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 0.35rem;
+    border-radius: 0.2rem;
+    background: var(--edge);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 1.2rem;
+    height: 1.2rem;
+    margin-top: -0.425rem;
+    border-radius: 50%;
+    border: 0.15rem solid var(--panel);
+    background: var(--text);
+  }
+  /* In a small window -- a small screen, or large text -- the icons stand alone:
+     the labels stay for screen readers and OS magnifiers, only out of sight, so
+     every control keeps its full name; the text keeps the size chosen. */
+  @media (max-width: 48rem), (max-height: 28rem) {
+    .long {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    header :global(.icon) {
+      margin-right: 0;
+    }
+    /* The slider's and the select's icons are labels; the room goes to the picture. */
+    header label:not(.button) > :global(.icon) {
+      display: none;
+    }
+    kbd {
+      display: none;
+    }
+    header,
+    footer {
+      gap: 0.25rem 0.3rem;
+      padding: 0.25rem 0.4rem;
+    }
+    header :global(button),
+    header :global(select),
+    .button {
+      padding: 0.15rem 0.35rem;
+    }
+    header :global(select) {
+      padding-right: 1.8em;
+    }
+    input[type="range"] {
+      width: 5rem;
+    }
   }
   .failure {
     position: fixed;
