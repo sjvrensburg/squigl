@@ -360,10 +360,17 @@ crates/
   - Accepted sessions become `UseSource(Webrtc)`; zoom and torch are hidden through `Capabilities`.
 - **Optional, behind S4's findings:** zoom and torch over a data channel using `track.applyConstraints({zoom, torch})` in `webrtc_capture.html`.
 - **CLI:** `squigl-cli --webrtc` uses the shared crate, with unchanged behaviour.
+- **Overlay-aware pairing.** When the phone and the PC are on different networks, they can still be put on one: a shared hotspot, or an overlay network (Tailscale, ZeroTier, Nebula) installed on both. Squigl does not embed an overlay: the phone end is a browser page, and a browser cannot join one, so the phone needs the overlay's app whatever the PC does. Squigl recognises an overlay and uses it.
+  - **Addresses.** `PairingServer` reports every address it can be reached at, labelled: the LAN, and the known overlays by interface name and range (Tailscale `tailscale0` and 100.64.0.0/10, ZeroTier `zt*`, Nebula `nebula*`). The dialog offers the LAN address first and the overlay one beside it, each with its own QR code.
+  - **Binding.** The page, `/whip` and the WebRTC host candidates listen on every offered interface, not one. Overlay links have a smaller MTU (Tailscale's is 1280), which WebRTC handles.
+  - **A real certificate when there is one.** If Tailscale's HTTPS is on for the tailnet (MagicDNS), Squigl asks it for the `machine.tailnet.ts.net` certificate (`tailscale cert`, or its local API) and offers that name. The browser then shows no warning. Otherwise it keeps the self-signed certificate.
+  - **Guidance.** When no phone connects, the dialog says so in plain language: "Phone on a different network? Join both to the same hotspot, or install Tailscale on both," with steps per platform, in the manner of `lib/guidance.ts`.
+  - **Out of scope here:** reaching a phone with no extra app on another network. That needs a public rendezvous server plus STUN/TURN: a server to run, relay bandwidth (about 2-3.5 GB an hour at 4-8 Mbps), and the privacy note that video crosses a relay, end-to-end encrypted. Keep signalling behind a small interface so it can be added later if users ask; teachers marking from home with the phone on mobile data are the likely case.
 
 **Exit criteria:**
 
 - QR pairing works on Linux and on Windows (in the VM). On macOS *(tester)*.
+- Pairing works over a phone hotspot, and over Tailscale with the phone on mobile data (on the Ubuntu box), with no certificate warning when Tailscale's HTTPS is on.
 - Firewall prompts are documented: Windows "private networks" (from the VM), and macOS incoming connections and `NSLocalNetworkUsageDescription` (from Apple's documentation until a tester confirms them).
 
 ### Phase 6: Packaging and beta release (the magnifier beta)
