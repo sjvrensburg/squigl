@@ -259,6 +259,11 @@ pub struct DesktopConfig {
     /// Keys moved from their defaults: action name to key (the `KeyboardEvent.key`
     /// value). The app knows the actions and their default keys.
     pub shortcuts: BTreeMap<String, String>,
+    /// Pair over Tailscale with Tailscale's own certificate for this machine (when
+    /// the tailnet has HTTPS on), so the phone's browser shows no warning. Off
+    /// unless chosen: getting one puts the machine's tailnet name in the public
+    /// Certificate Transparency logs.
+    pub tailscale_https: bool,
 }
 
 impl Default for DesktopConfig {
@@ -267,6 +272,7 @@ impl Default for DesktopConfig {
             theme: Theme::default(),
             single_key_shortcuts: true,
             shortcuts: BTreeMap::new(),
+            tailscale_https: false,
         }
     }
 }
@@ -325,6 +331,7 @@ mod tests {
             theme: Theme::HighContrastYellow,
             single_key_shortcuts: false,
             shortcuts: [("freeze".to_string(), "Enter".to_string())].into(),
+            tailscale_https: true,
         };
         let parsed: Config = toml::from_str(&cfg.text()).unwrap();
         assert_eq!(parsed, cfg);

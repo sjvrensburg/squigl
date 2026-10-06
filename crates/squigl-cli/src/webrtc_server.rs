@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use squigl_core::decode::Backend;
-use squigl_pairing::{PairingOptions, PairingServer};
+use squigl_pairing::{Address, PairingOptions, PairingServer};
 use squigl_v4l2::LazyV4l2Sink;
 use std::net::IpAddr;
 use std::path::Path;
@@ -12,22 +12,25 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use squigl_pairing::detect_lan_ip;
-
-/// Serves the capture page until `stop` is raised.
+/// Serves the capture page until `stop` is raised, at `bind` or else at every LAN
+/// and overlay address.
 pub fn run(
     device: &Path,
-    bind: IpAddr,
+    bind: Option<IpAddr>,
     port: u16,
     decoder: Backend,
     stop: &Arc<AtomicBool>,
 ) -> Result<()> {
     let busy = Arc::new(AtomicBool::new(false));
     let options = PairingOptions {
-        bind,
+        addresses: match bind {
+            Some(ip) => vec![Address::given(ip)],
+            None => squigl_pairing::addresses(),
+        },
         port,
         decoder,
         cert_dir: None,
+        tailscale_https: false,
     };
     let server = PairingServer::start(options, {
         let (device, stop) = (device.to_path_buf(), Arc::clone(stop));
@@ -52,10 +55,12 @@ pub fn run(
         }
     })?;
 
+    for offer in server.offers() {
+        log::info!("{}: {}", offer.network.label(), offer.url);
+    }
     log::info!(
-        "open {} in the phone's browser (same network as this machine); \
-         accept the self-signed certificate warning, then tap \"Start streaming\"",
-        server.url()
+        "open one of those in the phone's browser (the phone on that network); \
+         accept the self-signed certificate warning, then tap \"Start streaming\""
     );
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(200));

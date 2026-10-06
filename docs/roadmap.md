@@ -376,8 +376,18 @@ crates/
 - **Still to do:**
   - pairing from a real phone (Linux, then the Windows VM);
   - the firewall notes;
-  - the overlay-aware addresses (PR #29);
   - zoom and torch over a data channel.
+
+**Progress (5b, 2026-10-06): overlay-aware addresses.**
+
+- **`squigl_pairing::addresses()`** lists the LAN addresses (the route out first, named Wi-Fi, Wired or Local by interface), then Tailscale, ZeroTier and Nebula addresses, by interface name and Tailscale's 100.64.0.0/10 range. Containers' and VMs' bridges are left out.
+- **One listener per address**, all sharing one token. The WebRTC media goes over the address the offer came in at.
+- **The dialog** shows a "The phone is on" choice when there are several networks, each with its own QR code. It drops the certificate step when the browser won't warn, and says what to do when the phone is on another network.
+- **The CLI** offers every address unless `--webrtc-bind` is given.
+- **Tailscale's certificate** (`tailscale cert`, for `machine.tailnet.ts.net`) is used when the tailnet has HTTPS on, but only if the user turns it on in Settings (`[desktop].tailscale_https`, off by default): issuing it puts the machine's name in the public Certificate Transparency logs.
+- **On the Ubuntu box:** the dialog offered Wired, Wi-Fi and Tailscale (not `docker0`), and each served the page.
+- **Tests:** a phone pairing over a second address streams frames; the interface naming is table-tested; the end-to-end test picks the second of two addresses from the keyboard.
+- **Still to do:** Tailscale's certificate from a real `tailscale cert`, and pairing a phone on mobile data over Tailscale.
 
 **Exit criteria:**
 

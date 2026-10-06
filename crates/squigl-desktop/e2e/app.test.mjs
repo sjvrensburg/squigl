@@ -64,7 +64,12 @@ describe("the magnifier on a recording", () => {
         .concat([recording, "640x480", "2"]),
       { cwd: ROOT, stdio: "inherit" },
     );
-    s = await Session.start(["--replay", recording, "--dev-probe", "--dev-pairing-bind", "127.0.0.1"]);
+    // Two addresses to pair at, as a LAN and an overlay would give (all of 127/8
+    // is loopback on Linux and Windows).
+    s = await Session.start([
+      "--replay", recording, "--dev-probe",
+      "--dev-pairing-bind", "127.0.0.1", "--dev-pairing-bind", "127.0.0.2",
+    ]);
     await until(() => s.probe("drawn"), "the first frame", 30000);
   });
   after(() => s?.quit());
@@ -153,12 +158,27 @@ describe("the magnifier on a recording", () => {
     assert.equal(page.status, 200);
     assert.match(page.body, /getUserMedia/);
     assert.equal((await get(url.replace(/t=.*/, "t=0"))).status, 403);
+    // The other address: its own code and listener, the same token.
+    // Chosen from the keyboard, as the radio group goes.
+    const radios = await s.findAll("dialog[open] input[type=radio]");
+    assert.equal(radios.length, 2);
+    await s.execute(`arguments[0].focus();`, { [ELEMENT]: radios[0] });
+    await s.press(KEY.ArrowRight);
+    const other = await until(async () => {
+      const shown = await s.text(await s.find("dialog[open] code"));
+      return shown !== url && shown;
+    }, "the second address");
+    assert.match(other, /^https:\/\/127\.0\.0\.2:\d+\/\?t=/);
+    assert.equal(other.split("?t=")[1], url.split("?t=")[1]);
+    assert.equal((await get(other)).status, 200);
     await s.press(KEY.Escape);
     await until(async () => (await s.findAll("dialog[open]")).length === 0, "the dialog closed");
-    await until(
-      () => get(url).then(() => false, () => true),
-      "the pairing server to stop",
-    );
+    for (const address of [url, other]) {
+      await until(
+        () => get(address).then(() => false, () => true),
+        `the pairing server at ${address} to stop`,
+      );
+    }
     assert.equal(await status(s), "Live", "the recording still shows");
   });
 
