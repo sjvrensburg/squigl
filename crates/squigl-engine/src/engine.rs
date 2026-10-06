@@ -16,6 +16,7 @@
 
 use crate::config::{Config, LayoutConfig};
 use crate::display::{self, Lut};
+use crate::geometry::Crop;
 use crate::history;
 use crate::layout::{Block, BlockDetector};
 use crate::model::{ModelContext, ModelPhase};
@@ -24,7 +25,7 @@ use crate::transcribe::{BackendConfig, Transcriber, Transcription};
 use crate::view::{render_planes, FrameRef, ViewPlanes, ViewRequest};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use squigl_core::convert::Rotation;
+use squigl_core::convert::{self, Rotation};
 use squigl_core::decode::YuvFrame;
 use squigl_core::Facing;
 use std::path::PathBuf;
@@ -491,6 +492,23 @@ impl Engine {
     pub fn render_planes(&self, request: &ViewRequest) -> Option<ViewPlanes> {
         let (seq, frame) = self.numbered(request.frame)?;
         Some(render_planes(&frame, seq, self.rotation, request))
+    }
+
+    /// The colour a front end should show at view pixel (`x`, `y`) of `which`
+    /// frame: turned by the rotation and mapped through the display mode, with no
+    /// scaling. The reference a drawn picture is checked against; `None` before there
+    /// is a frame or outside the view.
+    pub fn displayed_pixel(&self, which: FrameRef, x: usize, y: usize) -> Option<[u8; 3]> {
+        let frame = self.frame(which)?;
+        let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
+        if x >= vw || y >= vh {
+            return None;
+        }
+        let at = Crop { x, y, w: 1, h: 1 }.to_source(self.rotation, vw, vh);
+        let mut rgba = [0; 4];
+        convert::i420_crop_to_rgba(&frame, at.x, at.y, 1, 1, &mut rgba);
+        let luma = frame.y[at.y * frame.width + at.x];
+        Some(self.lut().apply(luma, [rgba[0], rgba[1], rgba[2]]))
     }
 
     /// The table for the configured display mode.
@@ -1045,6 +1063,43 @@ mod tests {
         assert_eq!(engine.state().capture.version, version + 1);
         // The change made by the command is still sent by the next pump.
         assert!(kinds(&engine.pump(Instant::now())).contains(&"capture"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn the_displayed_pixel_follows_rotation_and_mode() {
+        // White over black: the top two rows white, the bottom two black.
+        let path = std::env::temp_dir().join(format!(
+            "squigl-engine-displayed-{}.png",
+            std::process::id()
+        ));
+        image::RgbaImage::from_fn(4, 4, |_, y| {
+            let v = if y < 2 { 255 } else { 0 };
+            image::Rgba([v, v, v, 255])
+        })
+        .save(&path)
+        .unwrap();
+        let (mut engine, _) = start(SourceSpec::Image(path.clone()), Config::default(), None);
+        pump_until(&mut engine, |e| matches!(e, Event::Frame { .. }));
+        let at = |engine: &Engine, x, y| engine.displayed_pixel(FrameRef::Shown, x, y).unwrap();
+        assert!(at(&engine, 0, 0).iter().all(|&c| c >= 250));
+        assert!(at(&engine, 0, 3).iter().all(|&c| c <= 5));
+        assert_eq!(engine.displayed_pixel(FrameRef::Shown, 4, 0), None);
+        // Turned right, the black bottom is on the left.
+        let rotation = Rotation::Cw90;
+        engine.handle(Command::SetRotation { rotation }).unwrap();
+        assert!(at(&engine, 0, 0).iter().all(|&c| c <= 5));
+        assert!(at(&engine, 3, 0).iter().all(|&c| c >= 250));
+        // Yellow on black: the dark (ink) turns yellow, the light (paper) black.
+        let mut config = Config::default();
+        config.display.mode = display::DisplayMode::YellowOnBlack;
+        engine
+            .handle(Command::SetConfig {
+                config: Box::new(config),
+            })
+            .unwrap();
+        assert_eq!(at(&engine, 0, 0), [255, 255, 0]);
+        assert_eq!(at(&engine, 3, 0), [0, 0, 0]);
         std::fs::remove_file(path).unwrap();
     }
 

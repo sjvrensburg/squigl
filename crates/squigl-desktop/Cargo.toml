@@ -13,6 +13,11 @@ publish = false
 # `npm run dev` in ui/ and `cargo run -p squigl-desktop --no-default-features`.
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+# System libavcodec instead of openh264: multithreaded, and with no size ceiling.
+# Magnifying a 3840x2160 replay on the Ubuntu box it drew 21 fps against
+# openh264's 18 (single-threaded, which caps it there). Linux only, as for the
+# other front ends.
+ffmpeg = ["squigl-core/ffmpeg"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -29,3 +34,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tungstenite = "0.30"
 getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
