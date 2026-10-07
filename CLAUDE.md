@@ -224,7 +224,10 @@ quad and role; `MoveCorner` keeps a quad's other corners), block mode
 throttled to `LIVE_DETECT_INTERVAL` live, not while a read holds the GPU; a fresh
 detection hands the selection to the new block with the highest IoU,
 `follow_selection`), erasures (`SetErasures`, the whole list: the front end paints,
-erasing a live picture captures it, they go with their capture), reads (`Read`,
+erasing a live picture captures it, they go with their capture; `render::erased_frame`
+paints them into a copy of the capture once per change -- only the pixels a stroke
+covers differ -- which `render_planes` and `displayed_pixel` show in its place, so the
+picture is what a read sees), reads (`Read`,
 `ReadAll` -- captures, waits for the capture's own detection, then a snapshot queue
 one read at a time --, `SecondOpinion`, `CancelRead`) on threads that call the
 waker, results (kept per capture and scope; `results_generation` changes when the
@@ -363,11 +366,22 @@ Blocks was asked for -- the block finder, Read (Enter) / Read all (`a`) / Second
 opinion (`o`) / Stop, and the results (kept by the page from `ResultAppended` /
 `ResultsCleared`) as large text, unsure tokens underlined dotted (wavering) or wavy
 (hesitant) as well as tinted (`lib/reading.ts`'s `spans`, only when the tokens rebuild
-the text). `b` toggles blocks, `n`/`N` step through them, Escape clears the box.
+the text). `b` toggles blocks, `n`/`N` step through them, Escape clears the box (or first leaves
+the brush or the readings-only view). The erase brush (`e`; its size in CSS pixels in
+the pane) paints a stroke per drag; `x` erases the box (`lib/erase.ts`'s
+`coverStrokes`: rows across the outline, spilling over by a fifth of a row at most --
+with `n`/`N`, the keyboard's way to erase); `u` undoes a step (a box is many strokes,
+so the page keeps where each step began). The pane also has the reading text size
+(A−/A+, and Settings; `[ui].reading_size`, shared with egui), the session's history
+(`HistoryAppended`, newest first, kept across Clear), and Readings only (`Shift+F`:
+the toolbar hidden, the picture laid out but invisible so its canvas keeps a size,
+the window full screen until it is left).
 `--dev-backend URL` reads with one OpenAI-compatible server instead of the configured
 backends (the e2e test runs a fake one that answers with the image's size).
-WebKitWebDriver's click misses buttons on the toolbar's second row: e2e tests focus
-and press Enter instead.
+WebKitWebDriver's pointer lands off where it is aimed (about 100 px high, under
+Xvfb): its click misses buttons on the toolbar's second row, so e2e tests focus and
+press Enter instead, and a drag test reads back where its stroke went
+(`squiglProbe.erasures`).
 Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
 so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
 a small screen or large text) the toolbar goes compact -- icons alone, no key hints --

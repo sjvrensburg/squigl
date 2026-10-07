@@ -48,11 +48,20 @@ export interface DesktopConfig {
   shortcuts: Record<string, string>;
 }
 
+export interface UiConfig {
+  scale: number;
+  /** The readings' text size, in points. */
+  reading_size: number;
+  steady_threshold: number;
+  wavering_threshold: number;
+}
+
 /** The settings file; the page edits only these sections and sends the rest back as it came. */
 export interface Config {
   display: DisplayConfig;
   magnifier: MagnifierConfig;
   desktop: DesktopConfig;
+  ui: UiConfig;
   [section: string]: unknown;
 }
 

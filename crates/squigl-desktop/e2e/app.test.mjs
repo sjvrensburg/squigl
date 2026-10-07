@@ -88,8 +88,16 @@ describe("the magnifier on a recording", () => {
     await until(async () => (await status(s)) === "Frozen", "Frozen");
     const button = await s.find("header button");
     assert.equal(await s.attribute(button, "aria-pressed"), "true");
-    await sleep(300); // a request already on its way may still land
-    const frozen = await s.probe("drawn");
+    // The capture itself is drawn once, and a request already on its way may land:
+    // wait for the drawing to settle.
+    let frozen = await s.probe("drawn");
+    await until(async () => {
+      await sleep(400);
+      const now = await s.probe("drawn");
+      const settled = now === frozen;
+      frozen = now;
+      return settled;
+    }, "the drawing to settle");
     await sleep(1000);
     assert.equal(await s.probe("drawn"), frozen, "nothing is drawn while frozen");
     await s.type(await canvas(s), " ");
@@ -537,5 +545,101 @@ describe("reading", () => {
     assert.ok(w > 8 && w < 640 && h > 8 && h < 480, `read a ${w}x${h} box`);
     await s.press(KEY.Escape);
     await until(async () => (await s.findAll("svg.overlay polygon.selection")).length === 0, "the box cleared");
+  });
+
+  test("the session's readings stay in the history after Clear", async () => {
+    const summary = () => s.execute(`return document.querySelector(".history summary")?.textContent ?? null;`);
+    await until(async () => (await summary())?.includes("(2)"), "two readings in the history");
+    await s.execute(
+      `[...document.querySelectorAll(".reading button")].find((b) => b.textContent === "Clear").focus();`,
+    );
+    await s.press("\uE007");
+    await until(async () => (await readings()).length === 0, "the list cleared");
+    assert.match(await summary(), /\(2\)/);
+    const past = await s.execute(`return [...document.querySelectorAll(".history .past")].map((p) => p.textContent);`);
+    assert.equal(past.length, 2);
+    assert.equal(past[1], "seen 640x480", "newest first");
+  });
+
+  test("x erases the box, shown as it will be read, and u undoes it", async () => {
+    const overlay = await s.find("svg.overlay");
+    await s.drag(overlay, [-150, -60], [150, 60]);
+    await until(async () => (await s.findAll("svg.overlay polygon.selection")).length === 1, "the box");
+    // Points inside the box, as fractions of the view.
+    const points = await s.execute(`
+      const b = document.querySelector("svg.overlay polygon.selection").getBBox();
+      const { view, placement } = window.squiglProbe.header();
+      const dpr = window.devicePixelRatio;
+      const frac = (css, k) => ((css * dpr) / placement.scale + placement.origin[k]) / view[k];
+      const out = [];
+      for (const fx of [0.25, 0.4, 0.5, 0.6, 0.75])
+        for (const fy of [0.3, 0.5, 0.7]) out.push([frac(b.x + fx * b.width, 0), frac(b.y + fy * b.height, 1)]);
+      return out;`);
+    const colours = async () => (await s.probe("sample", points)).map((p) => [p.drawn, p.expected]);
+    const before = (await colours()).map(([drawn]) => drawn);
+    const near = (a, b) => a.every((c, i) => Math.abs(c - b[i]) <= TOLERANCE);
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("x");
+    await until(async () => {
+      const now = await colours();
+      return now.every(([d, e]) => e && near(d, e)) && now.some(([d], i) => !near(d, before[i]));
+    }, "the box painted over, drawn as the engine has it");
+    await s.press("u");
+    await until(
+      async () => (await colours()).every(([d], i) => near(d, before[i])),
+      "the picture as it was",
+    );
+    await s.press(KEY.Escape);
+  });
+
+  test("the brush paints out what it is dragged over", async () => {
+    const near = (a, b) => a.every((c, i) => Math.abs(c - b[i]) <= TOLERANCE);
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("e");
+    await until(async () => (await s.findAll("svg.overlay.erasing")).length === 1, "the brush on");
+    // (WebKitWebDriver's pointer lands off where it is aimed, so the test reads
+    // back where the stroke went rather than assuming.)
+    await s.drag(await s.find("svg.overlay"), [-100, 0], [100, 0]);
+    const stroke = await until(async () => (await s.probe("erasures"))[0], "a stroke");
+    const ys = stroke.points.map((p) => p[1]);
+    assert.ok(Math.max(...ys) - Math.min(...ys) < 2, "a level stroke");
+    const [x0, x1] = [stroke.points[0][0], stroke.points.at(-1)[0]];
+    assert.ok(x1 - x0 > 80, `along the drag: ${x0} to ${x1}`);
+    // Each point with its neighbours a pixel either side: after the undo only a point
+    // whose neighbours match it is compared (at a bar's edge the drawing, magnified
+    // and smoothed, blends the two bars).
+    const points = [0.1, 0.3, 0.5, 0.7, 0.9].flatMap((t) =>
+      [-1, 0, 1].map((dx) => [(Math.round(x0 + t * (x1 - x0)) + dx + 0.5) / 640, (Math.round(ys[0]) + 0.5) / 480]),
+    );
+    const colours = async () => (await s.probe("sample", points)).map((p) => [p.drawn, p.expected]);
+    // Painted with one colour, drawn as the engine has it.
+    await until(async () => {
+      const now = await colours();
+      return now.every(([d, e]) => e && near(d, e) && near(d, now[0][0]));
+    }, "the stroke painted over");
+    await s.press(KEY.Escape);
+    await until(async () => (await s.findAll("svg.overlay.erasing")).length === 0, "the brush off");
+    await s.press("u");
+    await until(async () => (await s.probe("erasures")).length === 0, "the stroke undone");
+    // (The engine's own tests hold that no erasures show the capture as it was.)
+    await until(async () => {
+      const now = await colours();
+      const inside = now.filter((_, i) => i % 3 === 1 && near(now[i - 1][1], now[i][1]) && near(now[i + 1][1], now[i][1]));
+      return inside.length > 0 && inside.every(([d, e]) => e && near(d, e));
+    }, "the picture redrawn");
+  });
+
+  test("Shift+F shows the readings alone, and Escape brings the picture back", async () => {
+    const hidden = () =>
+      s.execute(
+        `return [document.querySelector("header").hidden, getComputedStyle(document.querySelector(".picture")).visibility];`,
+      );
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("F");
+    await until(async () => (await hidden())[0] === true, "the toolbar out of sight");
+    assert.deepEqual(await hidden(), [true, "hidden"]);
+    await s.press(KEY.Escape);
+    await until(async () => (await hidden())[0] === false, "the toolbar back");
+    assert.deepEqual(await hidden(), [false, "visible"]);
   });
 });

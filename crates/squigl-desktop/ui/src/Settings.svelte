@@ -58,6 +58,10 @@
     return { ...config, desktop: { ...config.desktop, [key]: value } };
   }
 
+  function ui<K extends keyof Config["ui"]>(key: K, value: Config["ui"][K]): Config {
+    return { ...config, ui: { ...config.ui, [key]: value } };
+  }
+
   const hex = (c: [number, number, number]) =>
     "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
   const rgb = (h: string): [number, number, number] => [
@@ -236,6 +240,24 @@
           <option value={theme}>{label}</option>
         {/each}
       </select>
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Readings</legend>
+    <label>
+      Reading text size
+      <input
+        type="range"
+        min="10"
+        max="60"
+        step="1"
+        value={config.ui.reading_size}
+        aria-valuetext={`${config.ui.reading_size} points`}
+        oninput={(e) => preview(ui("reading_size", Number(e.currentTarget.value)))}
+        onchange={(e) => save(ui("reading_size", Number(e.currentTarget.value)))}
+      />
+      <output>{config.ui.reading_size} pt</output>
     </label>
   </fieldset>
 
