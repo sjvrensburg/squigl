@@ -154,6 +154,16 @@ crates/
 - **The Ubuntu/Nvidia box (X11, 2026-10-05, part of the sweep, uncapped):** the WebSocket did 35 fps at 3 MB (p95 58 ms, 2.4 cores) and 10 fps at 12 MB. That is about 110 MB/s, far below the Fedora box. At 3 MB the custom scheme did 22 fps and IPC 15. The WebSocket is still the best transport here. Windows and macOS are *(tester)*.
 - **For S3:** WebGL2 works under llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`), at 30 fps for 3 MB, but on 3.4 cores. Without a GPU, the front end must send smaller frames or use Canvas2D.
 
+**S7 findings (2026-10-07; `spikes/s7-mathml`, 71 expressions: the recorded readings' maths plus model-like LaTeX):**
+
+- **`math-core` (Rust), in `squigl-engine`:** one MathML for the desktop page, the egui window and MathCAT. Retrying an unknown command as `\operatorname{…}`, as squigl-math does with MiTeX, leaves only broken input failing (an unclosed group, `x^`). Every converter fails on that, so it is shown as source text. About 11 µs per expression.
+- **`pulldown-latex` is out.** Its MathML for the recorded entropy formula is malformed (MathCAT refuses it), it drops `\operatorname*`, and it maps `\mu` to the micro sign.
+- **Temml** is as good, but JavaScript only (no egui, no speech in the engine), and it throws on `x^` even with `throwOnError: false`.
+- **Two small rewrites go with math-core:**
+  - one for WebKit's spacing of `\log_2`/`\sin^2`;
+  - one for MathCAT: no variation selectors, the vector arrow as U+2192, and no invisible separator after `cases`. With it, ClearSpeak says "script cap L", "vector v" and "2 cases".
+- **Still open (tester):** speech through `tts` on each OS; rendering in WebView2 and WKWebView.
+
 **S2 findings (CI, 2026-10-04):**
 
 - core, engine, models, math and the egui window build, pass clippy and pass their tests on `windows-latest` and `macos-14` unchanged, apart from the per-OS rpath.
