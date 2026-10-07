@@ -178,7 +178,6 @@ export interface VoiceInfo {
 
 export interface SpeechSlice {
   available: boolean;
-  voices: VoiceInfo[];
   /** The result being said, and the sentence's place in its first reading (UTF-16 units). */
   speaking: { result: number; start: number; end: number } | null;
   paused: boolean;
@@ -204,6 +203,7 @@ export type Event =
   | { type: "models"; data: Versioned<unknown> }
   | { type: "config"; data: Versioned<Config> }
   | { type: "speech"; data: Versioned<SpeechSlice> }
+  | { type: "voices"; data: Versioned<{ voices: VoiceInfo[] }> }
   | { type: "frame"; data: { seq: number } }
   | { type: "result-appended" | "results-cleared" | "history-appended"; data?: unknown }
   | { type: "notice"; data: Notice };

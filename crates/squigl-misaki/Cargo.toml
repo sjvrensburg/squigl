@@ -1,0 +1,16 @@
+[package]
+name = "squigl-misaki"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "English text to Kokoro's phonemes: a Rust port of Misaki's English G2P (Apache-2.0)"
+
+[dependencies]
+anyhow.workspace = true
+serde_json = "1"
+# Misaki's subtokenising pattern needs look-ahead.
+fancy-regex = "0.14"
+unicode-normalization = "0.1"
+# erf, for the fallback model's GELU.
+libm = "0.2"

@@ -168,7 +168,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends nasm libclang-dev pkg-config \
             libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libxdo-dev \
-            libspeechd-dev
+            libspeechd-dev libasound2-dev
 
       - name: Install nasm
         if: runner.os == 'Windows'
@@ -212,10 +212,10 @@ jobs:
           npm run build
 
       - name: Clippy
-        run: cargo clippy -p squigl-desktop -p squigl-speech --all-targets -- -D warnings
+        run: cargo clippy -p squigl-desktop -p squigl-speech --features squigl-speech/kokoro --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test -p squigl-desktop -p squigl-speech
+        run: cargo test -p squigl-desktop -p squigl-speech --features squigl-speech/kokoro
 
       # The app through WebDriver (tauri-driver over WebKitWebDriver or msedgedriver)
       # on a synthetic recording: the keyboard, each display mode's pixels against

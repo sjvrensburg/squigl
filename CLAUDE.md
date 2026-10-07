@@ -28,7 +28,8 @@ cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
 cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 and libspeechd-dev headers on Linux)
-cargo test -p squigl-speech [--release -- --ignored --nocapture listen]   # reading aloud; `listen` says a sentence and its maths
+cargo test -p squigl-speech --features kokoro [--release -- --ignored --nocapture listen]   # reading aloud; `listen` says a sentence and its maths (Kokoro if in $SQUIGL_MODEL_DIR/kokoro)
+SQUIGL_MODEL_DIR=... cargo test -p squigl-misaki --release -- --include-ignored   # the Misaki port against Python Misaki's readings (needs the Kokoro download's misaki*/ files)
 cargo build --release -p squigl-core --example synth_recording && node --test crates/squigl-desktop/e2e/app.test.mjs
     # the app end to end through tauri-driver (needs tauri-driver, and WebKitWebDriver / msedgedriver;
     # NATIVE_DRIVER=path if not on PATH); CI runs it on Linux under Xvfb and on Windows
@@ -400,12 +401,23 @@ the toolbar hidden, the picture laid out but invisible so its canvas keeps a siz
 the window full screen until it is left).
 `--dev-backend URL` reads with one OpenAI-compatible server instead of the configured
 backends (the e2e test runs a fake one that answers with the image's size).
-Reading aloud (`squigl-speech`, the `speech` feature, default): `SystemVoice` is
-`tts` (speech-dispatcher, WinRT, AVSpeechSynthesizer) plus MathCAT (ClearSpeak, rules
-zipped in), both on one thread (MathCAT's state is per thread); an utterance's end is
-noticed there -- the system's end callback as a nudge, `is_speaking` as the truth --
-and passed on through the engine's waker. Not a default member: on Linux it needs
-`libspeechd-dev` (and libclang) to build. The pane has Read aloud (`s`), Read the page
+Reading aloud (`squigl-speech`, the `speech` feature, default): `Voices` is the
+engine's `Voice`, routing to Kokoro (`KokoroVoice`, the `kokoro` feature, which the
+desktop's `local-model` turns on) once its model is ready and chosen -- `[speech].voice`
+`None` or `kokoro:<id>` -- else the system's (`SystemVoice`: `tts`, speech-dispatcher /
+WinRT / AVSpeechSynthesizer, on its own thread, an utterance's end noticed there -- the
+end callback as a nudge, `is_speaking` as the truth -- and passed on through the
+waker; only its English voices are listed, speech-dispatcher has 13,000); `Maths` is
+MathCAT (ClearSpeak, rules zipped in) on its own thread (its state is per thread), for
+either voice. `KokoroVoice` makes each sentence with squigl-models' `KokoroService` on
+its thread (the next one while this plays: the engine's `Voice::prepare`), resamples
+24 kHz to the output's rate (windowed sinc) and plays through cpal -- so it pauses
+mid-word (`Voice::pause`/`resume`; the system voice says the sentence again). Not a
+default member: on Linux it needs `libspeechd-dev` (and libclang) and, for Kokoro,
+`libasound2-dev`. The voices are their own slice (`VoicesSlice`, sent once); a
+voice's downloadable model (`Voice::model`) is listed with the reading models
+(`ModelKind::Voice`) and the pane offers it ("a natural voice"), downloaded only on
+the person's yes. The pane has Read aloud (`s`), Read the page
 aloud (`A`), Pause/Go on (`.`), Stop (`S`), Previous/Next (`<`/`>`) and a per-reading
 Read aloud; the sentence being said is boxed in the text (`runs`' `current`), its
 reading edged and its block outlined on the picture; Settings has voice, speed and
@@ -459,7 +471,16 @@ nothing defines (models invent `\softmax`, `\Var`) is not a failure: MiTeX's
 `unknown command` makes `convert_math` retry it as `\operatorname{…}`, and a name
 MiTeX passes through that Typst lacks (`unknown variable`) makes `Renderer::render`
 recompile with it defined as `math.op`; `argmax`/`argmin` are defined in the
-template's `compat` scope (with limits). `crates/squigl-models` (the GUI's
+template's `compat` scope (with limits). `crates/squigl-misaki`: Misaki's English G2P (hexgrad/misaki `en.py` at fba1236,
+Apache-2.0) ported -- `lexicon.rs` function for function (gold/silver dictionaries,
+stress, special cases, -s/-ed/-ing, numbers with `numbers.rs` as num2words writes
+them), `lib.rs` the token pipeline (subtokenize, retokenize, context, stress
+resolution), `tag.rs` a tokenizer and part-of-speech guesser in place of spaCy
+(function words from a list, the rest from their neighbours: 98.6% of words as
+Python Misaki has them on `testdata/reference.tsv`, the rest mostly spaCy's own
+slips), `fallback.rs` Misaki's BART fallback for other words in plain Rust from
+its safetensors (greedy, transformers' 20-token cap; exact on `testdata/fallback.tsv`).
+American English only. `crates/squigl-models` (the GUI's
 `local-model` feature): the built-in models --
 `glmocr.rs` drives the onnx-community three-graph GLM-OCR export through `ort`
 (vision encoder, embeddings, merged decoder with an explicit KV cache and the
@@ -475,7 +496,12 @@ each model's files (pinned HF revision + sha256 manifest; `$SQUIGL_MODEL_DIR/<na
 `~/.cache/squigl/models/<name>/`; a download goes to `$SQUIGL_MODEL_DIR` when set, else
 the cache; `SQUIGL_TEST_DEVICES=cpu` limits the `glmocr` tests to the CPU, as CI's
 manual `models` job runs them on all three OSes), and
-`lifecycle.rs` is both models' life (`Lifecycle<T>`: idle, preparing on a thread --
+`kokoro.rs` is Kokoro-82M (onnx-community fp16 export, `models::KOKORO`, which also
+fetches Misaki's dictionaries from GitHub and its fallback -- a `ModelFile` may name
+its own `url`; `HF_TOKEN` goes only to huggingface.co): phonemes by squigl-misaki
+(symbols said first: Misaki reads `=` as "x"), cut at MathCAT's pauses under Kokoro's
+510, run on the CPU outside `RUNTIME` (spike S8: safe beside GLM-OCR on WebGPU); not in
+`models::ALL`, which `--fetch-model` takes for egui. `lifecycle.rs` is the models' life (`Lifecycle<T>`: idle, preparing on a thread --
 `ModelSpec::ensure` then the loader --, ready or failed, with the phase in a
 `PhaseCell` and a cancel flag the download checks per file and per chunk; eager or
 on `prepare()`, per the `ModelContext`), and

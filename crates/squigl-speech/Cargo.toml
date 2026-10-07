@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Reading aloud for squigl: the system's speech (tts) and maths in words (MathCAT)"
+description = "Reading aloud for squigl: Kokoro or the system's speech, and maths in words (MathCAT)"
+
+[features]
+# squigl's own voice: Kokoro-82M through squigl-models (ONNX Runtime), played
+# through cpal (on Linux, ALSA: building needs libasound2-dev).
+kokoro = ["dep:squigl-models", "dep:cpal"]
 
 [dependencies]
 squigl-engine = { path = "../squigl-engine" }
@@ -16,3 +21,5 @@ tts = "0.26"
 # MathML in words, ClearSpeak; its rules zipped into the binary. The alpha is the
 # version spike S7 measured.
 mathcat = { version = "=0.7.7-alpha.1", features = ["include-zip"] }
+squigl-models = { path = "../squigl-models", optional = true }
+cpal = { version = "0.16", optional = true }

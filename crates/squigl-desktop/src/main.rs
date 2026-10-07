@@ -281,12 +281,30 @@ fn dev_spoken(spoken: State<'_, dev_voice::DevSpoken>) -> Vec<String> {
     spoken.0.lock().unwrap().clone()
 }
 
-/// The system's speech, if this build has it and the system offers it.
+/// Reading aloud, if this build has it: Kokoro (with the built-in models; its
+/// model downloads only when the person agrees, like the others) and the system's
+/// speech.
 fn voice(wake: squigl_engine::engine::Waker) -> Option<Box<dyn squigl_engine::speech::Voice>> {
     #[cfg(feature = "speech")]
-    match squigl_speech::SystemVoice::start(wake) {
-        Ok(v) => return Some(Box::new(v)),
-        Err(e) => log::warn!("no reading aloud: {e:#}"),
+    {
+        #[cfg(feature = "local-model")]
+        let kokoro = Some(std::sync::Arc::new(
+            squigl_models::kokoro::KokoroService::new(&squigl_engine::model::ModelContext {
+                eager: false,
+                notify: wake.clone(),
+            }),
+        ));
+        match squigl_speech::Voices::start(
+            wake,
+            #[cfg(feature = "local-model")]
+            kokoro,
+        ) {
+            Ok(v) => {
+                log::info!("reading aloud ready");
+                return Some(Box::new(v));
+            }
+            Err(e) => log::warn!("no reading aloud: {e:#}"),
+        }
     }
     #[cfg(not(feature = "speech"))]
     let _ = wake;

@@ -170,6 +170,7 @@ fn snapshot(state: &EngineState) -> Vec<Event> {
         models,
         config,
         speech,
+        voices,
     } = state;
     vec![
         Event::Stream(stream.clone()),
@@ -179,6 +180,7 @@ fn snapshot(state: &EngineState) -> Vec<Event> {
         Event::Models(models.clone()),
         Event::Config(config.clone()),
         Event::Speech(speech.clone()),
+        Event::Voices(voices.clone()),
     ]
 }
 

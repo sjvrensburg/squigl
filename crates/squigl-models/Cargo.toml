@@ -16,6 +16,7 @@ description = "Squigl's built-in models: GLM-OCR for reading and PP-DocLayoutV3 
 wgpu = "30"
 pollster = "1"
 squigl-engine = { path = "../squigl-engine" }
+squigl-misaki = { path = "../squigl-misaki" }
 anyhow.workspace = true
 log.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

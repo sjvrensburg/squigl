@@ -6,6 +6,7 @@
 //! LaTeX.
 
 use crate::math::{self, Part};
+use crate::model::ModelPhase;
 
 /// A voice the system offers.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -34,6 +35,25 @@ pub trait Voice: Send {
     fn configure(&mut self, voice: Option<&str>, rate: f32) -> anyhow::Result<()>;
     /// MathML in words, or `None` when the voice has no way to say maths.
     fn maths(&self, mathml: &str) -> Option<String>;
+    /// Gets `text` ready to say next, while the current utterance is said (a voice
+    /// that makes its audio first can make it in the meantime).
+    fn prepare(&mut self, _text: &str) {}
+    /// Holds the utterance where it is, mid-word; `false` when this voice cannot
+    /// (the engine then stops it and says the sentence again on resuming).
+    fn pause(&mut self) -> bool {
+        false
+    }
+    /// Goes on from where [`Voice::pause`] held it.
+    fn resume(&mut self) -> bool {
+        false
+    }
+    /// A built-in voice the person may download (squigl's own neural voice): its
+    /// name and where it is, listed with the reading models.
+    fn model(&self) -> Option<(String, ModelPhase)> {
+        None
+    }
+    fn prepare_model(&self) {}
+    fn cancel_model(&self) {}
 }
 
 /// One sentence of a reading, as said.

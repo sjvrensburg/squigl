@@ -2,13 +2,14 @@
   // The settings dialog: colours and their adjustments, the view, the app's look,
   // and the keyboard. Sliders preview as they move and save when let go; every
   // other control saves at once.
-  import { dispatch, type Config, type DisplayMode, type SpeechSlice, type Theme } from "./lib/engine";
+  import { dispatch, type Config, type DisplayMode, type SpeechSlice, type Theme, type VoiceInfo } from "./lib/engine";
   import { MODES } from "./lib/modes";
   import { ACTIONS, keyFor, keyLabel, rebind, type Action } from "./lib/shortcuts";
 
-  let { config, speech, open = $bindable(), onnotice }: {
+  let { config, speech, voices: all, open = $bindable(), onnotice }: {
     config: Config;
     speech: SpeechSlice | null;
+    voices: VoiceInfo[];
     open: boolean;
     onnotice: (text: string) => void;
   } = $props();
@@ -63,10 +64,14 @@
     return { ...config, speech: { ...config.speech, [key]: value } };
   }
 
-  // The voices by language, then name: the system may offer hundreds.
+  // squigl's own voices first, then the system's by language and name (it may
+  // offer hundreds).
   const voices = $derived(
-    [...(speech?.voices ?? [])].sort(
-      (a, b) => (a.language ?? "").localeCompare(b.language ?? "") || a.name.localeCompare(b.name),
+    [...all].sort(
+      (a, b) =>
+        Number(!a.id.startsWith("kokoro:")) - Number(!b.id.startsWith("kokoro:")) ||
+        (a.language ?? "").localeCompare(b.language ?? "") ||
+        a.name.localeCompare(b.name),
     ),
   );
 
@@ -282,7 +287,7 @@
           value={config.speech.voice ?? ""}
           onchange={(e) => save(spoken("voice", e.currentTarget.value || null))}
         >
-          <option value="">The system's own</option>
+          <option value="">The best there is (Kokoro once downloaded)</option>
           {#each voices as v}
             <option value={v.id}>{v.name}{v.language ? ` (${v.language})` : ""}</option>
           {/each}
