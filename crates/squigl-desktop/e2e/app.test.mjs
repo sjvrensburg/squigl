@@ -707,6 +707,13 @@ describe("reading aloud", () => {
     backend?.close();
   });
 
+  test("the pane has the reading-aloud controls from the start", async () => {
+    const buttons = await s.execute(
+      `return [...document.querySelectorAll('.reading [aria-label="Reading aloud"] button')].map((b) => b.textContent.trim());`,
+    );
+    assert.ok(buttons.some((b) => b.startsWith("Read aloud")), `${buttons}`);
+  });
+
   test("s reads the reading aloud a sentence at a time, the sentence boxed as it is said", async () => {
     await s.execute(`document.querySelector("canvas").focus();`);
     await s.press("s");
