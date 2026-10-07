@@ -419,6 +419,8 @@ fn run() -> Result<()> {
                 EngineDeps {
                     backends: backend_factory,
                     detector: detector_factory,
+                    // The window does not read aloud (yet).
+                    voice: Box::new(|_| None),
                 },
                 // The window loads the models at once, as it always has.
                 EngineOptions {

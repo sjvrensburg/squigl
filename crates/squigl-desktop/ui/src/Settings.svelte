@@ -2,12 +2,13 @@
   // The settings dialog: colours and their adjustments, the view, the app's look,
   // and the keyboard. Sliders preview as they move and save when let go; every
   // other control saves at once.
-  import { dispatch, type Config, type DisplayMode, type Theme } from "./lib/engine";
+  import { dispatch, type Config, type DisplayMode, type SpeechSlice, type Theme } from "./lib/engine";
   import { MODES } from "./lib/modes";
   import { ACTIONS, keyFor, keyLabel, rebind, type Action } from "./lib/shortcuts";
 
-  let { config, open = $bindable(), onnotice }: {
+  let { config, speech, open = $bindable(), onnotice }: {
     config: Config;
+    speech: SpeechSlice | null;
     open: boolean;
     onnotice: (text: string) => void;
   } = $props();
@@ -57,6 +58,17 @@
   function desktop<K extends keyof Config["desktop"]>(key: K, value: Config["desktop"][K]): Config {
     return { ...config, desktop: { ...config.desktop, [key]: value } };
   }
+
+  function spoken<K extends keyof Config["speech"]>(key: K, value: Config["speech"][K]): Config {
+    return { ...config, speech: { ...config.speech, [key]: value } };
+  }
+
+  // The voices by language, then name: the system may offer hundreds.
+  const voices = $derived(
+    [...(speech?.voices ?? [])].sort(
+      (a, b) => (a.language ?? "").localeCompare(b.language ?? "") || a.name.localeCompare(b.name),
+    ),
+  );
 
   function ui<K extends keyof Config["ui"]>(key: K, value: Config["ui"][K]): Config {
     return { ...config, ui: { ...config.ui, [key]: value } };
@@ -260,6 +272,46 @@
       <output>{config.ui.reading_size} pt</output>
     </label>
   </fieldset>
+
+  {#if speech?.available}
+    <fieldset>
+      <legend>Reading aloud</legend>
+      <label>
+        Voice
+        <select
+          value={config.speech.voice ?? ""}
+          onchange={(e) => save(spoken("voice", e.currentTarget.value || null))}
+        >
+          <option value="">The system's own</option>
+          {#each voices as v}
+            <option value={v.id}>{v.name}{v.language ? ` (${v.language})` : ""}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        Speed
+        <input
+          type="range"
+          min="0.5"
+          max="2"
+          step="0.05"
+          value={config.speech.rate}
+          aria-valuetext={`${config.speech.rate.toFixed(2)} times normal`}
+          oninput={(e) => preview(spoken("rate", Number(e.currentTarget.value)))}
+          onchange={(e) => save(spoken("rate", Number(e.currentTarget.value)))}
+        />
+        <output>{config.speech.rate.toFixed(2)}×</output>
+      </label>
+      <label>
+        <input
+          type="checkbox"
+          checked={config.speech.speak_new}
+          onchange={(e) => save(spoken("speak_new", e.currentTarget.checked))}
+        />
+        Read each new reading aloud
+      </label>
+    </fieldset>
+  {/if}
 
   <fieldset>
     <legend>Phone pairing</legend>

@@ -27,7 +27,8 @@ cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocaptur
 cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
-cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 headers on Linux)
+cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 and libspeechd-dev headers on Linux)
+cargo test -p squigl-speech [--release -- --ignored --nocapture listen]   # reading aloud; `listen` says a sentence and its maths
 cargo build --release -p squigl-core --example synth_recording && node --test crates/squigl-desktop/e2e/app.test.mjs
     # the app end to end through tauri-driver (needs tauri-driver, and WebKitWebDriver / msedgedriver;
     # NATIVE_DRIVER=path if not on PATH); CI runs it on Linux under Xvfb and on Windows
@@ -281,7 +282,17 @@ non-rectangular block goes through before it is shown or read; `history.rs`: eve
 finished read of the session (`Engine::history`, appended alongside the results,
 so the last N history entries are the N results -- "copy all" relies on that),
 Markdown export by capture;
-`typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
+`speech.rs`: the `Voice` trait (say an utterance by id, stop, `ended`, the
+system's voices, `configure` voice and rate, `maths` -- MathML in words) and
+`utterances`, a reading as sentences to say (split after `.`/`!`/`?` and a space,
+at line breaks and around display maths; maths in words by the voice, from
+`math::speakable`, else its source); `engine/aloud.rs` is reading aloud on it
+(`Speak { result }`, `ReadAloud` -- block mode on, a "read all", each block said
+as it lands --, `PauseSpeaking`/`ResumeSpeaking` -- the sentence again, no voice
+pauses mid-word everywhere --, `StopSpeaking`, `SkipSpeech`, `[speech].speak_new`)
+with the `SpeechSlice` (voices, what is being said: result and sentence in UTF-16
+units, paused, following); each `ReadResult` carries its `selection`, which is how
+a front end shows the block being said; `typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
 front end's); `math.rs`: a reading as text and maths `Part`s (split at `$`, `$$`,
 `\(`, `\[` as `squigl-math` splits for Typst; offsets in UTF-16 units, a web page's),
 the maths as MathML Core by `math-core` (spike S7's choice, `spikes/s7-mathml`): an
@@ -389,6 +400,17 @@ the toolbar hidden, the picture laid out but invisible so its canvas keeps a siz
 the window full screen until it is left).
 `--dev-backend URL` reads with one OpenAI-compatible server instead of the configured
 backends (the e2e test runs a fake one that answers with the image's size).
+Reading aloud (`squigl-speech`, the `speech` feature, default): `SystemVoice` is
+`tts` (speech-dispatcher, WinRT, AVSpeechSynthesizer) plus MathCAT (ClearSpeak, rules
+zipped in), both on one thread (MathCAT's state is per thread); an utterance's end is
+noticed there -- the system's end callback as a nudge, `is_speaking` as the truth --
+and passed on through the engine's waker. Not a default member: on Linux it needs
+`libspeechd-dev` (and libclang) to build. The pane has Read aloud (`s`), Read the page
+aloud (`A`), Pause/Go on (`.`), Stop (`S`), Previous/Next (`<`/`>`) and a per-reading
+Read aloud; the sentence being said is boxed in the text (`runs`' `current`), its
+reading edged and its block outlined on the picture; Settings has voice, speed and
+"read each new reading aloud". `--dev-fake-voice` reads aloud with a voice that says
+nothing, 0.4 s an utterance, and keeps what it was given (`dev_spoken`).
 WebKitWebDriver's pointer lands off where it is aimed (about 100 px high, under
 Xvfb): its click misses buttons on the toolbar's second row, so e2e tests focus and
 press Enter instead, and a drag test reads back where its stroke went

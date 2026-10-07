@@ -7,6 +7,7 @@ members = [
     "crates/squigl-pairing",
     "crates/squigl-models",
     "crates/squigl-math",
+    "crates/squigl-speech",
     "crates/squigl-cli",
     "crates/squigl-egui",
     "crates/squigl-desktop",

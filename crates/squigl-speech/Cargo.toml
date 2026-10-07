@@ -1,0 +1,18 @@
+[package]
+name = "squigl-speech"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reading aloud for squigl: the system's speech (tts) and maths in words (MathCAT)"
+
+[dependencies]
+squigl-engine = { path = "../squigl-engine" }
+anyhow.workspace = true
+log.workspace = true
+# speech-dispatcher on Linux (needs libspeechd-dev and libclang to build), WinRT on
+# Windows, AVSpeechSynthesizer on macOS.
+tts = "0.26"
+# MathML in words, ClearSpeak; its rules zipped into the binary. The alpha is the
+# version spike S7 measured.
+mathcat = { version = "=0.7.7-alpha.1", features = ["include-zip"] }

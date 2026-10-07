@@ -159,15 +159,26 @@ impl Host {
     }
 }
 
-/// Every slice, as events: what a new subscriber starts from.
+/// Every slice, as events: what a new subscriber starts from. (Taken apart whole,
+/// so a slice added to the engine cannot be left out here.)
 fn snapshot(state: &EngineState) -> Vec<Event> {
+    let EngineState {
+        stream,
+        capture,
+        blocks,
+        reading,
+        models,
+        config,
+        speech,
+    } = state;
     vec![
-        Event::Stream(state.stream.clone()),
-        Event::Capture(state.capture.clone()),
-        Event::Blocks(state.blocks.clone()),
-        Event::Reading(state.reading.clone()),
-        Event::Models(state.models.clone()),
-        Event::Config(state.config.clone()),
+        Event::Stream(stream.clone()),
+        Event::Capture(capture.clone()),
+        Event::Blocks(blocks.clone()),
+        Event::Reading(reading.clone()),
+        Event::Models(models.clone()),
+        Event::Config(config.clone()),
+        Event::Speech(speech.clone()),
     ]
 }
 

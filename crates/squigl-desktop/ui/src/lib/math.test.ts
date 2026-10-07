@@ -50,4 +50,18 @@ describe("maths runs", () => {
     expect(out[2]).toEqual({ kind: "text", spans: [{ text: "b", confidence: "steady", alternates: [] }] });
     expect(uncertainRuns(out)).toBe(0);
   });
+
+  it("marks the sentence being read aloud, in text and maths", () => {
+    const r: Reading = { text: "is $k>2$ ok", count: 1, truncated: false, tokens: null };
+    const out = runs(r, t, parts, [1, 5]);
+    expect(out[0]).toEqual({
+      kind: "text",
+      spans: [
+        { text: "i", confidence: "steady", alternates: [] },
+        { text: "s ", confidence: "steady", alternates: [], current: true },
+      ],
+    });
+    expect(out[1]).toMatchObject({ kind: "math", current: true });
+    expect(out[2]).toEqual({ kind: "text", spans: [{ text: " ok", confidence: "steady", alternates: [] }] });
+  });
 });

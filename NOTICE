@@ -93,6 +93,20 @@ Lucide (https://github.com/lucide-icons/lucide)
   Copyright Lucide Icons and Contributors. ISC License. The desktop app's toolbar
   icons (@lucide/svelte), bundled into the UI.
 
+MathCAT (https://github.com/NSoiffer/MathCAT)
+  Copyright Neil Soiffer. MIT License. Says a reading's maths in words when the
+  desktop app reads aloud (crates/squigl-speech, the `mathcat` crate); its speech
+  rules are zipped into the binary (feature `include-zip`).
+
+math-core (https://github.com/tmke8/math-core)
+  Copyright the math-core contributors. MIT License. Converts a reading's LaTeX
+  maths to MathML (crates/squigl-engine/src/math.rs).
+
+The system's speech
+  Reading aloud goes through the `tts` crate (MIT) to the operating system's own
+  speech: speech-dispatcher's libspeechd (LGPL-2.1) on Linux, WinRT on Windows,
+  AVSpeechSynthesizer on macOS. squigl links them and ships none of them.
+
 v4l2loopback (https://github.com/umlaeute/v4l2loopback)
   GNU General Public License v2.0. A kernel module the user installs separately;
   this project talks to it through the V4L2 device interface only and neither

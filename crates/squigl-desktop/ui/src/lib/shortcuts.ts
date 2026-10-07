@@ -31,6 +31,12 @@ export type Action =
   | "erase-box"
   | "undo-erase"
   | "reading-only"
+  | "speak"
+  | "read-aloud"
+  | "pause-speech"
+  | "stop-speech"
+  | "next-spoken"
+  | "previous-spoken"
   | "fullscreen"
   | "settings";
 
@@ -62,6 +68,12 @@ export const ACTIONS: { action: Action; label: string; key: string }[] = [
   { action: "erase-box", label: "Erase the box", key: "x" },
   { action: "undo-erase", label: "Undo erasing", key: "u" },
   { action: "reading-only", label: "Readings only, full screen", key: "F" },
+  { action: "speak", label: "Read the reading aloud", key: "s" },
+  { action: "read-aloud", label: "Read the page aloud", key: "A" },
+  { action: "pause-speech", label: "Pause or go on reading aloud", key: "." },
+  { action: "stop-speech", label: "Stop reading aloud", key: "S" },
+  { action: "next-spoken", label: "Read aloud from the next block", key: ">" },
+  { action: "previous-spoken", label: "Read aloud from the previous block", key: "<" },
   { action: "fullscreen", label: "Full screen", key: "f" },
   { action: "settings", label: "Settings", key: "," },
 ];

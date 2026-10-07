@@ -6,6 +6,7 @@
 // A window, not a console program: on Windows a release build opens no console.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod dev_voice;
 mod host;
 mod pairing;
 mod transport;
@@ -101,6 +102,11 @@ struct Args {
     /// `/v1` base) in place of the configured ones.
     #[arg(long, hide = true, value_name = "URL")]
     dev_backend: Option<String>,
+
+    /// Development aid: read aloud with a voice that says nothing and keeps what it
+    /// was given (`dev_spoken`), in place of the system's speech.
+    #[arg(long, hide = true)]
+    dev_fake_voice: bool,
 }
 
 /// The development aids the page acts on.
@@ -254,9 +260,40 @@ fn math_parts(text: String) -> Vec<squigl_engine::math::Part> {
     squigl_engine::math::parts(&text)
 }
 
-/// The backends and detector: the HTTP backends always, the built-in models when
-/// built with them (prepared only on request: the person agrees to the download).
-fn engine_deps() -> EngineDeps {
+/// The backends, detector and voice: the HTTP backends always, the built-in models
+/// when built with them (prepared only on request: the person agrees to the
+/// download), the system's speech when built with it.
+fn engine_deps(fake_voice: Option<dev_voice::DevSpoken>) -> EngineDeps {
+    EngineDeps {
+        voice: match fake_voice {
+            Some(spoken) => {
+                Box::new(move |wake| Some(Box::new(dev_voice::FakeVoice::new(spoken, wake)) as _))
+            }
+            None => Box::new(voice),
+        },
+        ..model_deps()
+    }
+}
+
+/// What `--dev-fake-voice` was given to say, in order (empty without it).
+#[tauri::command]
+fn dev_spoken(spoken: State<'_, dev_voice::DevSpoken>) -> Vec<String> {
+    spoken.0.lock().unwrap().clone()
+}
+
+/// The system's speech, if this build has it and the system offers it.
+fn voice(wake: squigl_engine::engine::Waker) -> Option<Box<dyn squigl_engine::speech::Voice>> {
+    #[cfg(feature = "speech")]
+    match squigl_speech::SystemVoice::start(wake) {
+        Ok(v) => return Some(Box::new(v)),
+        Err(e) => log::warn!("no reading aloud: {e:#}"),
+    }
+    #[cfg(not(feature = "speech"))]
+    let _ = wake;
+    None
+}
+
+fn model_deps() -> EngineDeps {
     #[cfg(feature = "local-model")]
     {
         use squigl_engine::transcribe::BackendConfig;
@@ -285,6 +322,7 @@ fn engine_deps() -> EngineDeps {
                     )) as _
                 })
             }),
+            voice: Box::new(|_| None),
         }
     }
     #[cfg(not(feature = "local-model"))]
@@ -477,10 +515,12 @@ fn main() -> anyhow::Result<()> {
             .map_or_else(squigl_engine::paths::config_dir, Into::into),
     );
     // The magnifier needs no models yet; reading arrives in a later phase.
+    let spoken = dev_voice::DevSpoken::default();
+    let fake_voice = args.dev_fake_voice.then(|| spoken.clone());
     let host = Host::start(
         config,
         stream,
-        engine_deps,
+        move || engine_deps(fake_voice),
         EngineOptions {
             config_file: Some(config_file),
             ..EngineOptions::default()
@@ -531,6 +571,7 @@ fn main() -> anyhow::Result<()> {
         .manage(pairing)
         .manage(dev)
         .manage(dev_phone)
+        .manage(spoken)
         .invoke_handler(tauri::generate_handler![
             dispatch,
             subscribe,
@@ -545,7 +586,8 @@ fn main() -> anyhow::Result<()> {
             dev_options,
             dev_save_snapshot,
             dev_reference,
-            dev_phone_camera
+            dev_phone_camera,
+            dev_spoken
         ])
         .build(tauri::generate_context!())?;
     app.run(|handle, event| {

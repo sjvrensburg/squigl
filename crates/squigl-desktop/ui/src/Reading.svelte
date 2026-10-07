@@ -7,7 +7,7 @@
   // erase brush (what the model should not read), the text size, the session's
   // history, and the readings-only view.
   import { invoke } from "@tauri-apps/api/core";
-  import { dispatch, type BlocksSlice, type Config, type ReadingSlice } from "./lib/engine";
+  import { dispatch, type BlocksSlice, type Config, type ReadingSlice, type SpeechSlice } from "./lib/engine";
   import { BRUSH_MAX, BRUSH_MIN } from "./lib/erase";
   import { runs, sanitize, uncertainRuns, type Part } from "./lib/math";
   import type { Action } from "./lib/shortcuts";
@@ -33,6 +33,7 @@
     shortcut,
     blocksAsked,
     erase,
+    speech,
     readingOnly,
     onaction,
     onbrush,
@@ -49,6 +50,7 @@
     blocksAsked: boolean;
     /** The erase brush: on, its radius (CSS px), the strokes so far, whether there is a box to erase. */
     erase: { on: boolean; brush: number; strokes: number; box: boolean };
+    speech: SpeechSlice | null;
     readingOnly: boolean;
     onaction: (action: Action) => void;
     onbrush: (radius: number) => void;
@@ -73,8 +75,20 @@
   const what = $derived(
     reading?.mode === "crop" ? "Read the box" : reading?.mode === "formula" ? "Read the formula" : "Read the page",
   );
-  // Newest first, unless they are a page's blocks in order.
-  const ordered = $derived(reading?.in_page_order ? results : [...results].reverse());
+  // Newest first, unless they are a page's blocks in order; each with its place in
+  // the list, which is how the engine names it.
+  const ordered = $derived(
+    (reading?.in_page_order ? results.map((r, i) => [r, i] as const) : results.map((r, i) => [r, i] as const).reverse()),
+  );
+  const speaking = $derived(speech?.speaking ?? null);
+  const aloud = $derived(speaking !== null || (speech?.following ?? false));
+
+  // The reading being said stays in sight.
+  let list = $state<HTMLOListElement>();
+  $effect(() => {
+    if (speaking === null || !list) return;
+    list.querySelector(`[data-result="${speaking.result}"]`)?.scrollIntoView({ block: "nearest" });
+  });
 
   // Seconds the read in flight has taken, ticking while there is one.
   let since = $state<number | null>(null);
@@ -256,6 +270,33 @@
       </div>
     {/if}
 
+    {#if speech?.available}
+      <div class="controls" role="group" aria-label="Reading aloud">
+        <button disabled={results.length === 0} onclick={() => run({ type: "speak" })}>
+          Read aloud <kbd>{shortcut("speak")}</kbd>
+        </button>
+        {#if detector}
+          <button disabled={busy} onclick={() => run({ type: "read-aloud" })}>
+            Read the page aloud <kbd>{shortcut("read-aloud")}</kbd>
+          </button>
+        {/if}
+        {#if aloud}
+          <button onclick={() => onaction("pause-speech")} aria-pressed={speech?.paused ?? false}>
+            {speech?.paused ? "Go on" : "Pause"} <kbd>{shortcut("pause-speech")}</kbd>
+          </button>
+          <button onclick={() => onaction("stop-speech")}>Stop reading aloud <kbd>{shortcut("stop-speech")}</kbd></button>
+          {#if results.length > 1}
+            <button onclick={() => onaction("previous-spoken")} aria-label="Read aloud from the previous one"
+              >Previous <kbd>{shortcut("previous-spoken")}</kbd></button
+            >
+            <button onclick={() => onaction("next-spoken")} aria-label="Read aloud from the next one"
+              >Next <kbd>{shortcut("next-spoken")}</kbd></button
+            >
+          {/if}
+        {/if}
+      </div>
+    {/if}
+
     <p role="status" class="status">
       {#if reading.reading}
         Reading{reading.reading.label ? ` ${reading.reading.label}` : ""} with {reading.reading.backend}…
@@ -266,39 +307,45 @@
 
     {#if results.length > 0}
       <div class="controls">
-        <button onclick={() => copy(ordered.map(plainText).join("\n\n"), "Readings")}>Copy all</button>
+        <button onclick={() => copy(ordered.map(([r]) => plainText(r)).join("\n\n"), "Readings")}>Copy all</button>
         <button onclick={() => run({ type: "clear-results" })}>Clear</button>
         <button onclick={saveReadings}>Save readings</button>
       </div>
     {/if}
 
-    <ol class="results" aria-label="Readings">
-      {#each ordered as r}
+    <ol class="results" aria-label="Readings" bind:this={list}>
+      {#each ordered as [r, index]}
         {@const o = outcome(r)}
-        <li>
+        {@const said = speaking?.result === index ? speaking : null}
+        <li data-result={index} class:speaking={said !== null}>
           <div class="meta">
             {#if r.label}<strong>{r.label}</strong>{/if}
             {#if "ok" in o}
               <span>{o.ok.backend}, {seconds(r)}</span>
             {/if}
             <button class="small" onclick={() => copy(plainText(r), "Reading")}>Copy</button>
+            {#if speech?.available}
+              <button class="small" onclick={() => run({ type: "speak", result: index })}>Read aloud</button>
+            {/if}
+            {#if said}<span class="badge">Reading aloud{speech?.paused ? " (paused)" : ""}</span>{/if}
           </div>
           {#if "error" in o}
             <p class="error">Could not read it: {o.error}</p>
           {:else if o.ok.readings.length === 0}
             <p>(no answer)</p>
           {:else}
-            {#each o.ok.readings as reading}
+            {#each o.ok.readings as reading, k}
               {@const laid = parts(reading.text)}
-              {@const shown = laid ? runs(reading, ui, laid) : [{ kind: "text" as const, spans: spans(reading, ui) }]}
+              {@const sentence: [number, number] | null = said && k === 0 ? [said.start, said.end] : null}
+              {@const shown = laid ? runs(reading, ui, laid, sentence) : [{ kind: "text" as const, spans: spans(reading, ui) }]}
               {@const unsure = laid ? uncertainRuns(shown) : uncertain(spans(reading, ui))}
               {#if o.ok.samples > 1}<p class="support">{reading.count} of {o.ok.samples} readings:</p>{/if}
               <p class="text">
-                {#each shown as run}{#if run.kind === "text"}{#each run.spans as s}{#if s.confidence === "steady"}{s.text}{:else}<span
-                          class={s.confidence}
-                          title={s.alternates.length ? `or: ${s.alternates.join(", ")}` : undefined}
+                {#each shown as run}{#if run.kind === "text"}{#each run.spans as s}{#if s.confidence === "steady" && !s.current}{s.text}{:else}<span
+                          class={[s.confidence !== "steady" && s.confidence, s.current && "current"]}
+                          title={s.alternates.length && s.confidence !== "steady" ? `or: ${s.alternates.join(", ")}` : undefined}
                         >{s.text}</span>{/if}{/each}{:else if run.mathml}<span
-                      class={["math", run.display && "display", run.confidence !== "steady" && run.confidence]}
+                      class={["math", run.display && "display", run.confidence !== "steady" && run.confidence, run.current && "current"]}
                       title={run.alternates.length ? `or: ${run.alternates.join(", ")}` : undefined}
                       use:mathml={run.mathml}
                     ></span>{:else}<span class={run.confidence !== "steady" ? run.confidence : undefined}
@@ -413,6 +460,20 @@
   .support {
     font-size: 0.9em;
     margin: 0.25rem 0;
+  }
+  /* Reading aloud: the reading being said is edged, and its sentence boxed (not
+     only tinted) so it can be followed by someone not looking for a colour. */
+  .results li.speaking {
+    border-left: 0.3rem solid var(--focus);
+    padding-left: 0.5rem;
+  }
+  .badge {
+    font-weight: bold;
+  }
+  .current {
+    outline: 0.12em solid var(--focus);
+    outline-offset: 0.05em;
+    background: color-mix(in srgb, var(--focus) 25%, transparent);
   }
   /* Maths: a display formula is a block of its own, scrolling sideways if wide. */
   .math.display {
