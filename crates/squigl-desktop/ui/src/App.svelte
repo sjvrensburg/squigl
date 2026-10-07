@@ -16,6 +16,7 @@
     type DisplayMode,
     type Event,
     type ReadingSlice,
+    type SpeechSlice,
     type StreamSlice,
     type Stroke,
   } from "./lib/engine";
@@ -61,6 +62,7 @@
   let config = $state<Config | null>(null);
   let blocks = $state<BlocksSlice | null>(null);
   let reading = $state<ReadingSlice | null>(null);
+  let speech = $state<SpeechSlice | null>(null);
   let models = $state<ModelStatus[]>([]);
   // This list's results, as the engine appends them (it says when it empties it).
   let results = $state<ReadResult[]>([]);
@@ -208,6 +210,9 @@
         break;
       case "reading":
         reading = event.data.value;
+        break;
+      case "speech":
+        speech = event.data.value;
         break;
       case "models":
         models = (event.data.value as { models: ModelStatus[] }).models;
@@ -467,6 +472,19 @@
         return eraseBox();
       case "undo-erase":
         return undoErase();
+      case "speak":
+        return readCommand({ type: "speak" });
+      case "read-aloud":
+        return readCommand({ type: "read-aloud" });
+      case "pause-speech":
+        if (!speech?.speaking && !speech?.paused) return;
+        return command({ type: speech.paused ? "resume-speaking" : "pause-speaking" });
+      case "stop-speech":
+        return command({ type: "stop-speaking" });
+      case "next-spoken":
+        return command({ type: "skip-speech", delta: 1 });
+      case "previous-spoken":
+        return command({ type: "skip-speech", delta: -1 });
       case "read":
         return readCommand({ type: "read" });
       case "read-all":
@@ -768,6 +786,7 @@
       {blocks}
       brush={erasing ? brush : null}
       onerase={(stroke) => erase([stroke])}
+      spoken={speech?.speaking ? (results[speech.speaking.result]?.selection ?? null) : null}
       onnotice={say}
     />
     {#if config?.magnifier.reading_line}
@@ -795,6 +814,7 @@
       shortcut={(a) => shortcut(a)}
       {blocksAsked}
       erase={{ on: erasing, brush, strokes: capture?.erasures.length ?? 0, box: capture?.selection != null }}
+      {speech}
       {readingOnly}
       onaction={run}
       onbrush={(r) => (brush = r)}
@@ -814,7 +834,7 @@
 </main>
 
 {#if config}
-  <Settings {config} bind:open={settingsOpen} onnotice={say} />
+  <Settings {config} {speech} bind:open={settingsOpen} onnotice={say} />
 {/if}
 <Pair bind:open={pairOpen} {stream} tailscaleHttps={config?.desktop.tailscale_https ?? false} />
 

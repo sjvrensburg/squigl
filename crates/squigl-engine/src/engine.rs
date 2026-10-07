@@ -13,7 +13,10 @@
 //! run on theirs and call the waker; everything else happens in `handle` and `pump`
 //! on the caller's thread.
 
+mod aloud;
 mod reads;
+
+pub use aloud::{Speaking, SpeechSlice};
 
 use crate::config::{Config, LayoutConfig};
 use crate::display::{self, Lut};
@@ -22,6 +25,7 @@ use crate::geometry::{Crop, Selection};
 use crate::history;
 use crate::layout::{Block, BlockDetector};
 use crate::model::{ModelContext, ModelPhase};
+use crate::speech::Voice;
 use crate::stream::{Capabilities, Problem, Shared, SourceSpec, Status, StreamConfig, Worker};
 use crate::transcribe::{BackendConfig, Mode, Transcriber, Transcription};
 use crate::view::{render_planes, FrameRef, ViewPlanes, ViewRequest};
@@ -48,10 +52,16 @@ pub type BackendFactory =
 pub type DetectorFactory =
     Box<dyn Fn(&LayoutConfig, &ModelContext) -> Option<Arc<dyn BlockDetector>>>;
 
+/// Builds the voice that reads aloud, given the engine's waker to call when an
+/// utterance ends; `None` when there is none (a build without speech, or no
+/// speech on this system).
+pub type VoiceFactory = Box<dyn FnOnce(Waker) -> Option<Box<dyn Voice>>>;
+
 /// What the engine cannot build itself: whatever implements its traits from outside.
 pub struct EngineDeps {
     pub backends: BackendFactory,
     pub detector: DetectorFactory,
+    pub voice: VoiceFactory,
 }
 
 impl EngineDeps {
@@ -60,6 +70,7 @@ impl EngineDeps {
         Self {
             backends: Box::new(|b, _| b.build()),
             detector: Box::new(|_, _| None),
+            voice: Box::new(|_| None),
         }
     }
 }
@@ -180,6 +191,21 @@ pub enum Command {
     /// Writes the session's readings as Markdown into `dir`.
     SaveHistory {
         dir: PathBuf,
+    },
+    /// Says a result aloud (`None`: the newest, or a page's first block).
+    Speak {
+        #[serde(default)]
+        result: Option<usize>,
+    },
+    /// Reads the page aloud: every block read in order and said as it lands.
+    ReadAloud,
+    StopSpeaking,
+    /// Stops between words; [`Command::ResumeSpeaking`] says the sentence again.
+    PauseSpeaking,
+    ResumeSpeaking,
+    /// Goes on to the next (`1`) or back to the previous (`-1`) result.
+    SkipSpeech {
+        delta: i32,
     },
 }
 
@@ -356,6 +382,7 @@ pub struct EngineState {
     pub reading: Versioned<ReadingSlice>,
     pub models: Versioned<ModelsSlice>,
     pub config: Versioned<Config>,
+    pub speech: Versioned<SpeechSlice>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -378,6 +405,8 @@ pub struct Notice {
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadResult {
     pub label: Option<String>,
+    /// What was read, in view space (`None`: the whole page).
+    pub selection: Option<Selection>,
     pub result: Result<Transcription, String>,
 }
 
@@ -391,6 +420,7 @@ pub enum Event {
     Reading(Versioned<ReadingSlice>),
     Models(Versioned<ModelsSlice>),
     Config(Versioned<Config>),
+    Speech(Versioned<SpeechSlice>),
     /// A new live frame, by number: fetch it with [`Engine::render_planes`].
     Frame {
         seq: u64,
@@ -424,6 +454,7 @@ pub struct Engine {
     /// Each slice's version when [`pump`](Self::pump) last sent it (0: never).
     sent: Sent,
     reads: reads::Reads,
+    aloud: aloud::Aloud,
 }
 
 #[derive(Default)]
@@ -434,6 +465,7 @@ struct Sent {
     reading: u64,
     models: u64,
     config: u64,
+    speech: u64,
 }
 
 impl Engine {
@@ -453,6 +485,8 @@ impl Engine {
         };
         let worker_wake = Arc::clone(&wake);
         let worker = Worker::start(stream, move || worker_wake());
+        let mut deps = deps;
+        let voice = std::mem::replace(&mut deps.voice, Box::new(|_| None))(Arc::clone(&wake));
         let now = Instant::now();
         let stream_slice = stream_slice(&worker.shared, now);
         let mut engine = Self {
@@ -479,6 +513,7 @@ impl Engine {
                 reading: Versioned::new(ReadingSlice::default()),
                 models: Versioned::new(ModelsSlice::default()),
                 config: Versioned::new(config.clone()),
+                speech: Versioned::new(SpeechSlice::default()),
             },
             seen_status: None,
             seen_frame: 0,
@@ -486,8 +521,10 @@ impl Engine {
             unsaved: false,
             sent: Sent::default(),
             reads: reads::Reads::default(),
+            aloud: aloud::Aloud::new(voice),
         };
         engine.build(&config, true);
+        engine.configure_voice();
         engine.refresh(now);
         engine
     }
@@ -697,6 +734,12 @@ impl Engine {
                 self.save_history(&dir)?;
                 Reply::Done
             }
+            Command::Speak { result } => self.speak(result),
+            Command::ReadAloud => self.read_aloud(),
+            Command::StopSpeaking => self.stop_speaking(),
+            Command::PauseSpeaking => self.pause_speaking(),
+            Command::ResumeSpeaking => self.resume_speaking(),
+            Command::SkipSpeech { delta } => self.skip_speech(delta),
         };
         self.refresh(Instant::now());
         Ok(reply)
@@ -725,8 +768,12 @@ impl Engine {
             .get(self.reads.selected_backend())
             .map(|b| b.name().to_string());
         self.build(&config, false);
+        let speech_changed = config.speech != self.config().speech;
         self.state.config.update(config);
         self.follow_backends(selected);
+        if speech_changed {
+            self.configure_voice();
+        }
         Reply::Done
     }
 
@@ -841,6 +888,8 @@ impl Engine {
         let (blocks, reading) = self.reads_slices();
         self.state.blocks.update(blocks);
         self.state.reading.update(reading);
+        let speech = self.speech_slice();
+        self.state.speech.update(speech);
     }
 
     /// Collects what happened since the last call: every slice whose version moved
@@ -848,6 +897,7 @@ impl Engine {
     /// notices. The first call sends every slice.
     pub fn pump(&mut self, now: Instant) -> Vec<Event> {
         self.pump_reads();
+        self.pump_speech();
         self.refresh(now);
         let mut events = Vec::new();
         let (s, sent) = (&self.state, &mut self.sent);
@@ -871,6 +921,9 @@ impl Engine {
         }
         if moved(&s.config, &mut sent.config) {
             events.push(Event::Config(s.config.clone()));
+        }
+        if moved(&s.speech, &mut sent.speech) {
+            events.push(Event::Speech(s.speech.clone()));
         }
         let frames = self.worker.shared.frames();
         if frames > self.seen_frame {
@@ -990,6 +1043,7 @@ mod tests {
                 d.fetch_add(1, Ordering::Relaxed);
                 None
             }),
+            voice: Box::new(|_| None),
         }
     }
 
@@ -1056,6 +1110,7 @@ mod tests {
                 Event::Reading(_) => "reading",
                 Event::Models(_) => "models",
                 Event::Config(_) => "config",
+                Event::Speech(_) => "speech",
                 Event::Frame { .. } => "frame",
                 Event::ResultAppended(_) => "result",
                 Event::ResultsCleared => "cleared",
@@ -1070,7 +1125,9 @@ mod tests {
         let path = image("first", 8, 6);
         let (mut engine, counts) = start(SourceSpec::Image(path.clone()), Config::default(), None);
         let first = engine.pump(Instant::now());
-        for kind in ["stream", "capture", "blocks", "reading", "models", "config"] {
+        for kind in [
+            "stream", "capture", "blocks", "reading", "models", "config", "speech",
+        ] {
             assert!(
                 kinds(&first).contains(&kind),
                 "{kind} missing from {:?}",

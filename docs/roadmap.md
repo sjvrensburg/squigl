@@ -527,10 +527,29 @@ crates/
 - **The desktop pane** shows each formula as MathML at the reading size. A display formula is a block that scrolls sideways when wide. A formula is marked as a whole by its least sure token, with a dotted or dashed line and a tint.
   - The MathML is rebuilt from MathML elements before it goes into the page, so a reading cannot inject HTML. The end-to-end test checks this with an `<img onerror>` in a `\text`.
   - Copy still gives the LaTeX.
-- **Still to do in Phase 8:**
-  - read-aloud;
-  - a high-contrast reading theme beyond the app's themes, if testers want one;
-  - the egui window could show the same MathML only through a webview, so it keeps Typst.
+- **Still to do in Phase 8:** see 8d.
+
+**Progress (8d, 2026-10-07): reading aloud.**
+
+- **The engine:**
+  - `speech::Voice` is implemented outside the engine, as the models are.
+  - `utterances` turns a reading into sentences, with its maths in words.
+  - `engine/aloud.rs` holds speak, read the page aloud, pause/resume (the sentence again), stop, skip, and speak each new reading.
+  - Every result now carries the selection it was read from.
+- **`squigl-speech`:** the system's speech through `tts`, plus MathCAT (ClearSpeak), on one thread. On Linux it needs `libspeechd-dev` to build; CI's desktop job installs it.
+- **The desktop app:**
+  - The pane's read-aloud controls and keys.
+  - The sentence being said is boxed, and its block is outlined on the picture.
+  - Voice, speed and "read each new reading aloud" are in Settings.
+- **Tests:**
+  - engine, with a scripted voice: sentences, pause and resume, the page block by block as each is read, skipping, new readings, no voice;
+  - MathCAT on converted MathML, and the rate scale;
+  - end to end with `--dev-fake-voice`: `s` says a sentence at a time with the maths in words and the sentence boxed; `.` pauses and goes on; `S` stops.
+- **Not yet:**
+  - an audible cue before an uncertain word (the `tts` crate has no SSML or earcons);
+  - a "printed page" prompt preset;
+  - read-aloud in the egui window.
+- **Tester:** how each OS's voice sounds (`cargo test -p squigl-speech --release -- --ignored --nocapture listen`), and the system voice on Windows and macOS.
 
 **Exit criteria:**
 

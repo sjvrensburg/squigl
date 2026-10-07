@@ -113,6 +113,8 @@ pub struct Config {
     pub magnifier: MagnifierConfig,
     #[serde(default)]
     pub desktop: DesktopConfig,
+    #[serde(default)]
+    pub speech: SpeechConfig,
 }
 
 impl Config {
@@ -166,7 +168,7 @@ impl Config {
              # entry is one choice in the window; the first is selected at startup.\n\
              # [layout] is the block detector, [prompts] what the models are asked,\n\
              # [ui] the egui window, [display] and [magnifier] the magnifier's view,\n\
-             # [desktop] the desktop app.\n\n{}",
+             # [desktop] the desktop app, [speech] reading aloud.\n\n{}",
             toml::to_string_pretty(self).expect("config serialises")
         )
     }
@@ -205,6 +207,7 @@ impl Default for Config {
             display: DisplayConfig::default(),
             magnifier: MagnifierConfig::default(),
             desktop: DesktopConfig::default(),
+            speech: SpeechConfig::default(),
         }
     }
 }
@@ -277,6 +280,28 @@ impl Default for DesktopConfig {
     }
 }
 
+/// The `[speech]` section: reading aloud.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpeechConfig {
+    /// The voice, by the id the system gives it; `None` is the system's own choice.
+    pub voice: Option<String>,
+    /// How fast, as a multiple of the voice's normal rate (0.5 to 2).
+    pub rate: f32,
+    /// Speak each reading as it arrives.
+    pub speak_new: bool,
+}
+
+impl Default for SpeechConfig {
+    fn default() -> Self {
+        Self {
+            voice: None,
+            rate: 1.0,
+            speak_new: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +357,11 @@ mod tests {
             single_key_shortcuts: false,
             shortcuts: [("freeze".to_string(), "Enter".to_string())].into(),
             tailscale_https: true,
+        };
+        cfg.speech = SpeechConfig {
+            voice: Some("English (Great Britain)".into()),
+            rate: 1.4,
+            speak_new: true,
         };
         let parsed: Config = toml::from_str(&cfg.text()).unwrap();
         assert_eq!(parsed, cfg);

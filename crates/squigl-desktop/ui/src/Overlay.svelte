@@ -29,6 +29,7 @@
     blocks,
     brush,
     onerase,
+    spoken,
     onnotice,
   }: {
     placement: Placement | null;
@@ -40,6 +41,8 @@
     brush: number | null;
     /** A brush stroke finished, in view pixels. */
     onerase: (stroke: Stroke) => Promise<void>;
+    /** What is being read aloud, when it is a block or a box. */
+    spoken: Selection | null;
     onnotice: (text: string) => void;
   } = $props();
 
@@ -186,6 +189,11 @@
       {/each}
     {/if}
   {/if}
+  {#if placement && spoken}
+    {@const q = outline(spoken)}
+    <polygon class="spoken-under" points={points(q)} />
+    <polygon class="spoken" points={points(q)} />
+  {/if}
   {#if placement && painting}
     {@const width = 2 * painting.radius * placement.scale / dpr}
     <polyline class="paint-under" points={points(painting.points)} stroke-width={width + 3} />
@@ -269,6 +277,17 @@
   .selection {
     stroke: var(--line, #ffd400);
     stroke-width: 3;
+  }
+  /* The block being read aloud: wide, and double-lined so it is not the selection's
+     colour alone that says so. */
+  .spoken-under {
+    stroke: rgb(0 0 0 / 0.85);
+    stroke-width: 9;
+  }
+  .spoken {
+    stroke: var(--focus, #00ffff);
+    stroke-width: 5;
+    stroke-dasharray: 14 6;
   }
   .handle {
     fill: var(--line, #ffd400);

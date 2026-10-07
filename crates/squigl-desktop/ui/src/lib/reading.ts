@@ -30,6 +30,8 @@ export interface Transcription {
 
 export interface ReadResult {
   label: string | null;
+  /** What was read, in view pixels; null for the whole page. */
+  selection?: import("./engine").Selection | null;
   result: { Ok: Transcription } | { Err: string };
 }
 
@@ -62,6 +64,8 @@ export interface Span {
   confidence: Confidence;
   /** What else the model thought it might be, most likely first. */
   alternates: string[];
+  /** Part of the sentence being read aloud. */
+  current?: boolean;
 }
 
 /**

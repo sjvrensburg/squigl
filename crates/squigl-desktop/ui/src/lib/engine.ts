@@ -56,12 +56,21 @@ export interface UiConfig {
   wavering_threshold: number;
 }
 
+export interface SpeechConfig {
+  /** A voice id from the speech slice; null is the system's own choice. */
+  voice: string | null;
+  /** A multiple of normal speed, 0.5 to 2. */
+  rate: number;
+  speak_new: boolean;
+}
+
 /** The settings file; the page edits only these sections and sends the rest back as it came. */
 export interface Config {
   display: DisplayConfig;
   magnifier: MagnifierConfig;
   desktop: DesktopConfig;
   ui: UiConfig;
+  speech: SpeechConfig;
   [section: string]: unknown;
 }
 
@@ -161,6 +170,22 @@ export interface ReadingSlice {
   in_page_order: boolean;
 }
 
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  language: string | null;
+}
+
+export interface SpeechSlice {
+  available: boolean;
+  voices: VoiceInfo[];
+  /** The result being said, and the sentence's place in its first reading (UTF-16 units). */
+  speaking: { result: number; start: number; end: number } | null;
+  paused: boolean;
+  /** The page is being read aloud, each block said as it lands. */
+  following: boolean;
+}
+
 export interface Versioned<T> {
   version: number;
   value: T;
@@ -178,6 +203,7 @@ export type Event =
   | { type: "reading"; data: Versioned<ReadingSlice> }
   | { type: "models"; data: Versioned<unknown> }
   | { type: "config"; data: Versioned<Config> }
+  | { type: "speech"; data: Versioned<SpeechSlice> }
   | { type: "frame"; data: { seq: number } }
   | { type: "result-appended" | "results-cleared" | "history-appended"; data?: unknown }
   | { type: "notice"; data: Notice };
@@ -209,7 +235,13 @@ export type Command =
   | { type: "cancel-read" }
   | { type: "clear-results" }
   | { type: "save"; dir: string }
-  | { type: "save-history"; dir: string };
+  | { type: "save-history"; dir: string }
+  | { type: "speak"; result?: number | null }
+  | { type: "read-aloud" }
+  | { type: "stop-speaking" }
+  | { type: "pause-speaking" }
+  | { type: "resume-speaking" }
+  | { type: "skip-speech"; delta: number };
 
 export type Reply = "done" | "unchanged";
 
