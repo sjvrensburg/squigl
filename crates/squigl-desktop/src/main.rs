@@ -96,6 +96,11 @@ struct Args {
     /// leaving the real configuration alone.
     #[arg(long, hide = true, value_name = "FILE")]
     dev_config: Option<PathBuf>,
+
+    /// Development aid: read with one OpenAI-compatible backend at URL (its
+    /// `/v1` base) in place of the configured ones.
+    #[arg(long, hide = true, value_name = "URL")]
+    dev_backend: Option<String>,
 }
 
 /// The development aids the page acts on.
@@ -233,6 +238,51 @@ fn pair_fake_phone(host: &Host, decoder: squigl_core::decode::Backend) -> DevPho
             DevPhone::default()
         }
     }
+}
+
+/// Where Save puts pictures and readings: the pictures folder's `squigl`.
+#[tauri::command]
+fn save_dir() -> String {
+    squigl_engine::paths::pictures_dir()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The backends and detector: the HTTP backends always, the built-in models when
+/// built with them (prepared only on request: the person agrees to the download).
+fn engine_deps() -> EngineDeps {
+    #[cfg(feature = "local-model")]
+    {
+        use squigl_engine::transcribe::BackendConfig;
+        EngineDeps {
+            backends: Box::new(|backend, ctx| match backend {
+                BackendConfig::Local {
+                    name,
+                    device,
+                    max_tokens,
+                    max_image_tokens,
+                } => Some(Box::new(squigl_models::LocalBackend::new(
+                    name.clone(),
+                    *device,
+                    *max_tokens,
+                    *max_image_tokens,
+                    ctx,
+                ))),
+                other => other.build(),
+            }),
+            detector: Box::new(|layout, ctx| {
+                layout.enabled.then(|| {
+                    std::sync::Arc::new(squigl_models::layout::LayoutService::new(
+                        layout.device,
+                        layout.threshold,
+                        ctx,
+                    )) as _
+                })
+            }),
+        }
+    }
+    #[cfg(not(feature = "local-model"))]
+    EngineDeps::remote_only()
 }
 
 #[tauri::command]
@@ -378,7 +428,7 @@ fn main() -> anyhow::Result<()> {
         (None, None) if args.test_pattern => SourceSpec::TestPattern,
         (None, None) => SourceSpec::Phone,
     };
-    let (config, config_file) = match args.dev_config {
+    let (mut config, config_file) = match args.dev_config {
         Some(file) => (Config::default(), file),
         None => (
             Config::load_or_create().unwrap_or_else(|e| {
@@ -388,6 +438,17 @@ fn main() -> anyhow::Result<()> {
             Config::path(),
         ),
     };
+    if let Some(base_url) = args.dev_backend {
+        config.backends = vec![squigl_engine::transcribe::BackendConfig::OpenAi {
+            name: "test backend".into(),
+            base_url,
+            model: "test".into(),
+            api_key: None,
+            samples: 1,
+            temperature: 0.0,
+            max_tokens: 256,
+        }];
+    }
     let stream = StreamConfig {
         source,
         options: ConnectOptions {
@@ -413,7 +474,7 @@ fn main() -> anyhow::Result<()> {
     let host = Host::start(
         config,
         stream,
-        EngineDeps::remote_only,
+        engine_deps,
         EngineOptions {
             config_file: Some(config_file),
             ..EngineOptions::default()
@@ -473,6 +534,7 @@ fn main() -> anyhow::Result<()> {
             pairing_start,
             pairing_stop,
             page_log,
+            save_dir,
             dev_options,
             dev_save_snapshot,
             dev_reference,
