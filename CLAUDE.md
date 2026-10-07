@@ -282,7 +282,14 @@ finished read of the session (`Engine::history`, appended alongside the results,
 so the last N history entries are the N results -- "copy all" relies on that),
 Markdown export by capture;
 `typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
-front end's); `paths.rs`: the config, cache and pictures directories per OS via the
+front end's); `math.rs`: a reading as text and maths `Part`s (split at `$`, `$$`,
+`\(`, `\[` as `squigl-math` splits for Typst; offsets in UTF-16 units, a web page's),
+the maths as MathML Core by `math-core` (spike S7's choice, `spikes/s7-mathml`): an
+unknown command is retried as `\operatorname{…}`, maths that still fails stays
+source text, `for_webkit` moves an `<mo>` script base's spacing (`\log_2`) outside
+the script element where WebKit wants it, and `speakable` is the MathML MathCAT
+reads best (no variation selectors, the vector arrow as U+2192, no separator after
+`cases`); `paths.rs`: the config, cache and pictures directories per OS via the
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
 Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
 
@@ -366,7 +373,11 @@ Blocks was asked for -- the block finder, Read (Enter) / Read all (`a`) / Second
 opinion (`o`) / Stop, and the results (kept by the page from `ResultAppended` /
 `ResultsCleared`) as large text, unsure tokens underlined dotted (wavering) or wavy
 (hesitant) as well as tinted (`lib/reading.ts`'s `spans`, only when the tokens rebuild
-the text). `b` toggles blocks, `n`/`N` step through them, Escape clears the box (or first leaves
+the text). Maths shows as MathML: the `math_parts` command is the engine's `math::parts`,
+`lib/math.ts`'s `runs` lays the marks over it (a formula marked as a whole, by its least
+sure token, as egui shades it, with a dotted or dashed line under it) and `sanitize`
+rebuilds the MathML from MathML elements and presentation attributes alone before it
+goes into the page -- it comes from a model. `b` toggles blocks, `n`/`N` step through them, Escape clears the box (or first leaves
 the brush or the readings-only view). The erase brush (`e`; its size in CSS pixels in
 the pane) paints a stroke per drag; `x` erases the box (`lib/erase.ts`'s
 `coverStrokes`: rows across the outline, spilling over by a fifth of a row at most --

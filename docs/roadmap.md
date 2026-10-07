@@ -509,10 +509,18 @@ crates/
   - engine: the shown capture is erased and an undo restores it, and an erased frame matches what a read sees under every rotation;
   - vitest: the box's covering strokes;
   - end to end: `x` paints the box and `u` undoes it, the brush paints its stroke, the history outlives Clear, and Shift+F and Escape.
+- **Still to do in Phase 8:** see 8c.
+
+**Progress (8c, 2026-10-07): maths as MathML.**
+
+- **The engine's `math.rs`** splits a reading into text and maths and converts the maths with math-core, as S7 chose. Unknown commands become operator names; maths that still fails is shown as its source. It also holds the WebKit spacing fix, and the MathCAT clean-ups that read-aloud will use.
+- **The desktop pane** shows each formula as MathML at the reading size. A display formula is a block that scrolls sideways when wide. A formula is marked as a whole by its least sure token, with a dotted or dashed line and a tint.
+  - The MathML is rebuilt from MathML elements before it goes into the page, so a reading cannot inject HTML. The end-to-end test checks this with an `<img onerror>` in a `\text`.
+  - Copy still gives the LaTeX.
 - **Still to do in Phase 8:**
+  - read-aloud;
   - a high-contrast reading theme beyond the app's themes, if testers want one;
-  - MathML (after S7);
-  - read-aloud.
+  - the egui window could show the same MathML only through a webview, so it keeps Typst.
 
 **Exit criteria:**
 
