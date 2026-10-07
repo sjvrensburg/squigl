@@ -43,6 +43,7 @@ export type Theme = "dark" | "light" | "high-contrast-yellow" | "high-contrast-w
 export interface DesktopConfig {
   theme: Theme;
   single_key_shortcuts: boolean;
+  tailscale_https: boolean;
   /** Action to key, for keys moved from their defaults. */
   shortcuts: Record<string, string>;
 }

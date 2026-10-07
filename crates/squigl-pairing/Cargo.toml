@@ -13,6 +13,10 @@ log.workspace = true
 tiny_http = { version = "0.12.0", features = ["ssl-rustls"] }
 rcgen = "0.14.10"
 getrandom = "0.3"
+# The machine's network interfaces, to offer each LAN and overlay address.
+if-addrs = "0.15"
+# `tailscale status --json`.
+serde_json = "1"
 # The pairing address as a QR code, drawn as SVG (no raster image crates).
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 

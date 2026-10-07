@@ -12,7 +12,7 @@ mod transport;
 
 use clap::Parser;
 use host::{Host, LutReply};
-use pairing::{Pairing, PairingInfo};
+use pairing::Pairing;
 use squigl_core::{ConnectOptions, Facing};
 use squigl_engine::config::Config;
 use squigl_engine::engine::{Command, EngineDeps, EngineOptions, Event, Reply};
@@ -72,10 +72,11 @@ struct Args {
     #[arg(long, hide = true)]
     dev_probe: bool,
 
-    /// Development aid: pair phones at this address, not the LAN's (127.0.0.1 lets
-    /// a browser on this machine pair).
-    #[arg(long, hide = true, value_name = "IP")]
-    dev_pairing_bind: Option<std::net::IpAddr>,
+    /// Development aid: pair phones at these addresses (comma-separated), not
+    /// this machine's own (127.0.0.1 lets a browser on this machine pair). One
+    /// switch, not repeated: msedgedriver keeps only the last of a repeated one.
+    #[arg(long, hide = true, value_name = "IP,...", value_delimiter = ',')]
+    dev_pairing_bind: Vec<std::net::IpAddr>,
 
     /// Development aid: zoom the page by this factor, as the OS text size would.
     #[arg(long, hide = true, value_name = "FACTOR")]
@@ -140,15 +141,15 @@ fn open_image(host: State<'_, Host>, request: tauri::ipc::Request<'_>) -> Result
     })
 }
 
-/// The page's errors and warnings, into the app's log (the web inspector is not at
-/// hand in a release build).
-/// Opens pairing (the dialog is showing): the address and its QR code.
+/// Opens pairing (the dialog is showing): each address and its QR code. Async, so
+/// a slow `tailscale cert` holds up no window thread.
 #[tauri::command]
-fn pairing_start(
+async fn pairing_start(
     host: State<'_, Host>,
     pairing: State<'_, Pairing>,
-) -> Result<PairingInfo, String> {
-    pairing.start(&host)
+    tailscale_https: bool,
+) -> Result<Vec<pairing::Offer>, String> {
+    pairing.start(&host, tailscale_https)
 }
 
 /// Closes pairing (the dialog is gone); a paired phone keeps streaming.
@@ -157,6 +158,8 @@ fn pairing_stop(pairing: State<'_, Pairing>) {
     pairing.stop();
 }
 
+/// The page's errors and warnings, into the app's log (the web inspector is not at
+/// hand in a release build).
 #[tauri::command]
 fn page_log(level: String, message: String) {
     match level.as_str() {

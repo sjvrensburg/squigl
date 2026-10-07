@@ -12,19 +12,28 @@
 //!   the phone's browser warns once. With [`PairingOptions::cert_dir`] the
 //!   certificate is kept and reused, so it warns once per phone rather than on every
 //!   start (and again only when the address changes).
-//! - **LAN only.** A host ICE candidate on the bound address, no STUN/TURN.
+//! - **Every address at once.** The LAN's and any overlay network's
+//!   ([`addresses()`]: Tailscale, ZeroTier, Nebula), each its own listener and
+//!   [`Offer`], since a phone on another network can still reach an overlay
+//!   address. The WebRTC media goes over the address the offer came in at: a host
+//!   ICE candidate there, no STUN/TURN.
 
 use anyhow::{Context, Result};
 use squigl_core::decode::Backend;
 use squigl_core::WebrtcSource;
 use std::io::Read;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tiny_http::{Header, Method, Request, Response, Server, SslConfig};
+
+mod addresses;
+mod tailscale;
+
+pub use addresses::{addresses, classify, Address, Network};
 
 const CAPTURE_PAGE: &str = include_str!("capture.html");
 
@@ -37,15 +46,30 @@ pub const DEFAULT_PORT: u16 = 8443;
 const MAX_OFFER: u64 = 64 * 1024;
 
 pub struct PairingOptions {
-    /// The address the phone reaches this machine at ([`detect_lan_ip`] for the
-    /// LAN's). The page, `/whip` and the WebRTC media all use it.
-    pub bind: IpAddr,
-    /// The page's port; if it is taken, any free one.
+    /// Where the phone may reach this machine, best first ([`addresses()`], or one
+    /// given outright). The page, `/whip` and the WebRTC media listen on each.
+    pub addresses: Vec<Address>,
+    /// The page's port; where it is taken, any free one.
     pub port: u16,
     pub decoder: Backend,
     /// Where to keep the certificate between starts; `None` makes a fresh one each
     /// time.
     pub cert_dir: Option<PathBuf>,
+    /// For a Tailscale address, Tailscale's own certificate for this machine's name
+    /// when the tailnet has HTTPS on (`tailscale cert`), so the browser does not
+    /// warn. Issuing it puts the name in the public Certificate Transparency logs;
+    /// the tailnet's admin agreed to that in turning HTTPS on.
+    pub tailscale_https: bool,
+}
+
+/// One way to reach the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    pub network: Network,
+    /// The address to open on the phone, token included.
+    pub url: String,
+    /// Whether the certificate is one the browser trusts (no warning).
+    pub trusted: bool,
 }
 
 /// What becomes of an accepted session. `Err` turns the phone away (503, with the
@@ -55,9 +79,16 @@ pub type OnSession = Box<dyn FnMut(WebrtcSource) -> Result<(), String> + Send>;
 /// A running pairing server; it stops when stopped or dropped. Sessions it handed
 /// over keep running: they have their own sockets.
 pub struct PairingServer {
-    url: String,
+    offers: Vec<Offer>,
     stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
+}
+
+/// A server bound to one address, and how it is offered.
+struct Listener {
+    server: Server,
+    bind: IpAddr,
+    offer: Offer,
 }
 
 impl PairingServer {
@@ -65,77 +96,136 @@ impl PairingServer {
         options: PairingOptions,
         on_session: impl FnMut(WebrtcSource) -> Result<(), String> + Send + 'static,
     ) -> Result<Self> {
-        let cert = certificate(options.cert_dir.as_deref(), &[options.bind.to_string()])?;
-        let ssl = || SslConfig {
-            certificate: cert.cert_pem.clone().into_bytes(),
-            private_key: cert.key_pem.clone().into_bytes(),
-        };
-        let server = match Server::https((options.bind, options.port), ssl()) {
-            Ok(server) => server,
-            Err(e) if options.port != 0 => {
-                log::info!("port {} is not free ({e}); using another", options.port);
-                Server::https((options.bind, 0), ssl())
-                    .map_err(|e| anyhow::anyhow!("starting HTTPS on {}: {e}", options.bind))?
+        anyhow::ensure!(
+            !options.addresses.is_empty(),
+            "no network address to pair at"
+        );
+        let names: Vec<String> = options.addresses.iter().map(|a| a.ip.to_string()).collect();
+        let own = certificate(options.cert_dir.as_deref(), &names)?;
+        let tailscale = match &options.cert_dir {
+            Some(dir)
+                if options.tailscale_https
+                    && options
+                        .addresses
+                        .iter()
+                        .any(|a| a.network == Network::Tailscale) =>
+            {
+                tailscale::certificate(dir)
             }
-            Err(e) => anyhow::bail!("starting HTTPS on {}: {e}", options.bind),
+            _ => None,
         };
+        let token = token();
+        let mut listeners = Vec::new();
+        let mut failures = Vec::new();
+        for address in &options.addresses {
+            let (cert, host, trusted) = match &tailscale {
+                Some(ts) if address.network == Network::Tailscale => {
+                    (&ts.cert, ts.name.clone(), true)
+                }
+                _ => (&own, host(address.ip), false),
+            };
+            let ssl = || SslConfig {
+                certificate: cert.cert_pem.clone().into_bytes(),
+                private_key: cert.key_pem.clone().into_bytes(),
+            };
+            let server = Server::https((address.ip, options.port), ssl()).or_else(|e| {
+                if options.port == 0 {
+                    return Err(e);
+                }
+                log::info!(
+                    "port {} is not free at {} ({e}); using another",
+                    options.port,
+                    address.ip
+                );
+                Server::https((address.ip, 0), ssl())
+            });
+            match server {
+                Ok(server) => {
+                    let port = server.server_addr().to_ip().map_or(0, |a| a.port());
+                    listeners.push(Listener {
+                        server,
+                        bind: address.ip,
+                        offer: Offer {
+                            network: address.network,
+                            url: format!("https://{host}:{port}/?t={token}"),
+                            trusted,
+                        },
+                    });
+                }
+                Err(e) => failures.push(format!("{}: {e}", address.ip)),
+            }
+        }
+        for failure in &failures {
+            log::warn!("pairing cannot listen at {failure}");
+        }
+        anyhow::ensure!(
+            !listeners.is_empty(),
+            "pairing could not listen anywhere ({})",
+            failures.join("; ")
+        );
         Ok(Self::serve(
-            server,
-            "https",
-            options.bind,
+            listeners,
+            token,
             options.decoder,
             Box::new(on_session),
         ))
     }
 
     fn serve(
-        server: Server,
-        scheme: &str,
-        bind: IpAddr,
+        listeners: Vec<Listener>,
+        token: String,
         decoder: Backend,
         on_session: OnSession,
     ) -> Self {
-        let port = server.server_addr().to_ip().map_or(0, |a| a.port());
-        let token = token();
-        let url = format!("{scheme}://{}/?t={token}", SocketAddr::new(bind, port));
         let stop = Arc::new(AtomicBool::new(false));
-        let mut handler = Handler {
-            token,
+        let on_session = Arc::new(Mutex::new(on_session));
+        let mut offers = Vec::new();
+        let mut threads = Vec::new();
+        for Listener {
+            server,
             bind,
-            decoder,
-            on_session,
-        };
-        let thread = std::thread::Builder::new()
-            .name("squigl-pairing".into())
-            .spawn({
-                let stop = Arc::clone(&stop);
-                move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        match server.recv_timeout(Duration::from_millis(200)) {
-                            Ok(Some(request)) => handler.handle(request),
-                            Ok(None) => {}
-                            Err(e) => log::warn!("pairing server: {e}"),
+            offer,
+        } in listeners
+        {
+            log::info!("pairing on {} at {}", offer.network.label(), offer.url);
+            offers.push(offer);
+            let handler = Handler {
+                token: token.clone(),
+                bind,
+                decoder,
+                on_session: Arc::clone(&on_session),
+            };
+            let stop = Arc::clone(&stop);
+            threads.push(
+                std::thread::Builder::new()
+                    .name("squigl-pairing".into())
+                    .spawn(move || {
+                        while !stop.load(Ordering::Relaxed) {
+                            match server.recv_timeout(Duration::from_millis(200)) {
+                                Ok(Some(request)) => handler.handle(request),
+                                Ok(None) => {}
+                                Err(e) => log::warn!("pairing server: {e}"),
+                            }
                         }
-                    }
-                }
-            })
-            .expect("spawning the pairing server's thread");
+                    })
+                    .expect("spawning a pairing server's thread"),
+            );
+        }
         Self {
-            url,
+            offers,
             stop,
-            thread: Some(thread),
+            threads,
         }
     }
 
-    /// The address to open on the phone, token included.
-    pub fn url(&self) -> &str {
-        &self.url
+    /// Every way to reach the server, best first.
+    pub fn offers(&self) -> &[Offer] {
+        &self.offers
     }
 
-    /// [`Self::url`] as a QR code: an SVG document, dark modules on white (whatever
-    /// the theme: a camera needs the contrast), with the quiet zone around it.
-    pub fn qr_svg(&self) -> String {
-        qr_svg(&self.url)
+    /// The best address to open on the phone, token included.
+    pub fn url(&self) -> &str {
+        &self.offers[0].url
     }
 
     pub fn stop(mut self) {
@@ -144,7 +234,7 @@ impl PairingServer {
 
     fn halt(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
+        for thread in self.threads.drain(..) {
             let _ = thread.join();
         }
     }
@@ -160,11 +250,11 @@ struct Handler {
     token: String,
     bind: IpAddr,
     decoder: Backend,
-    on_session: OnSession,
+    on_session: Arc<Mutex<OnSession>>,
 }
 
 impl Handler {
-    fn handle(&mut self, request: Request) {
+    fn handle(&self, request: Request) {
         let (path, query) = request.url().split_once('?').unwrap_or((request.url(), ""));
         let path = path.to_string();
         let authorised = query
@@ -187,7 +277,7 @@ impl Handler {
         let _ = request.respond(response);
     }
 
-    fn whip(&mut self, mut request: Request) {
+    fn whip(&self, mut request: Request) {
         let mut offer = String::new();
         if let Err(e) = request
             .as_reader()
@@ -200,7 +290,7 @@ impl Handler {
             return;
         }
         let response = match WebrtcSource::accept_offer(&offer, self.bind, self.decoder) {
-            Ok((session, answer)) => match (self.on_session)(session) {
+            Ok((session, answer)) => match (self.on_session.lock().unwrap())(session) {
                 Ok(()) => {
                     log::info!("a phone paired");
                     Response::from_string(answer)
@@ -240,7 +330,17 @@ fn token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn qr_svg(text: &str) -> String {
+/// An IP as a URL's host: IPv6 in brackets.
+fn host(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(ip) => ip.to_string(),
+        IpAddr::V6(ip) => format!("[{ip}]"),
+    }
+}
+
+/// `text` (an [`Offer`]'s URL) as a QR code: an SVG document, dark modules on
+/// white (whatever the theme: a camera needs the contrast), with the quiet zone.
+pub fn qr_svg(text: &str) -> String {
     use qrcode::render::svg;
     match qrcode::QrCode::new(text.as_bytes()) {
         Ok(code) => code
@@ -257,9 +357,9 @@ fn qr_svg(text: &str) -> String {
     }
 }
 
-struct Cert {
-    cert_pem: String,
-    key_pem: String,
+pub(crate) struct Cert {
+    pub(crate) cert_pem: String,
+    pub(crate) key_pem: String,
 }
 
 /// The certificate for `names` (its subject alternative names, what a browser

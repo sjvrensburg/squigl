@@ -240,6 +240,22 @@
   </fieldset>
 
   <fieldset>
+    <legend>Phone pairing</legend>
+    <label>
+      <input
+        type="checkbox"
+        checked={config.desktop.tailscale_https}
+        onchange={(e) => save(desktop("tailscale_https", e.currentTarget.checked))}
+      />
+      Over Tailscale, use Tailscale's certificate (no browser warning)
+    </label>
+    <p class="note">
+      Needs HTTPS turned on for the tailnet. Getting the certificate publishes this
+      computer's Tailscale name in public certificate logs.
+    </p>
+  </fieldset>
+
+  <fieldset>
     <legend>Keyboard</legend>
     <label>
       <input
@@ -319,6 +335,10 @@
   td {
     text-align: left;
     padding: 0.2rem 0.75rem 0.2rem 0;
+  }
+  .note {
+    margin: 0;
+    max-width: 38rem;
   }
   .hidden {
     position: absolute;
