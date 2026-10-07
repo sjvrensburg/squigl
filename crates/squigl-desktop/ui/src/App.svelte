@@ -15,6 +15,7 @@
     type Event,
     type StreamSlice,
   } from "./lib/engine";
+  import { SLIDER_STEPS, fromSlider, toSlider, zoomBounds } from "./lib/camera";
   import { FrameClient, type FrameHeader, type Viewport } from "./lib/frames";
   import { MODES, modeLabel } from "./lib/modes";
   import { Renderer, type FrameRenderer } from "./lib/renderer";
@@ -25,6 +26,8 @@
   import Pair from "./Pair.svelte";
   import Settings from "./Settings.svelte";
   // Lucide's outline icons, drawn in currentColor so they follow the theme.
+  import Camera from "@lucide/svelte/icons/camera";
+  import Flashlight from "@lucide/svelte/icons/flashlight";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Maximize from "@lucide/svelte/icons/maximize";
   import Palette from "@lucide/svelte/icons/palette";
@@ -65,6 +68,9 @@
   let fetchTimes: number[] = [];
 
   const maxMagnification = $derived(config?.magnifier.max_magnification ?? 30);
+  // The camera's own zoom and torch, when the source has them.
+  const cameraZoom = $derived(zoomBounds(stream));
+  const torch = $derived(stream?.capabilities.torch ?? false);
   const frozen = $derived(capture?.frozen != null);
   const keys = $derived(config ? table(config.desktop) : new Map<string, Action>());
   const shortcut = (action: Action) => {
@@ -206,6 +212,36 @@
     say(on ? "Reading line on" : "Reading line off");
   }
 
+  async function setCameraZoom(next: number) {
+    try {
+      await dispatch({ type: "set-zoom", zoom: next });
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
+  async function stepCameraZoom(steps: number) {
+    if (!cameraZoom) return;
+    try {
+      if ((await dispatch({ type: "step-zoom", steps })) === "unchanged") {
+        say(steps > 0 ? "The camera is at its closest" : "The camera is at its widest");
+      }
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
+  async function toggleTorch() {
+    if (!torch || !stream) return;
+    const on = !stream.torch;
+    try {
+      await dispatch({ type: "set-torch", on });
+      say(on ? "Torch on" : "Torch off");
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
   async function toggleFullscreen() {
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen()));
@@ -270,6 +306,12 @@
       }
       case "reading-line":
         return toggleReadingLine();
+      case "camera-zoom-in":
+        return stepCameraZoom(4);
+      case "camera-zoom-out":
+        return stepCameraZoom(-4);
+      case "torch":
+        return toggleTorch();
       case "fullscreen":
         return toggleFullscreen();
       case "settings":
@@ -480,6 +522,27 @@
         {/each}
       </select>
     </label>
+    {#if cameraZoom && stream}
+      <label>
+        <Camera class="icon" /><span class="named">Camera zoom</span>
+        <input
+          type="range"
+          min="0"
+          max={SLIDER_STEPS}
+          step="1"
+          value={toSlider(stream.zoom, cameraZoom)}
+          aria-valuetext={`${stream.zoom.toFixed(1)} times`}
+          oninput={(e) => setCameraZoom(fromSlider(Number(e.currentTarget.value), cameraZoom))}
+        />
+        <output>{stream.zoom.toFixed(1)}×</output>
+      </label>
+    {/if}
+    {#if torch && stream}
+      <button onclick={toggleTorch} aria-pressed={stream.torch}>
+        <Flashlight class="icon" /><span class="long">Torch</span>
+        <kbd>{shortcut("torch")}</kbd>
+      </button>
+    {/if}
     <label class="button">
       <FolderOpen class="icon" /><span class="long">Open image…</span>
       <input

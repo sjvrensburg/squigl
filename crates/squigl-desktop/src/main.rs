@@ -78,6 +78,12 @@ struct Args {
     #[arg(long, hide = true, value_name = "IP,...", value_delimiter = ',')]
     dev_pairing_bind: Vec<std::net::IpAddr>,
 
+    /// Development aid: pair a phone played by str0m (colour bars, with a camera
+    /// that has zoom and a torch) at start; `dev_phone_camera` says what it has
+    /// been asked to do.
+    #[arg(long, hide = true)]
+    dev_fake_phone: bool,
+
     /// Development aid: zoom the page by this factor, as the OS text size would.
     #[arg(long, hide = true, value_name = "FACTOR")]
     dev_text_scale: Option<f64>,
@@ -198,6 +204,35 @@ fn dev_reference(host: State<'_, Host>, points: Vec<(usize, usize)>) -> Vec<Opti
         .into_iter()
         .map(|(x, y)| host.reference(x, y))
         .collect()
+}
+
+/// The phone `--dev-fake-phone` paired, while it streams.
+#[derive(Default)]
+struct DevPhone(std::sync::Mutex<Option<squigl_pairing::testing::FakePhone>>);
+
+/// The fake phone's camera now (its zoom and torch), for a test.
+#[tauri::command]
+fn dev_phone_camera(phone: State<'_, DevPhone>) -> Option<squigl_core::RemoteCamera> {
+    phone.0.lock().unwrap().as_ref().map(|p| p.camera())
+}
+
+/// Pairs a fake phone straight into the engine (no pairing server: its offer is
+/// answered here).
+fn pair_fake_phone(host: &Host, decoder: squigl_core::decode::Backend) -> DevPhone {
+    let phone = squigl_pairing::testing::FakePhone::connect((640, 480), |offer| {
+        let local = std::net::Ipv4Addr::LOCALHOST.into();
+        let (session, answer) = squigl_core::WebrtcSource::accept_offer(offer, local, decoder)
+            .map_err(|e| e.to_string())?;
+        host.pair(session);
+        Ok(answer)
+    });
+    match phone {
+        Ok(phone) => DevPhone(std::sync::Mutex::new(Some(phone))),
+        Err(e) => {
+            log::error!("the fake phone did not pair: {e}");
+            DevPhone::default()
+        }
+    }
 }
 
 #[tauri::command]
@@ -366,6 +401,7 @@ fn main() -> anyhow::Result<()> {
         resolution: Resolution::Max,
         tee_device: None,
     };
+    let stream_decoder = stream.options.decoder;
     let pairing = Pairing::new(
         args.dev_pairing_bind,
         stream.options.decoder,
@@ -383,6 +419,11 @@ fn main() -> anyhow::Result<()> {
             ..EngineOptions::default()
         },
     );
+    let dev_phone = if args.dev_fake_phone {
+        pair_fake_phone(&host, stream_decoder)
+    } else {
+        DevPhone::default()
+    };
     let frames = transport::start(host.clone())?;
     log::info!("frames on ws://127.0.0.1:{}", frames.port);
 
@@ -422,6 +463,7 @@ fn main() -> anyhow::Result<()> {
         .manage(frames)
         .manage(pairing)
         .manage(dev)
+        .manage(dev_phone)
         .invoke_handler(tauri::generate_handler![
             dispatch,
             subscribe,
@@ -433,7 +475,8 @@ fn main() -> anyhow::Result<()> {
             page_log,
             dev_options,
             dev_save_snapshot,
-            dev_reference
+            dev_reference,
+            dev_phone_camera
         ])
         .build(tauri::generate_context!())?;
     app.run(|handle, event| {

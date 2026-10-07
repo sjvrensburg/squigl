@@ -34,6 +34,8 @@ async function start() {
         facingMode: { ideal: 'environment' },
         width: { ideal: 1920 },
         height: { ideal: 1080 },
+        // Chrome exposes the camera's zoom only when it is asked for here.
+        zoom: true,
       },
       audio: false,
     });
@@ -42,6 +44,7 @@ async function start() {
     const pc = new RTCPeerConnection();
     const [track] = stream.getVideoTracks();
     const transceiver = pc.addTransceiver(track, { direction: 'sendonly' });
+    controls(pc, track);
 
     // squigl only understands H.264 -- steer the browser's encoder to it (it defaults
     // to VP8/VP9 otherwise) rather than letting negotiation fail on a codec mismatch.
@@ -79,6 +82,36 @@ async function start() {
   } catch (e) {
     log('error: ' + e.message);
   }
+}
+
+// Squigl's camera controls: a data channel on which this page reports the camera
+// (its zoom range and zoom, whether it has a torch and whether it is on) when the
+// channel opens and once after each message, and takes {"zoom": ratio} and
+// {"torch": on}.
+function controls(pc, track) {
+  const channel = pc.createDataChannel('squigl-control');
+  const report = () => {
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const now = track.getSettings ? track.getSettings() : {};
+    channel.send(JSON.stringify({
+      zoom_range: caps.zoom ? [caps.zoom.min, caps.zoom.max] : null,
+      zoom: typeof now.zoom === 'number' ? now.zoom : 1,
+      torch: caps.torch ? Boolean(now.torch) : null,
+    }));
+  };
+  channel.onopen = report;
+  channel.onmessage = async (event) => {
+    try {
+      const asked = JSON.parse(event.data);
+      const constraint = {};
+      if (typeof asked.zoom === 'number') constraint.zoom = asked.zoom;
+      if (typeof asked.torch === 'boolean') constraint.torch = asked.torch;
+      await track.applyConstraints({ advanced: [constraint] });
+    } catch (e) {
+      log('camera control: ' + e.message);
+    }
+    report();
+  };
 }
 
 function waitForIceGathering(pc) {
