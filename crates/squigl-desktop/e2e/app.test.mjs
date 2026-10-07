@@ -8,6 +8,7 @@
 // Needs tauri-driver and the platform's WebDriver (see driver.mjs); macOS has none.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import http from "node:http";
 import https from "node:https";
 import { join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -149,7 +150,10 @@ describe("the magnifier on a recording", () => {
     const button = await s.execute(
       `return [...document.querySelectorAll("header button")].find((b) => b.textContent.includes("Pair phone"));`,
     );
-    await s.click(button[ELEMENT]);
+    // From the keyboard: WebKitWebDriver's click misses a button on the toolbar's
+    // second row.
+    await s.execute(`arguments[0].focus();`, button);
+    await s.press("\uE007"); // Enter
     const code = await until(async () => (await s.findAll("dialog[open] code"))[0], "the address");
     const url = await s.text(code);
     assert.match(url, /^https:\/\/127\.0\.0\.1:\d+\/\?t=[0-9a-f]{32}$/);
@@ -432,5 +436,106 @@ describe("a paired phone's camera", () => {
     await until(async () => (await phone())?.zoom < 8, "the phone zoomed out");
     await s.type(await canvas(s), "t");
     await until(async () => (await phone())?.torch === false, "the torch off at the phone");
+  });
+});
+
+/**
+ * An OpenAI-compatible backend: answers each read with the size of the image it
+ * was sent ("seen WxH"), the size a wavering token, so the page's marks show.
+ */
+function fakeBackend() {
+  const server = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const json = JSON.parse(body);
+      const url = json.messages[0].content.find((c) => c.type === "image_url").image_url.url;
+      const png = Buffer.from(url.split(",")[1], "base64");
+      // The PNG's IHDR: width and height at bytes 16 and 20.
+      const size = `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`;
+      const tokens = [
+        ["seen", 0.99],
+        [" ", 0.99],
+        [size, 0.7],
+      ];
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: { role: "assistant", content: `seen ${size}` },
+              finish_reason: "stop",
+              logprobs: {
+                content: tokens.map(([token, p]) => ({
+                  token,
+                  logprob: Math.log(p),
+                  top_logprobs: [{ token: "seem", logprob: Math.log(0.2) }],
+                })),
+              },
+            },
+          ],
+        }),
+      );
+    });
+  });
+  return new Promise((ok) => server.listen(0, "127.0.0.1", () => ok(server)));
+}
+
+describe("reading", () => {
+  let s;
+  let backend;
+  const readings = () =>
+    s.execute(`return [...document.querySelectorAll(".results .text")].map((p) => p.textContent.trim());`);
+  before(async () => {
+    backend = await fakeBackend();
+    s = await Session.start([
+      "--test-pattern",
+      "--dev-probe",
+      "--dev-backend",
+      `http://127.0.0.1:${backend.address().port}/v1`,
+    ]);
+    await until(() => s.probe("drawn"), "the first frame", 30000);
+  });
+  after(async () => {
+    await s?.quit();
+    backend?.close();
+  });
+
+  test("Enter reads the page, freezing it, and the unsure words are marked", async () => {
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("\uE007"); // Enter
+    await until(async () => (await readings()).length === 1, "a reading");
+    assert.deepEqual(await readings(), ["seen 640x480"]);
+    assert.equal(await status(s), "Frozen", "a read is of a capture");
+    const marked = await s.execute(
+      `const w = document.querySelector(".results .wavering");
+       return w && [w.textContent, w.title];`,
+    );
+    assert.deepEqual(marked, ["640x480", "or: seem"]);
+    assert.match(await s.text(await s.find(".results li")), /1 uncertain word underlined/);
+  });
+
+  test("a box drawn on the picture is what is read, and Escape clears it", async () => {
+    const overlay = await s.find("svg.overlay");
+    await s.drag(overlay, [-120, -60], [80, 40]);
+    await until(async () => (await s.findAll("svg.overlay polygon.selection")).length === 1, "the box");
+    const label = await until(async () => {
+      const b = await s.execute(
+        `return [...document.querySelectorAll(".reading button")].map((b) => b.textContent).find((t) => t.includes("Read the"));`,
+      );
+      return b?.includes("Read the box") && b;
+    }, "the Read button to say box");
+    assert.match(label, /Read the box/);
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("\uE007");
+    // A read of another selection starts a fresh list.
+    await until(async () => {
+      const r = await readings();
+      return r.length === 1 && r[0] !== "seen 640x480";
+    }, "the box's reading");
+    const [w, h] = (await readings())[0].match(/(\d+)x(\d+)/).slice(1).map(Number);
+    assert.ok(w > 8 && w < 640 && h > 8 && h < 480, `read a ${w}x${h} box`);
+    await s.press(KEY.Escape);
+    await until(async () => (await s.findAll("svg.overlay polygon.selection")).length === 0, "the box cleared");
   });
 });

@@ -19,6 +19,14 @@ export type Action =
   | "camera-zoom-in"
   | "camera-zoom-out"
   | "torch"
+  | "reading-pane"
+  | "read"
+  | "read-all"
+  | "second-opinion"
+  | "block-mode"
+  | "next-block"
+  | "previous-block"
+  | "clear-selection"
   | "fullscreen"
   | "settings";
 
@@ -38,6 +46,14 @@ export const ACTIONS: { action: Action; label: string; key: string }[] = [
   { action: "camera-zoom-in", label: "Camera zoom in", key: "]" },
   { action: "camera-zoom-out", label: "Camera zoom out", key: "[" },
   { action: "torch", label: "Torch on or off", key: "t" },
+  { action: "reading-pane", label: "Reading pane", key: "p" },
+  { action: "read", label: "Read the box or page", key: "Enter" },
+  { action: "read-all", label: "Read all blocks", key: "a" },
+  { action: "second-opinion", label: "Second opinion", key: "o" },
+  { action: "block-mode", label: "Find blocks", key: "b" },
+  { action: "next-block", label: "Next block", key: "n" },
+  { action: "previous-block", label: "Previous block", key: "N" },
+  { action: "clear-selection", label: "Clear the box", key: "Escape" },
   { action: "fullscreen", label: "Full screen", key: "f" },
   { action: "settings", label: "Settings", key: "," },
 ];

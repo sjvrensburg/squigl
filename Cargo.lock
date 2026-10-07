@@ -7795,6 +7795,7 @@ dependencies = [
  "serde_json",
  "squigl-core",
  "squigl-engine",
+ "squigl-models",
  "squigl-pairing",
  "tauri",
  "tauri-build",

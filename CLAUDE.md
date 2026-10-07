@@ -351,6 +351,23 @@ The camera's own zoom (a slider, 0-100 over the log of the range, `lib/camera.ts
 its ends are exact and an arrow key is a visible step; `[`/`]` move 4 grid steps) and
 torch (`t`) appear in the toolbar when the stream slice's capabilities have them.
 After changing the UI, `npm run build` before `cargo build`: the binary embeds `ui/dist`.
+Reading (roadmap Phase 8): the app is built with the built-in models
+(`local-model`, default, as in egui; `engine_deps` in `main.rs`, prepared only on
+`PrepareModel`, so a download needs the person's yes). `Overlay.svelte` is an SVG over
+the canvas that draws the blocks (outlined by kind in colour *and* dash pattern) and the
+selection with corner handles, placed by the shown frame header's `placement`
+(`lib/selection.ts`: view px -> canvas = (p - origin) * scale / dpr), and turns drags
+into `SetSelection` / `MoveCorner` and clicks into `SelectBlock`. `Reading.svelte` is
+the pane (`p`): backend choice, the download/ready prompt for the reader and -- once
+Blocks was asked for -- the block finder, Read (Enter) / Read all (`a`) / Second
+opinion (`o`) / Stop, and the results (kept by the page from `ResultAppended` /
+`ResultsCleared`) as large text, unsure tokens underlined dotted (wavering) or wavy
+(hesitant) as well as tinted (`lib/reading.ts`'s `spans`, only when the tokens rebuild
+the text). `b` toggles blocks, `n`/`N` step through them, Escape clears the box.
+`--dev-backend URL` reads with one OpenAI-compatible server instead of the configured
+backends (the e2e test runs a fake one that answers with the image's size).
+WebKitWebDriver's click misses buttons on the toolbar's second row: e2e tests focus
+and press Enter instead.
 Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
 so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
 a small screen or large text) the toolbar goes compact -- icons alone, no key hints --

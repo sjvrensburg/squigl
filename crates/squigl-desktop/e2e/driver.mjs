@@ -194,6 +194,37 @@ export class Session {
     });
   }
 
+  /**
+   * Drags the mouse over `el` from one point to another, each in CSS pixels from
+   * the element's centre (WebDriver's origin for an element).
+   */
+  async drag(el, [x0, y0], [x1, y1]) {
+    const at = (x, y, duration) => ({
+      type: "pointerMove",
+      origin: { [ELEMENT]: el },
+      x: Math.round(x),
+      y: Math.round(y),
+      duration,
+    });
+    await this.cmd("POST", "/actions", {
+      actions: [
+        {
+          type: "pointer",
+          id: "mouse",
+          parameters: { pointerType: "mouse" },
+          actions: [
+            at(x0, y0, 0),
+            { type: "pointerDown", button: 0 },
+            at((x0 + x1) / 2, (y0 + y1) / 2, 100),
+            at(x1, y1, 100),
+            { type: "pointerUp", button: 0 },
+          ],
+        },
+      ],
+    });
+    await this.cmd("DELETE", "/actions");
+  }
+
   quit() {
     return this.cmd("DELETE", "");
   }

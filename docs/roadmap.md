@@ -486,6 +486,23 @@ crates/
 - **Uncertainty:** optionally a short audible cue before an uncertain word, so a teacher listening knows which words to check.
 - **Printed pages:** a "printed page" prompt preset, so the magnifier user can have a letter or a book page read to them.
 
+**Progress (8a, 2026-10-07): reading in the desktop app.**
+
+- **Built-in models** in the desktop build (`local-model`, default). They are downloaded or loaded only when the person agrees in the Reading pane, with progress and a way to stop.
+- **On the picture:** an overlay draws the blocks (by kind, in colour and line style) and the selection. Drag draws a box, dragging inside moves it, a corner reshapes it (keeping a block's quad), and a click selects a block or clears.
+- **The Reading pane** (`p`) has the backend choice, Read (Enter), Read all (`a`), Second opinion (`o`) and Stop. Readings show as large text, uncertain words underlined dotted or wavy as well as tinted, with the alternatives in a tooltip. It also has Copy, Clear and Save readings.
+- **Blocks** (`b`, `n`/`N` to step, Escape clears the box): asked for before the block finder is ready, the pane offers to get it ready and turns blocks on once it is.
+- **Tests:**
+  - vitest for the selection arithmetic and the readings' marks;
+  - end-to-end against a fake OpenAI-compatible server: Enter reads the page (freezing it) and the marks show; a box drawn with the pointer is what is read; Escape clears it.
+  - On the Ubuntu box with the real models: blocks, then read all, read the handwriting sample.
+- **Still to do in Phase 8:**
+  - the erase brush and its keyboard alternative;
+  - history;
+  - a reading-size setting and a reading-only full-screen view;
+  - MathML (after S7);
+  - read-aloud.
+
 **Exit criteria:**
 
 - A feature checklist against egui is complete.
