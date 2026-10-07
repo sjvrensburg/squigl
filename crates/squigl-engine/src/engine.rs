@@ -549,19 +549,21 @@ impl Engine {
         }
     }
 
-    /// The planes for `request`, from the frame it names at the current rotation;
-    /// `None` before there is such a frame.
+    /// The planes for `request`, from the frame it names at the current rotation
+    /// (a capture with its erasures painted over); `None` before there is such a
+    /// frame.
     pub fn render_planes(&self, request: &ViewRequest) -> Option<ViewPlanes> {
         let (seq, frame) = self.numbered(request.frame)?;
+        let frame = self.shown_erased(frame);
         Some(render_planes(&frame, seq, self.rotation, request))
     }
 
     /// The colour a front end should show at view pixel (`x`, `y`) of `which`
-    /// frame: turned by the rotation and mapped through the display mode, with no
-    /// scaling. The reference a drawn picture is checked against; `None` before there
+    /// frame: turned by the rotation, erased and mapped through the display mode,
+    /// with no scaling. The reference a drawn picture is checked against; `None` before there
     /// is a frame or outside the view.
     pub fn displayed_pixel(&self, which: FrameRef, x: usize, y: usize) -> Option<[u8; 3]> {
-        let frame = self.frame(which)?;
+        let frame = self.shown_erased(self.frame(which)?);
         let (vw, vh) = self.rotation.rotated_size(frame.width, frame.height);
         if x >= vw || y >= vh {
             return None;

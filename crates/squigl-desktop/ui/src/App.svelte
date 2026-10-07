@@ -17,8 +17,11 @@
     type Event,
     type ReadingSlice,
     type StreamSlice,
+    type Stroke,
   } from "./lib/engine";
-  import type { ModelStatus, ReadResult } from "./lib/reading";
+  import type { HistoryEntry, ModelStatus, ReadResult } from "./lib/reading";
+  import { coverStrokes } from "./lib/erase";
+  import { outline } from "./lib/selection";
   import { SLIDER_STEPS, fromSlider, toSlider, zoomBounds } from "./lib/camera";
   import { FrameClient, type FrameHeader, type Viewport } from "./lib/frames";
   import { MODES, modeLabel } from "./lib/modes";
@@ -61,7 +64,19 @@
   let models = $state<ModelStatus[]>([]);
   // This list's results, as the engine appends them (it says when it empties it).
   let results = $state<ReadResult[]>([]);
+  // Every read of the session, oldest first.
+  let history = $state<HistoryEntry[]>([]);
   let readingOpen = $state(false);
+  // The readings fill the window (the picture and toolbar out of sight); whether
+  // the window was full screen before, to leave it as it was.
+  let readingOnly = $state(false);
+  let wasFullscreen = false;
+  // The erase brush: on or off, and its radius in CSS pixels.
+  let erasing = $state(false);
+  let brush = $state(12);
+  // How many strokes there were before each erasing step, for undo to go back a
+  // step (a box is many strokes) rather than a stroke.
+  let eraseSteps: number[] = [];
   // Blocks were asked for before the block finder was ready: on once it is.
   let blocksAsked = $state(false);
   let view = $state<View>({ centre: [0.5, 0.5], magnification: 1 });
@@ -203,6 +218,9 @@
       case "results-cleared":
         results = [];
         break;
+      case "history-appended":
+        history = [...history, event.data as HistoryEntry];
+        break;
       case "notice":
         say(event.data.text);
         break;
@@ -314,6 +332,59 @@
     }
   }
 
+  async function toggleErasing() {
+    erasing = !erasing;
+    say(erasing ? "Erase brush on: paint over what should not be read" : "Erase brush off");
+  }
+
+  /** Adds an erasing step's strokes to the capture's (a live picture is captured). */
+  async function erase(added: Stroke[]) {
+    // A picture of its own starts with none.
+    const strokes = frozen ? (capture?.erasures ?? []) : [];
+    if (strokes.length === 0) eraseSteps = [];
+    eraseSteps.push(strokes.length);
+    await command({ type: "set-erasures", strokes: [...strokes, ...added] });
+  }
+
+  /** The keyboard's erasing: everything inside the box (a block picked with the block keys, say). */
+  async function eraseBox() {
+    const sel = capture?.selection;
+    if (!sel) {
+      say("Draw a box or pick a block first");
+      return;
+    }
+    await erase(coverStrokes(outline(sel)));
+    say("Box erased");
+  }
+
+  async function undoErase() {
+    const strokes = frozen ? (capture?.erasures ?? []) : [];
+    if (strokes.length === 0) {
+      say("Nothing to undo");
+      return;
+    }
+    let keep = eraseSteps.pop() ?? strokes.length - 1;
+    if (keep >= strokes.length) keep = strokes.length - 1;
+    await command({ type: "set-erasures", strokes: strokes.slice(0, keep) });
+    say("Undone");
+  }
+
+  async function toggleReadingOnly() {
+    const w = getCurrentWindow();
+    readingOnly = !readingOnly;
+    if (readingOnly) readingOpen = true;
+    try {
+      if (readingOnly) {
+        wasFullscreen = await w.isFullscreen();
+        if (!wasFullscreen) await w.setFullscreen(true);
+      } else if (!wasFullscreen) {
+        await w.setFullscreen(false);
+      }
+    } catch (e) {
+      say(`Could not change full screen: ${e}`);
+    }
+  }
+
   async function toggleFullscreen() {
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen()));
@@ -385,8 +456,17 @@
       case "torch":
         return toggleTorch();
       case "reading-pane":
+        if (readingOnly) return toggleReadingOnly();
         readingOpen = !readingOpen;
         return;
+      case "reading-only":
+        return toggleReadingOnly();
+      case "erase-brush":
+        return toggleErasing();
+      case "erase-box":
+        return eraseBox();
+      case "undo-erase":
+        return undoErase();
       case "read":
         return readCommand({ type: "read" });
       case "read-all":
@@ -400,6 +480,9 @@
       case "previous-block":
         return command({ type: "step-block", delta: -1 });
       case "clear-selection":
+        // Escape leaves what is in the way first: the readings-only view, the brush.
+        if (readingOnly) return toggleReadingOnly();
+        if (erasing) return toggleErasing();
         return command({ type: "set-selection", selection: null });
       case "fullscreen":
         return toggleFullscreen();
@@ -413,7 +496,10 @@
     // Keys belong to a focused control or an open dialog; the shortcuts are for
     // the picture.
     const target = e.target as HTMLElement;
-    if (settingsOpen || pairOpen || target.closest("input, select, textarea, button, dialog")) return;
+    if (settingsOpen || pairOpen) return;
+    // Escape means nothing to a button, so it still leaves a mode from one.
+    const control = target.closest("input, select, textarea, button, dialog");
+    if (control && !(e.key === "Escape" && control.tagName === "BUTTON")) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const action = keys.get(e.key);
     if (!action) return;
@@ -474,6 +560,7 @@
       renderer: () => (renderer instanceof Renderer ? "webgl2" : "canvas2d"),
       drawn: () => drawn,
       header: () => shown,
+      erasures: () => capture?.erasures ?? [],
       async sample(points: [number, number][]) {
         const header = shown;
         const r = renderer;
@@ -575,7 +662,7 @@
 <svelte:window onkeydown={onKey} onpaste={onPaste} />
 
 <main>
-  <header>
+  <header hidden={readingOnly}>
     <button onclick={toggleFreeze} aria-pressed={frozen}>
       {#if frozen}<Play class="icon" />{:else}<Pause class="icon" />{/if}
       <span class="long">{frozen ? "Live" : "Freeze"}</span> <kbd>{shortcut("freeze")}</kbd>
@@ -670,7 +757,7 @@
     </button>
   </header>
 
-  <div class="workspace" class:with-reading={readingOpen}>
+  <div class="workspace" class:with-reading={readingOpen} class:reading-only={readingOnly}>
   <div class="picture">
     <canvas bind:this={canvas} tabindex="0" aria-label="Magnified camera picture"></canvas>
     <Overlay
@@ -679,6 +766,8 @@
       dpr={window.devicePixelRatio}
       selection={capture?.selection ?? null}
       {blocks}
+      brush={erasing ? brush : null}
+      onerase={(stroke) => erase([stroke])}
       onnotice={say}
     />
     {#if config?.magnifier.reading_line}
@@ -701,9 +790,14 @@
       {blocks}
       {models}
       {results}
+      {history}
       {config}
       shortcut={(a) => shortcut(a)}
       {blocksAsked}
+      erase={{ on: erasing, brush, strokes: capture?.erasures.length ?? 0, box: capture?.selection != null }}
+      {readingOnly}
+      onaction={run}
+      onbrush={(r) => (brush = r)}
       onnotice={say}
     />
   {/if}
@@ -822,11 +916,11 @@
     outline: 0.2rem solid var(--focus);
     outline-offset: 0.15rem;
   }
-  kbd {
+  :global(kbd) {
     font-size: 0.8em;
     opacity: 0.85;
   }
-  kbd:empty {
+  :global(kbd:empty) {
     display: none;
   }
   :global(:focus-visible) {
@@ -852,6 +946,21 @@
     position: relative;
     min-height: 0;
     background: #000;
+  }
+  /* Readings only: the pane takes the window; the picture stays laid out (so its
+     canvas keeps a size) but out of sight and out of reach. */
+  .workspace.reading-only {
+    position: relative;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+  .workspace.reading-only .picture {
+    position: absolute;
+    inset: 0;
+    visibility: hidden;
+  }
+  header[hidden] {
+    display: none;
   }
   canvas {
     width: 100%;
@@ -943,7 +1052,7 @@
     header label:not(.button) > :global(.icon) {
       display: none;
     }
-    kbd {
+    :global(kbd) {
       display: none;
     }
     header,

@@ -33,6 +33,17 @@ export interface ReadResult {
   result: { Ok: Transcription } | { Err: string };
 }
 
+/** One finished read of the session (squigl_engine::history::Entry). */
+export interface HistoryEntry {
+  /** When, as an RFC 3339 time. */
+  at: string;
+  /** Which capture of the session (1-based). */
+  capture: number;
+  /** The block's label in a "read all", else what was read ("box", "page"). */
+  what: string;
+  result: ReadResult["result"];
+}
+
 export type Confidence = "steady" | "wavering" | "hesitant";
 
 export interface Thresholds {

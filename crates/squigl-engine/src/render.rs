@@ -84,6 +84,89 @@ pub fn render_selection(
     }
 }
 
+/// A view-space point in the source frame's continuous coordinates (the inverse of
+/// turning by `rotation`, as [`Crop::to_source`] is for pixels).
+fn point_to_source(rotation: Rotation, view_w: usize, view_h: usize, [x, y]: [f32; 2]) -> [f32; 2] {
+    let (vw, vh) = (view_w as f32, view_h as f32);
+    match rotation {
+        Rotation::None => [x, y],
+        Rotation::Cw90 => [y, vw - x],
+        Rotation::Cw180 => [vw - x, vh - y],
+        Rotation::Cw270 => [vh - y, x],
+    }
+}
+
+/// `frame` with `strokes` (view space) painted over, for showing: the pixels an
+/// erasure leaves alone are the frame's own, bit for bit, so only what was painted
+/// changes. The fill is taken from the same ring as a read's whole-view rendering.
+pub fn erased_frame(frame: &YuvFrame, rotation: Rotation, strokes: &[erase::Stroke]) -> YuvFrame {
+    let mut out = frame.clone();
+    let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
+    let source: Vec<erase::Stroke> = strokes
+        .iter()
+        .map(|s| erase::Stroke {
+            points: s
+                .points
+                .iter()
+                .map(|&p| point_to_source(rotation, vw, vh, p))
+                .collect(),
+            radius: s.radius,
+        })
+        .collect();
+    // Everything the strokes and their rings touch, on even pixels (the chroma's).
+    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+    for s in &source {
+        let reach = s.radius + erase::RING_PX + 1.0;
+        for p in &s.points {
+            for k in 0..2 {
+                lo[k] = lo[k].min(p[k] - reach);
+                hi[k] = hi[k].max(p[k] + reach);
+            }
+        }
+    }
+    let even_down = |v: f32, max: usize| ((v.max(0.0) as usize) & !1).min(max);
+    let even_up = |v: f32, max: usize| ((v.max(0.0).ceil() as usize + 1) & !1).min(max);
+    let (x0, y0) = (
+        even_down(lo[0], frame.width),
+        even_down(lo[1], frame.height),
+    );
+    let (x1, y1) = (even_up(hi[0], frame.width), even_up(hi[1], frame.height));
+    if x0 >= x1 || y0 >= y1 {
+        return out;
+    }
+    let (w, h) = (x1 - x0, y1 - y0);
+    let mut rgba = vec![0u8; w * h * 4];
+    i420_region_to_rgba(frame, x0, y0, w, h, 1, &mut rgba);
+    let mut img =
+        image::RgbaImage::from_raw(w as u32, h as u32, rgba.clone()).expect("buffer matches size");
+    erase::erase(&mut img, &erase::to_region(&source, (x0, y0), 1));
+    let painted = img.into_raw();
+    let patch = squigl_core::convert::rgba_to_i420(&painted, w, h);
+    let changed = |x: usize, y: usize| {
+        let i = (y * w + x) * 4;
+        rgba[i..i + 3] != painted[i..i + 3]
+    };
+    let cw = frame.width / 2;
+    for by in 0..h / 2 {
+        for bx in 0..w / 2 {
+            let cells = [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(dx, dy)| (bx * 2 + dx, by * 2 + dy));
+            let mut any = false;
+            for (x, y) in cells {
+                if changed(x, y) {
+                    out.y[(y0 + y) * frame.width + x0 + x] = patch.y[y * w + x];
+                    any = true;
+                }
+            }
+            if any {
+                let c = (y0 / 2 + by) * cw + x0 / 2 + bx;
+                out.u[c] = patch.u[by * (w / 2) + bx];
+                out.v[c] = patch.v[by * (w / 2) + bx];
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +277,69 @@ mod tests {
         assert_eq!(at(&part, pw, 0, 1), at(&part, pw, 0, 2));
         assert_ne!(at(&part, pw, 0, 2), at(&raw, w, 2, 2));
         assert_eq!(at(&part, pw, 1, 2), at(&raw, w, 3, 2));
+    }
+
+    #[test]
+    fn an_erased_frame_shows_what_a_read_sees() {
+        // Paper (luma 200) with a dark blot at source (10..14, 6..10).
+        let (w, h) = (40, 24);
+        let y = (0..h)
+            .flat_map(|row| {
+                (0..w).map(move |col| {
+                    if (10..14).contains(&col) && (6..10).contains(&row) {
+                        30
+                    } else {
+                        200
+                    }
+                })
+            })
+            .collect();
+        let f = YuvFrame {
+            width: w,
+            height: h,
+            y,
+            u: vec![128; w * h / 4],
+            v: vec![128; w * h / 4],
+        };
+        for rotation in [
+            Rotation::None,
+            Rotation::Cw90,
+            Rotation::Cw180,
+            Rotation::Cw270,
+        ] {
+            let (vw, vh) = rotation.rotated_size(w, h);
+            // The blot's centre in view space: the view pixel whose source is (12, 8).
+            let centre = (0..vw * vh)
+                .map(|i| (i % vw, i / vw))
+                .find(|&(x, y)| {
+                    let s = Crop { x, y, w: 1, h: 1 }.to_source(rotation, vw, vh);
+                    (s.x, s.y) == (12, 8)
+                })
+                .unwrap();
+            let c = [centre.0 as f32, centre.1 as f32];
+            let stroke = erase::Stroke::line(c, [c[0] + 0.5, c[1]], 4.0);
+            let erased = erased_frame(&f, rotation, std::slice::from_ref(&stroke));
+            let (shown, _, _) = render_region(&erased, rotation, Crop::whole(vw, vh), 1);
+            let (read, _, _) = render_selection(&f, rotation, None, 1, &[stroke], None);
+            let (raw, _, _) = render_region(&f, rotation, Crop::whole(vw, vh), 1);
+            for i in 0..vw * vh {
+                let px = |b: &[u8]| b[i * 4] as i32;
+                assert!(
+                    (px(&shown) - px(&read)).abs() <= 2,
+                    "{rotation:?} pixel {i}"
+                );
+                if px(&read) == px(&raw) {
+                    assert_eq!(
+                        px(&shown),
+                        px(&raw),
+                        "{rotation:?}: an untouched pixel moved"
+                    );
+                }
+            }
+            assert!(
+                at(&shown, vw, centre.0, centre.1) > 200,
+                "{rotation:?}: the blot stayed"
+            );
+        }
     }
 }

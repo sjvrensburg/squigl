@@ -27,6 +27,10 @@ export type Action =
   | "next-block"
   | "previous-block"
   | "clear-selection"
+  | "erase-brush"
+  | "erase-box"
+  | "undo-erase"
+  | "reading-only"
   | "fullscreen"
   | "settings";
 
@@ -54,6 +58,10 @@ export const ACTIONS: { action: Action; label: string; key: string }[] = [
   { action: "next-block", label: "Next block", key: "n" },
   { action: "previous-block", label: "Previous block", key: "N" },
   { action: "clear-selection", label: "Clear the box", key: "Escape" },
+  { action: "erase-brush", label: "Erase brush on or off", key: "e" },
+  { action: "erase-box", label: "Erase the box", key: "x" },
+  { action: "undo-erase", label: "Undo erasing", key: "u" },
+  { action: "reading-only", label: "Readings only, full screen", key: "F" },
   { action: "fullscreen", label: "Full screen", key: "f" },
   { action: "settings", label: "Settings", key: "," },
 ];
