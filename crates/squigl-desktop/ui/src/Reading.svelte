@@ -9,6 +9,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { dispatch, type BlocksSlice, type Config, type ReadingSlice } from "./lib/engine";
   import { BRUSH_MAX, BRUSH_MIN } from "./lib/erase";
+  import { runs, sanitize, uncertainRuns, type Part } from "./lib/math";
   import type { Action } from "./lib/shortcuts";
   import {
     describe,
@@ -118,6 +119,30 @@
     if (size === ui.reading_size) return;
     run({ type: "set-config", config: { ...config, ui: { ...config.ui, reading_size: size } } });
     onnotice(`Reading text ${size} points`);
+  }
+
+  // Each reading's text and maths runs, from the engine, as they arrive.
+  let partsOf = $state<Record<string, Part[]>>({});
+  const asked = new Set<string>();
+  function parts(text: string): Part[] | null {
+    const p = partsOf[text];
+    if (!p && !asked.has(text)) {
+      asked.add(text);
+      invoke<Part[]>("math_parts", { text })
+        .then((p) => (partsOf[text] = p))
+        .catch((e) => onnotice(`Could not lay out the maths: ${e}`));
+    }
+    return p ?? null;
+  }
+
+  /** Puts MathML into `node`, rebuilt from MathML elements alone. */
+  function mathml(node: HTMLElement, src: string) {
+    const put = (s: string) => {
+      const m = sanitize(s);
+      node.replaceChildren(...(m ? [m] : []));
+    };
+    put(src);
+    return { update: put };
   }
 
   const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -264,14 +289,21 @@
             <p>(no answer)</p>
           {:else}
             {#each o.ok.readings as reading}
-              {@const parts = spans(reading, ui)}
-              {@const unsure = uncertain(parts)}
+              {@const laid = parts(reading.text)}
+              {@const shown = laid ? runs(reading, ui, laid) : [{ kind: "text" as const, spans: spans(reading, ui) }]}
+              {@const unsure = laid ? uncertainRuns(shown) : uncertain(spans(reading, ui))}
               {#if o.ok.samples > 1}<p class="support">{reading.count} of {o.ok.samples} readings:</p>{/if}
               <p class="text">
-                {#each parts as s}{#if s.confidence === "steady"}{s.text}{:else}<span
-                      class={s.confidence}
-                      title={s.alternates.length ? `or: ${s.alternates.join(", ")}` : undefined}
-                    >{s.text}</span>{/if}{/each}
+                {#each shown as run}{#if run.kind === "text"}{#each run.spans as s}{#if s.confidence === "steady"}{s.text}{:else}<span
+                          class={s.confidence}
+                          title={s.alternates.length ? `or: ${s.alternates.join(", ")}` : undefined}
+                        >{s.text}</span>{/if}{/each}{:else if run.mathml}<span
+                      class={["math", run.display && "display", run.confidence !== "steady" && run.confidence]}
+                      title={run.alternates.length ? `or: ${run.alternates.join(", ")}` : undefined}
+                      use:mathml={run.mathml}
+                    ></span>{:else}<span class={run.confidence !== "steady" ? run.confidence : undefined}
+                      >{run.source}</span
+                    >{/if}{/each}
               </p>
               {#if unsure > 0 || reading.truncated}
                 <p class="support">
@@ -381,6 +413,22 @@
   .support {
     font-size: 0.9em;
     margin: 0.25rem 0;
+  }
+  /* Maths: a display formula is a block of its own, scrolling sideways if wide. */
+  .math.display {
+    display: block;
+    margin: 0.25em 0;
+    overflow-x: auto;
+    white-space: normal;
+  }
+  /* A formula is marked as a whole, by a line under it rather than through it. */
+  .math.wavering {
+    text-decoration: none;
+    border-bottom: 0.12em dotted currentColor;
+  }
+  .math.hesitant {
+    text-decoration: none;
+    border-bottom: 0.15em dashed currentColor;
   }
   /* Uncertainty: the line's style says it, the tint helps. */
   .wavering {

@@ -16,6 +16,7 @@ pub mod erase;
 pub mod geometry;
 pub mod history;
 pub mod layout;
+pub mod math;
 pub mod model;
 pub mod paths;
 pub mod render;
