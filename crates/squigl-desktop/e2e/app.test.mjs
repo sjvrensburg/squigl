@@ -88,8 +88,16 @@ describe("the magnifier on a recording", () => {
     await until(async () => (await status(s)) === "Frozen", "Frozen");
     const button = await s.find("header button");
     assert.equal(await s.attribute(button, "aria-pressed"), "true");
-    await sleep(300); // a request already on its way may still land
-    const frozen = await s.probe("drawn");
+    // The capture itself is drawn once, and a request already on its way may land:
+    // wait for the drawing to settle.
+    let frozen = await s.probe("drawn");
+    await until(async () => {
+      await sleep(400);
+      const now = await s.probe("drawn");
+      const settled = now === frozen;
+      frozen = now;
+      return settled;
+    }, "the drawing to settle");
     await sleep(1000);
     assert.equal(await s.probe("drawn"), frozen, "nothing is drawn while frozen");
     await s.type(await canvas(s), " ");
@@ -597,7 +605,12 @@ describe("reading", () => {
     assert.ok(Math.max(...ys) - Math.min(...ys) < 2, "a level stroke");
     const [x0, x1] = [stroke.points[0][0], stroke.points.at(-1)[0]];
     assert.ok(x1 - x0 > 80, `along the drag: ${x0} to ${x1}`);
-    const points = [0.1, 0.3, 0.5, 0.7, 0.9].map((t) => [(x0 + t * (x1 - x0)) / 640, ys[0] / 480]);
+    // Each point with its neighbours a pixel either side: after the undo only a point
+    // whose neighbours match it is compared (at a bar's edge the drawing, magnified
+    // and smoothed, blends the two bars).
+    const points = [0.1, 0.3, 0.5, 0.7, 0.9].flatMap((t) =>
+      [-1, 0, 1].map((dx) => [(Math.round(x0 + t * (x1 - x0)) + dx + 0.5) / 640, (Math.round(ys[0]) + 0.5) / 480]),
+    );
     const colours = async () => (await s.probe("sample", points)).map((p) => [p.drawn, p.expected]);
     // Painted with one colour, drawn as the engine has it.
     await until(async () => {
@@ -609,7 +622,11 @@ describe("reading", () => {
     await s.press("u");
     await until(async () => (await s.probe("erasures")).length === 0, "the stroke undone");
     // (The engine's own tests hold that no erasures show the capture as it was.)
-    await until(async () => (await colours()).every(([d, e]) => e && near(d, e)), "the picture redrawn");
+    await until(async () => {
+      const now = await colours();
+      const inside = now.filter((_, i) => i % 3 === 1 && near(now[i - 1][1], now[i][1]) && near(now[i + 1][1], now[i][1]));
+      return inside.length > 0 && inside.every(([d, e]) => e && near(d, e));
+    }, "the picture redrawn");
   });
 
   test("Shift+F shows the readings alone, and Escape brings the picture back", async () => {
