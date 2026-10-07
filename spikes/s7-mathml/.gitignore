@@ -1,0 +1,7 @@
+target/
+node_modules/
+report.html
+speech.json
+corpus.json
+temml.json
+report-*.png

@@ -1,0 +1,16 @@
+[package]
+name = "s7-mathml"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Roadmap spike S7: LaTeX to MathML (pulldown-latex vs math-core vs Temml) and MathCAT speech"
+
+# Its own workspace: not part of squigl's build or CI.
+[workspace]
+
+[dependencies]
+pulldown-latex = "0.8"
+math-core = "0.8"
+mathcat = { version = "0.7.7-alpha.1", features = ["include-zip"] }
+serde_json = "1"
+anyhow = "1"
