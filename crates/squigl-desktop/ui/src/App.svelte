@@ -538,7 +538,7 @@
 {#if config}
   <Settings {config} bind:open={settingsOpen} onnotice={say} />
 {/if}
-<Pair bind:open={pairOpen} {stream} />
+<Pair bind:open={pairOpen} {stream} tailscaleHttps={config?.desktop.tailscale_https ?? false} />
 
 <style>
   /* Themes: every colour comes from these. */

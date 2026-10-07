@@ -1,18 +1,30 @@
 <script lang="ts">
-  // Pairing a phone's browser: the address and its QR code, and what the phone
-  // will ask. The server runs only while this is open (pairing_start/stop), and a
-  // phone that pairs closes it: the picture is what it was opened for.
+  // Pairing a phone's browser: each address this computer has (the LAN's, and any
+  // overlay network's: Tailscale, ZeroTier, Nebula) with its QR code, and what the
+  // phone will ask. The server runs only while this is open (pairing_start/stop),
+  // and a phone that pairs closes it: the picture is what it was opened for.
   import { invoke } from "@tauri-apps/api/core";
   import type { StreamSlice } from "./lib/engine";
 
-  let { open = $bindable(), stream }: {
+  let { open = $bindable(), stream, tailscaleHttps }: {
     open: boolean;
     stream: StreamSlice | null;
+    tailscaleHttps: boolean;
   } = $props();
+
+  interface Offer {
+    network: string;
+    overlay: boolean;
+    url: string;
+    qr_svg: string;
+    trusted: boolean;
+  }
 
   let dialog: HTMLDialogElement;
   let heading: HTMLHeadingElement;
-  let info = $state<{ url: string; qr_svg: string } | null>(null);
+  let offers = $state<Offer[] | null>(null);
+  let chosen = $state(0);
+  const offer = $derived(offers?.[chosen] ?? null);
   let error = $state("");
   let copied = $state(false);
   // Whether, since opening, the paired-phone source has been without a picture: a
@@ -38,21 +50,22 @@
   });
 
   async function start() {
-    info = null;
+    offers = null;
+    chosen = 0;
     error = "";
     copied = false;
     awaiting = false;
     try {
-      info = await invoke<{ url: string; qr_svg: string }>("pairing_start");
+      offers = await invoke<Offer[]>("pairing_start", { tailscaleHttps });
     } catch (e) {
       error = String(e);
     }
   }
 
   async function copy() {
-    if (!info) return;
+    if (!offer) return;
     try {
-      await navigator.clipboard.writeText(info.url);
+      await navigator.clipboard.writeText(offer.url);
       copied = true;
     } catch {
       copied = false;
@@ -72,27 +85,56 @@
 
   {#if error}
     <p role="alert">Pairing could not start: {error}</p>
-  {:else if info}
+  {:else if offers && offer}
+    {#if offers.length > 1}
+      <fieldset class="networks">
+        <legend>The phone is on</legend>
+        {#each offers as o, i}
+          <label>
+            <input
+              type="radio"
+              name="network"
+              checked={i === chosen}
+              onchange={() => {
+                chosen = i;
+                copied = false;
+              }}
+            />
+            {o.network}
+          </label>
+        {/each}
+      </fieldset>
+    {/if}
     <div class="pair">
       <div class="qr" role="img" aria-label="QR code of the address below">
-        {@html info.qr_svg}
+        {@html offer.qr_svg}
       </div>
       <ol>
-        <li>Connect the phone to the same Wi-Fi as this computer.</li>
+        {#if offer.overlay}
+          <li>Open {offer.network} on the phone, on the same network as this computer.</li>
+        {:else}
+          <li>Connect the phone to the same Wi-Fi as this computer.</li>
+        {/if}
         <li>Point the phone's camera at the code, or type the address below into its browser.</li>
-        <li>
-          The browser warns that the connection is not private: choose Advanced, then
-          Proceed (or Accept the risk). Each phone asks once.
-        </li>
+        {#if !offer.trusted}
+          <li>
+            The browser warns that the connection is not private: choose Advanced, then
+            Proceed (or Accept the risk). Each phone asks once.
+          </li>
+        {/if}
         <li>Tap Start streaming, and allow the camera.</li>
       </ol>
     </div>
     <p class="address">
       <span>Address</span>
-      <code>{info.url}</code>
+      <code>{offer.url}</code>
       <button onclick={copy}>{copied ? "Copied" : "Copy"}</button>
     </p>
     <p role="status">Waiting for a phone…</p>
+    <p class="hint">
+      Phone on a different network, such as mobile data? Connect both to the same
+      hotspot, or install Tailscale on both and pair through its address.
+    </p>
   {:else}
     <p>Starting…</p>
   {/if}
@@ -117,6 +159,22 @@
   }
   h2 {
     margin-top: 0;
+  }
+  .networks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+    margin: 0 0 1rem;
+    border: 0.1rem solid var(--edge);
+    border-radius: 0.35rem;
+  }
+  .networks label {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+  }
+  .hint {
+    max-width: 40rem;
   }
   .pair {
     display: flex;

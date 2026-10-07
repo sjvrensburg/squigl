@@ -163,22 +163,35 @@ on the bound interface, no STUN/TURN, no auth.
 policy bits: Ctrl-C/SIGTERM
 handling, the reconnect-with-backoff loop (keeping the V4L2 sink open across sessions),
 `--list-sizes` and `--resolution max`. `--webrtc` switches to the WebRTC source instead of
-ADB: `webrtc_server.rs` runs `squigl-pairing`'s server and streams each session to the
-V4L2 device (one at a time: its `on_session` turns a second phone away with a 503).
+ADB: `webrtc_server.rs` runs `squigl-pairing`'s server (at `--webrtc-bind`, or every
+LAN and overlay address, each printed) and streams each session to the V4L2 device (one at a time: its `on_session` turns a second phone away with a 503).
 `contrib/` has boot-time loopback config and a systemd user unit.
 
 `crates/squigl-pairing` is the phone-pairing server both the CLI and the desktop app use:
-`PairingServer::start(PairingOptions { bind, port, decoder, cert_dir }, on_session)`
-runs a `tiny_http` HTTPS server serving `capture.html` (the `getUserMedia` +
+`PairingServer::start(PairingOptions { addresses, port, decoder, cert_dir,
+tailscale_https }, on_session)` runs a `tiny_http` HTTPS server per address (one token
+for all; the WebRTC host candidate is the address the offer came in at) serving `capture.html` (the `getUserMedia` +
 `RTCPeerConnection` page, with `setCodecPreferences` steering the browser to H.264 since
 that's all squigl decodes) at `/` and a minimal WHIP-shaped ingest endpoint at
 `POST /whip`, both answering only with this start's random `?t=` token (403 otherwise);
 an accepted offer's `WebrtcSource` goes to `on_session` before the answer is sent (an
-`Err` there is a 503). `url()` is the address, token included, and `qr_svg()` that as a QR
-code (`qrcode`, black on white). The certificate is `rcgen` self-signed (`getUserMedia`
+`Err` there is a 503). `offers()` is each address's `Offer` (network, URL with token,
+whether the certificate is trusted), `url()` the first's, and `qr_svg(url)` a QR code
+(`qrcode`, black on white). `addresses()` (`addresses.rs`, via `if-addrs`) lists what a
+phone could pair at: IPv4 LAN addresses (the default route's first) named Wi-Fi/Wired/
+Local from the interface name, then overlays -- Tailscale (`tailscale*`, or 100.64/10),
+ZeroTier (`zt*`), Nebula (`nebula*`) -- with loopback, link-local, public and container/
+VM bridges (`docker*`, `br-*`, `virbr*`, `vEthernet*`…) left out; `classify` is the
+pure, tested part. A phone on another network pairs through an overlay both are on
+(squigl embeds none: a browser cannot join one). With `tailscale_https`
+(`tailscale.rs`; the desktop's opt-in `[desktop].tailscale_https`, off by default since
+issuing it puts the machine's name in public CT logs) the Tailscale address is offered as
+`https://machine.tailnet.ts.net` with `tailscale cert`'s Let's Encrypt certificate when
+`tailscale status --json` lists the name in `CertDomains` (on Linux the user must be the
+tailnet's operator); else it falls back to the self-signed one. The certificate is `rcgen` self-signed (`getUserMedia`
 needs a secure context and a LAN IP isn't CA-certifiable, so the phone's browser warns);
-with `cert_dir` it is kept (`pairing.crt`/`.key`/`.names`, the key 0600) and remade only
-when the address changes, so each phone warns once; the CLI passes none (a fresh one per
+with `cert_dir` it is kept (`pairing.crt`/`.key`/`.names`, the key 0600; its names are
+every offered IP) and remade only when the addresses change, so each phone warns once; the CLI passes none (a fresh one per
 run). Port 8443 unless taken (Firefox keys its exception on host and port). Its
 `testing` feature has `FakePhone`: str0m as the browser, sending openh264 colour bars
 from 127.0.0.1, which the pairing and engine tests stream through a real session.
@@ -290,7 +303,7 @@ Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-pat
 FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second and the
 request-to-drawn times, to the log), `--dev-canvas2d`, `--dev-config FILE` (start from
 the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH`,
-`--dev-pairing-bind IP` (pair at 127.0.0.1, say, not the LAN address) and `--dev-probe` (`window.squiglProbe`:
+`--dev-pairing-bind IP,...` (pair at 127.0.0.1, say, not this machine's addresses; comma-separated, since msedgedriver keeps only the last of a repeated switch) and `--dev-probe` (`window.squiglProbe`:
 the last frame's header, and drawn pixels beside `Engine::displayed_pixel`, the
 engine's reference -- what `e2e/app.test.mjs` checks each display mode with) drive it
 from a script; page errors and warnings go to the app's log (target `page`). The page
@@ -304,7 +317,9 @@ on Windows, `WEBVIEW2_USER_DATA_FOLDER`/`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 
 msedgedriver passes its DevTools port and folder) are applied over wry's own.
 Pair phone (`Pair.svelte`, `pairing.rs`) runs the pairing server only while its dialog
 is open (`pairing_start`/`pairing_stop`; the certificate beside the settings file) and
-shows the QR code, the address with Copy, and what the phone's browser will ask; a phone
+shows each network's QR code (a radio group picks it when there are several), the
+address with Copy, what the phone's browser will ask, and what to do when the phone is on
+another network; `pairing_start` is async (a `tailscale cert` can take a while); a phone
 that pairs goes to the engine through the host (`Host::pair`) and closes the dialog.
 Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
 so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:

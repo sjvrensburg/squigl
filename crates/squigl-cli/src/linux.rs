@@ -113,12 +113,12 @@ struct Args {
     #[arg(long, value_name = "FILE", conflicts_with_all = ["serial", "connect", "facing", "zoom", "torch", "test_pattern", "resolution", "webrtc", "record"])]
     replay: Option<PathBuf>,
 
-    /// Address to bind the WebRTC capture server to. Defaults to this machine's
-    /// LAN-facing IP (auto-detected).
+    /// Address to bind the WebRTC capture server to. Defaults to every LAN and
+    /// overlay-network (Tailscale, ZeroTier, Nebula) address this machine has.
     #[arg(long, requires = "webrtc")]
     webrtc_bind: Option<IpAddr>,
 
-    /// Port for the WebRTC capture server.
+    /// Port for the WebRTC capture server (another where it is taken).
     #[arg(long, requires = "webrtc", default_value_t = 8443)]
     webrtc_port: u16,
 }
@@ -190,11 +190,13 @@ pub fn main() -> Result<()> {
     }
 
     if args.webrtc {
-        let bind = match args.webrtc_bind {
-            Some(addr) => addr,
-            None => webrtc_server::detect_lan_ip().context("auto-detecting a LAN IP to bind to (pass --webrtc-bind explicitly if this is wrong)")?,
-        };
-        return webrtc_server::run(&args.device, bind, args.webrtc_port, decoder, &stop);
+        return webrtc_server::run(
+            &args.device,
+            args.webrtc_bind,
+            args.webrtc_port,
+            decoder,
+            &stop,
+        );
     }
 
     let facing = match args.facing {

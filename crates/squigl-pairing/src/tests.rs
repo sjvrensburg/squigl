@@ -7,8 +7,29 @@ const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
 /// The server over plain HTTP (the TLS layer is tiny_http's), on any port.
 fn server(on_session: OnSession) -> PairingServer {
-    let server = Server::http((LOCAL, 0)).unwrap();
-    PairingServer::serve(server, "http", LOCAL, Backend::Openh264, on_session)
+    server_at(&[LOCAL], on_session)
+}
+
+/// [`server`], listening at each of `ips`.
+fn server_at(ips: &[IpAddr], on_session: OnSession) -> PairingServer {
+    let token = token();
+    let listeners = ips
+        .iter()
+        .map(|&ip| {
+            let server = Server::http((ip, 0)).unwrap();
+            let port = server.server_addr().to_ip().unwrap().port();
+            Listener {
+                server,
+                bind: ip,
+                offer: Offer {
+                    network: Network::Local,
+                    url: format!("http://{}:{port}/?t={token}", host(ip)),
+                    trusted: false,
+                },
+            }
+        })
+        .collect();
+    PairingServer::serve(listeners, token, Backend::Openh264, on_session)
 }
 
 fn refuse() -> OnSession {
@@ -72,7 +93,7 @@ fn each_start_has_its_own_token() {
 #[test]
 fn the_qr_code_is_an_svg_of_the_address() {
     let pairing = server(refuse());
-    let svg = pairing.qr_svg();
+    let svg = qr_svg(pairing.url());
     assert!(svg.contains("<svg"), "{svg}");
     assert!(svg.contains("#000000") && svg.contains("#ffffff"));
 }
@@ -105,40 +126,112 @@ fn the_certificate_is_kept_for_the_same_address() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A phone's browser, played by str0m, pairs over `/whip`: the session it is
-/// handed must decode its frames.
-#[test]
-fn a_paired_browser_streams_frames() {
-    use crate::testing::FakePhone;
+/// A server at `ips` whose sessions run, sending each frame's size to the
+/// receiver until the flag is raised.
+fn streaming_server(
+    ips: &[IpAddr],
+) -> (
+    PairingServer,
+    mpsc::Receiver<(usize, usize)>,
+    Arc<AtomicBool>,
+) {
     use squigl_core::decode::YuvFrame;
-
-    let (frames_tx, frames) = mpsc::channel::<(usize, usize)>();
+    let (frames_tx, frames) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
-    let pairing = server(Box::new({
-        let stop = Arc::clone(&stop);
-        move |mut session: WebrtcSource| {
-            let (frames_tx, stop) = (frames_tx.clone(), Arc::clone(&stop));
-            std::thread::spawn(move || {
-                let mut sink = |frame: &YuvFrame| {
-                    let _ = frames_tx.send((frame.width, frame.height));
-                    Ok(())
-                };
-                let _ = session.run(&mut sink, &stop);
-            });
-            Ok(())
-        }
-    }));
-    let url = pairing.url().to_string();
-    let _phone = FakePhone::connect((320, 240), |offer| {
-        match request(&url, "POST", &format!("/whip?t={}", token_of(&url)), offer) {
+    let pairing = server_at(
+        ips,
+        Box::new({
+            let stop = Arc::clone(&stop);
+            move |mut session: WebrtcSource| {
+                let (frames_tx, stop) = (frames_tx.clone(), Arc::clone(&stop));
+                std::thread::spawn(move || {
+                    let mut sink = |frame: &YuvFrame| {
+                        let _ = frames_tx.send((frame.width, frame.height));
+                        Ok(())
+                    };
+                    let _ = session.run(&mut sink, &stop);
+                });
+                Ok(())
+            }
+        }),
+    );
+    (pairing, frames, stop)
+}
+
+/// A phone's browser, played by str0m, pairing over `/whip` at `url`.
+fn phone_at(url: &str, size: (usize, usize)) -> crate::testing::FakePhone {
+    crate::testing::FakePhone::connect(size, |offer| {
+        match request(url, "POST", &format!("/whip?t={}", token_of(url)), offer) {
             (201, answer) => Ok(answer),
             (status, body) => Err(format!("{status}: {body}")),
         }
     })
-    .unwrap();
+    .unwrap()
+}
+
+/// The session a paired browser is handed must decode its frames.
+#[test]
+fn a_paired_browser_streams_frames() {
+    let (pairing, frames, stop) = streaming_server(&[LOCAL]);
+    let _phone = phone_at(pairing.url(), (320, 240));
     let got = frames
         .recv_timeout(Duration::from_secs(20))
         .expect("a frame");
     stop.store(true, Ordering::Relaxed);
     assert_eq!(got, (320, 240));
+}
+
+/// Each address is its own listener, and the media goes over the one the phone
+/// came in at (127.0.0.2: all of 127/8 is loopback on Linux).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_phone_pairs_at_any_offered_address() {
+    let second: IpAddr = "127.0.0.2".parse().unwrap();
+    let (pairing, frames, stop) = streaming_server(&[LOCAL, second]);
+    let urls: Vec<&str> = pairing.offers().iter().map(|o| o.url.as_str()).collect();
+    assert_eq!(urls.len(), 2);
+    assert!(urls[1].starts_with("http://127.0.0.2:"), "{urls:?}");
+    assert_eq!(
+        token_of(urls[0]),
+        token_of(urls[1]),
+        "one token for the start"
+    );
+    let token = token_of(urls[1]);
+    assert_eq!(request(urls[1], "GET", &format!("/?t={token}"), "").0, 200);
+    let _phone = phone_at(urls[1], (160, 120));
+    let got = frames
+        .recv_timeout(Duration::from_secs(20))
+        .expect("a frame");
+    stop.store(true, Ordering::Relaxed);
+    assert_eq!(got, (160, 120));
+}
+
+#[test]
+fn a_start_offers_every_address_it_could_listen_at() {
+    let start = |ips: &[&str]| {
+        PairingServer::start(
+            PairingOptions {
+                addresses: ips
+                    .iter()
+                    .map(|ip| Address::given(ip.parse().unwrap()))
+                    .collect(),
+                port: 0,
+                decoder: Backend::Openh264,
+                cert_dir: None,
+                tailscale_https: false,
+            },
+            |_| Ok(()),
+        )
+    };
+    // 192.0.2.1 (documentation space) is nobody's: it cannot be listened at.
+    let pairing = start(&["192.0.2.1", "127.0.0.1"]).unwrap();
+    assert_eq!(pairing.offers().len(), 1);
+    assert!(
+        pairing.url().starts_with("https://127.0.0.1:"),
+        "{}",
+        pairing.url()
+    );
+    assert!(!pairing.offers()[0].trusted);
+    assert!(start(&["192.0.2.1"]).is_err());
+    assert!(start(&[]).is_err());
 }
