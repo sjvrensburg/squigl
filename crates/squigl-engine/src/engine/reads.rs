@@ -367,6 +367,12 @@ impl Engine {
         Reply::Done
     }
 
+    /// Whether a read is in flight or still to come (a "read all" under way).
+    pub(super) fn reads_busy(&self) -> bool {
+        let r = &self.reads;
+        r.pending.is_some() || r.retry.is_some() || !r.queue.is_empty() || r.read_all_armed
+    }
+
     /// Drops every erasure (a rotation: they are in view space).
     pub(super) fn reads_erase_all(&mut self) {
         self.reads.erased.clear();
@@ -810,6 +816,7 @@ impl Engine {
         self.reads.events.push(super::Event::HistoryAppended(entry));
         let read = ReadResult {
             label: request.label,
+            selection: request.selection,
             result,
         };
         self.reads.results.push(read.clone());
@@ -1159,7 +1166,76 @@ mod tests {
 
     /// An engine showing a 400x300 image, reading with `readers` (in that order)
     /// and detecting with `detector`, once the image is shown.
+    /// What a fake voice was asked to say, and which utterance the test has let end.
+    #[derive(Default)]
+    struct VoiceLog {
+        said: Vec<(u64, String)>,
+        ended: u64,
+        stops: usize,
+        configured: Option<(Option<String>, f32)>,
+    }
+
+    /// A voice that says nothing: it notes what it was given, and an utterance ends
+    /// when the test says (`finish`) or it is stopped.
+    #[derive(Clone, Default)]
+    struct FakeVoice(Arc<Mutex<VoiceLog>>);
+
+    impl FakeVoice {
+        fn said(&self) -> Vec<String> {
+            self.0
+                .lock()
+                .unwrap()
+                .said
+                .iter()
+                .map(|(_, t)| t.clone())
+                .collect()
+        }
+        /// Ends the utterance being said.
+        fn finish(&self) {
+            let mut log = self.0.lock().unwrap();
+            log.ended = log.said.last().map_or(0, |(id, _)| *id);
+        }
+    }
+
+    impl crate::speech::Voice for FakeVoice {
+        fn say(&mut self, id: u64, text: &str) -> Result<()> {
+            self.0.lock().unwrap().said.push((id, text.into()));
+            Ok(())
+        }
+        fn stop(&mut self) {
+            let mut log = self.0.lock().unwrap();
+            log.stops += 1;
+            log.ended = log.said.last().map_or(0, |(id, _)| *id);
+        }
+        fn ended(&self) -> u64 {
+            self.0.lock().unwrap().ended
+        }
+        fn voices(&self) -> Vec<crate::speech::VoiceInfo> {
+            vec![crate::speech::VoiceInfo {
+                id: "test".into(),
+                name: "Test".into(),
+                language: Some("en".into()),
+            }]
+        }
+        fn configure(&mut self, voice: Option<&str>, rate: f32) -> Result<()> {
+            self.0.lock().unwrap().configured = Some((voice.map(String::from), rate));
+            Ok(())
+        }
+        fn maths(&self, _: &str) -> Option<String> {
+            Some("some maths".into())
+        }
+    }
+
     fn engine(test: &str, readers: &[Reader], detector: Option<Detector>) -> Engine {
+        engine_with_voice(test, readers, detector, None)
+    }
+
+    fn engine_with_voice(
+        test: &str,
+        readers: &[Reader],
+        detector: Option<Detector>,
+        voice: Option<FakeVoice>,
+    ) -> Engine {
         let path =
             std::env::temp_dir().join(format!("squigl-reads-{test}-{}.png", std::process::id()));
         image::RgbaImage::from_fn(400, 300, |x, y| {
@@ -1201,6 +1277,7 @@ mod tests {
                     .clone()
                     .map(|d| Arc::new(d) as Arc<dyn BlockDetector>)
             }),
+            voice: Box::new(move |_| voice.map(|v| Box::new(v) as Box<dyn crate::speech::Voice>)),
         };
         let mut engine = Engine::new(
             config,
@@ -1598,5 +1675,155 @@ mod tests {
         engine.handle(Command::Live).unwrap();
         engine.pump(Instant::now());
         assert!(engine.erased().is_empty());
+    }
+
+    // --- Reading aloud ---------------------------------------------------------
+
+    fn speaking(engine: &Engine) -> Option<(usize, usize, usize)> {
+        engine
+            .state()
+            .speech
+            .value
+            .speaking
+            .as_ref()
+            .map(|s| (s.result, s.start, s.end))
+    }
+
+    #[test]
+    fn a_reading_is_said_a_sentence_at_a_time_and_a_pause_says_it_again() {
+        let reader = Reader::new("first").answers(&[Ok("One here. Then $x$ two.")]);
+        let voice = FakeVoice::default();
+        let mut engine = engine_with_voice("speak", &[reader], None, Some(voice.clone()));
+        assert!(engine.state().speech.value.available);
+        assert_eq!(
+            voice.0.lock().unwrap().configured,
+            Some((None, 1.0)),
+            "the settings are put in force"
+        );
+        assert_eq!(
+            engine.handle(Command::Speak { result: None }).unwrap(),
+            Reply::Unchanged
+        );
+        engine.handle(Command::Read).unwrap();
+        pump_until(&mut engine, |e, _| e.results().len() == 1);
+        assert_eq!(
+            engine.handle(Command::Speak { result: None }).unwrap(),
+            Reply::Done
+        );
+        assert_eq!(voice.said(), ["One here."]);
+        assert_eq!(speaking(&engine), Some((0, 0, 9)));
+
+        assert_eq!(engine.handle(Command::PauseSpeaking).unwrap(), Reply::Done);
+        assert!(engine.state().speech.value.paused);
+        assert_eq!(speaking(&engine), Some((0, 0, 9)), "still where it was");
+        engine.pump(Instant::now());
+        assert_eq!(voice.said().len(), 1, "nothing said while paused");
+        engine.handle(Command::ResumeSpeaking).unwrap();
+        assert_eq!(
+            voice.said(),
+            ["One here.", "One here."],
+            "the sentence again"
+        );
+
+        voice.finish();
+        engine.pump(Instant::now());
+        assert_eq!(voice.said()[2], "Then some maths two.");
+        assert_eq!(speaking(&engine), Some((0, 10, 23)));
+        voice.finish();
+        engine.pump(Instant::now());
+        assert_eq!(speaking(&engine), None, "said");
+        assert_eq!(voice.said().len(), 3);
+    }
+
+    #[test]
+    fn the_page_is_read_aloud_block_by_block_as_each_is_read() {
+        let gate = Gate::closed();
+        let mut reader = Reader::new("first").answers(&[Ok("Words."), Ok("More words.")]);
+        reader.gate = Some(Arc::clone(&gate));
+        let detector = Detector {
+            blocks: vec![
+                block("text", 10, 10, 100, 40),
+                block("text", 10, 100, 150, 40),
+            ],
+            runs: Arc::default(),
+            gate: None,
+        };
+        let voice = FakeVoice::default();
+        let mut engine = engine_with_voice("aloud", &[reader], Some(detector), Some(voice.clone()));
+        // Block mode comes on by itself; nothing is said until a block is read.
+        assert_eq!(engine.handle(Command::ReadAloud).unwrap(), Reply::Done);
+        assert!(engine.block_mode());
+        pump_until(&mut engine, |e, _| e.reading().is_some());
+        assert!(engine.state().speech.value.following);
+        assert!(voice.said().is_empty());
+        gate.open();
+        pump_until(&mut engine, |_, _| voice.said().len() == 1);
+        assert_eq!(voice.said(), ["Words."]);
+        // The block being said is the result's selection, for the picture to show.
+        let (result, ..) = speaking(&engine).unwrap();
+        assert_eq!(engine.results()[result].selection.unwrap().rect.y, 10);
+        pump_until(&mut engine, |e, _| e.results().len() == 2);
+        voice.finish();
+        pump_until(&mut engine, |_, _| voice.said().len() == 2);
+        assert_eq!(voice.said()[1], "More words.");
+        // Back a block, then to the end.
+        assert_eq!(
+            engine.handle(Command::SkipSpeech { delta: -1 }).unwrap(),
+            Reply::Done
+        );
+        assert_eq!(voice.said()[2], "Words.");
+        assert_eq!(
+            engine.handle(Command::SkipSpeech { delta: -1 }).unwrap(),
+            Reply::Unchanged
+        );
+        voice.finish();
+        engine.pump(Instant::now());
+        assert_eq!(voice.said()[3], "More words.", "following on");
+        voice.finish();
+        engine.pump(Instant::now());
+        assert_eq!(speaking(&engine), None);
+        assert!(!engine.state().speech.value.following, "the page is said");
+    }
+
+    #[test]
+    fn new_readings_are_said_as_they_arrive_when_asked() {
+        let reader = Reader::new("first").answers(&[Ok("Hello."), Ok("Again.")]);
+        let voice = FakeVoice::default();
+        let mut engine = engine_with_voice("new", &[reader], None, Some(voice.clone()));
+        engine.handle(Command::Read).unwrap();
+        pump_until(&mut engine, |e, _| e.results().len() == 1);
+        engine.pump(Instant::now());
+        assert!(voice.said().is_empty(), "off by default");
+        let mut config = engine.config().clone();
+        config.speech.speak_new = true;
+        config.speech.rate = 1.5;
+        engine
+            .handle(Command::SetConfig {
+                config: Box::new(config),
+            })
+            .unwrap();
+        assert_eq!(voice.0.lock().unwrap().configured, Some((None, 1.5)));
+        engine.handle(Command::Read).unwrap();
+        pump_until(&mut engine, |_, _| voice.said() == ["Again."]);
+        assert_eq!(engine.handle(Command::StopSpeaking).unwrap(), Reply::Done);
+        assert!(voice.0.lock().unwrap().stops > 0);
+        assert_eq!(speaking(&engine), None);
+    }
+
+    #[test]
+    fn without_a_voice_nothing_is_said() {
+        let reader = Reader::new("first").answers(&[Ok("Hello.")]);
+        let mut engine = engine("novoice", &[reader], None);
+        assert!(!engine.state().speech.value.available);
+        engine.handle(Command::Read).unwrap();
+        pump_until(&mut engine, |e, _| e.results().len() == 1);
+        assert_eq!(
+            engine.handle(Command::Speak { result: None }).unwrap(),
+            Reply::Unchanged
+        );
+        let events = engine.pump(Instant::now());
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Notice(n) if n.text.contains("not available"))));
     }
 }

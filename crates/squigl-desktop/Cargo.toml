@@ -11,7 +11,7 @@ publish = false
 # Serve the built UI (ui/dist, embedded) rather than Vite's dev server at devUrl.
 # On by default so a plain `cargo build` makes a working app; for hot reload run
 # `npm run dev` in ui/ and `cargo run -p squigl-desktop --no-default-features`.
-default = ["custom-protocol", "local-model"]
+default = ["custom-protocol", "local-model", "speech"]
 custom-protocol = ["tauri/custom-protocol"]
 # System libavcodec instead of openh264: multithreaded, and with no size ceiling.
 # Magnifying a 3840x2160 replay on the Ubuntu box it drew 21 fps against
@@ -22,6 +22,9 @@ ffmpeg = ["squigl-core/ffmpeg"]
 # blocks; ONNX Runtime, downloaded prebuilt at build time). The models themselves
 # download only when the person agrees (Command::PrepareModel).
 local-model = ["dep:squigl-models"]
+# Reading aloud: the system's speech (on Linux, speech-dispatcher: building needs
+# libspeechd-dev) and MathCAT for maths.
+speech = ["dep:squigl-speech"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -32,6 +35,7 @@ squigl-engine = { path = "../squigl-engine" }
 # `testing` for --dev-fake-phone (str0m and openh264, which core has anyway).
 squigl-pairing = { path = "../squigl-pairing", features = ["testing"] }
 squigl-models = { path = "../squigl-models", optional = true }
+squigl-speech = { path = "../squigl-speech", optional = true }
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

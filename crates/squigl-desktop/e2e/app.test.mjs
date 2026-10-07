@@ -677,3 +677,69 @@ describe("reading", () => {
     assert.deepEqual(await hidden(), [false, "visible"]);
   });
 });
+
+describe("reading aloud", () => {
+  let s;
+  let backend;
+  // What the voice (--dev-fake-voice: says nothing, 0.4 s an utterance) was given.
+  const spoken = () => s.execute(`return window.__TAURI_INTERNALS__.invoke("dev_spoken");`);
+  const current = () =>
+    s.execute(
+      `return [...document.querySelectorAll(".results li.speaking .current")].map((e) => e.textContent).join("");`,
+    );
+  before(async () => {
+    backend = await fakeBackend();
+    backend.answer = "One here. Then $\\frac{1}{2}$ ends.";
+    s = await Session.start([
+      "--test-pattern",
+      "--dev-probe",
+      "--dev-fake-voice",
+      "--dev-backend",
+      `http://127.0.0.1:${backend.address().port}/v1`,
+    ]);
+    await until(() => s.probe("drawn"), "the first frame", 30000);
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("");
+    await until(() => s.execute(`return document.querySelectorAll(".results li").length === 1;`), "a reading");
+  });
+  after(async () => {
+    await s?.quit();
+    backend?.close();
+  });
+
+  test("s reads the reading aloud a sentence at a time, the sentence boxed as it is said", async () => {
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("s");
+    await until(async () => (await spoken()).length >= 1, "the first sentence");
+    assert.equal((await spoken())[0], "One here.");
+    assert.equal(await current(), "One here.");
+    await until(async () => (await spoken()).length === 2, "the second sentence");
+    assert.equal((await spoken())[1], "Then some maths ends.", "maths said in words");
+    await until(
+      async () => s.execute(`return !!document.querySelector(".results li.speaking .math.current");`),
+      "the formula in the sentence boxed",
+    );
+    await until(async () => (await current()) === "", "the reading said");
+  });
+
+  test(". pauses and goes on with the sentence again, S stops", async () => {
+    const before = (await spoken()).length;
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("s");
+    await until(async () => (await spoken()).length === before + 1, "speaking");
+    await s.press(".");
+    await until(
+      async () => s.execute(`return document.querySelector(".results li.speaking .badge")?.textContent ?? "";`).then((t) => t.includes("paused")),
+      "paused",
+    );
+    await sleep(800);
+    assert.equal((await spoken()).length, before + 1, "nothing said while paused");
+    await s.press(".");
+    await until(async () => (await spoken()).length === before + 2, "the sentence again");
+    assert.equal((await spoken()).at(-1), "One here.");
+    await s.press("S");
+    await until(async () => (await current()) === "", "stopped");
+    await sleep(800);
+    assert.equal((await spoken()).length, before + 2, "nothing more after Stop");
+  });
+});

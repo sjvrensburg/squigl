@@ -20,6 +20,7 @@ pub mod math;
 pub mod model;
 pub mod paths;
 pub mod render;
+pub mod speech;
 pub mod stream;
 pub mod transcribe;
 pub mod typeset;

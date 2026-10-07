@@ -11,16 +11,35 @@ export type Part =
 
 export type Run =
   | { kind: "text"; spans: Span[] }
-  | { kind: "math"; source: string; display: boolean; mathml: string | null; confidence: Confidence; alternates: string[] };
+  | {
+      kind: "math";
+      source: string;
+      display: boolean;
+      mathml: string | null;
+      confidence: Confidence;
+      alternates: string[];
+      /** In the sentence being read aloud. */
+      current: boolean;
+    };
 
 const WORSE: Record<Confidence, number> = { steady: 0, wavering: 1, hesitant: 2 };
+
+/** [a, b) cut where it enters and leaves `cur`, each piece with whether it is inside. */
+function pieces(a: number, b: number, cur: [number, number] | null): [number, number, boolean][] {
+  if (!cur) return [[a, b, false]];
+  const cuts = [a, Math.min(Math.max(cur[0], a), b), Math.min(Math.max(cur[1], a), b), b];
+  const out: [number, number, boolean][] = [];
+  for (let i = 0; i < 3; i++) if (cuts[i + 1]! > cuts[i]!) out.push([cuts[i]!, cuts[i + 1]!, i === 1]);
+  return out;
+}
 
 /**
  * The reading as runs to show: its text runs split by confidence (neighbouring
  * steady tokens joined), its maths runs marked by their least sure token. Without
- * tokens that rebuild the text exactly, everything is steady.
+ * tokens that rebuild the text exactly, everything is steady. `current` is the
+ * sentence being read aloud (UTF-16 offsets), marked on what it covers.
  */
-export function runs(r: Reading, t: Thresholds, parts: Part[]): Run[] {
+export function runs(r: Reading, t: Thresholds, parts: Part[], current: [number, number] | null = null): Run[] {
   const tokens = r.tokens?.length && r.tokens.map((k) => k.text).join("") === r.text ? r.tokens : null;
   // Each token's place in the text, in UTF-16 units (a JS string's).
   const placed: { start: number; end: number; c: Confidence; alternates: string[] }[] = [];
@@ -42,15 +61,22 @@ export function runs(r: Reading, t: Thresholds, parts: Part[]): Run[] {
         null,
       );
       const c = worst?.c ?? "steady";
-      return { ...p, confidence: c, alternates: c === "steady" ? [] : (worst?.alternates ?? []) };
+      const inside = !!current && current[0] < p.end && current[1] > p.start;
+      return { ...p, confidence: c, alternates: c === "steady" ? [] : (worst?.alternates ?? []), current: inside };
     }
-    if (!tokens) return { kind: "text", spans: [{ text: p.text, confidence: "steady", alternates: [] }] };
+    // Without tokens the part is one steady stretch.
+    const stretches = tokens
+      ? over.map((k) => ({ start: Math.max(k.start, p.start), end: Math.min(k.end, p.end), c: k.c, alternates: k.alternates }))
+      : [{ start: p.start, end: p.end, c: "steady" as Confidence, alternates: [] as string[] }];
     const spans: Span[] = [];
-    for (const k of over) {
-      const text = r.text.slice(Math.max(k.start, p.start), Math.min(k.end, p.end));
-      const last = spans[spans.length - 1];
-      if (last && k.c === "steady" && last.confidence === "steady") last.text += text;
-      else spans.push({ text, confidence: k.c, alternates: k.alternates });
+    for (const k of stretches) {
+      for (const [a, b, inside] of pieces(k.start, k.end, current)) {
+        // The part's own text: offsets are the reading's, the part's text starts at p.start.
+        const text = p.text.slice(a - p.start, b - p.start);
+        const last = spans[spans.length - 1];
+        if (last && k.c === "steady" && last.confidence === "steady" && !!last.current === inside) last.text += text;
+        else spans.push({ text, confidence: k.c, alternates: k.alternates, ...(inside ? { current: true } : {}) });
+      }
     }
     return { kind: "text", spans };
   });
