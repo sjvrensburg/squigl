@@ -399,6 +399,15 @@ crates/
 - **The dialog** adds a firewall hint.
 - **Still to do:** confirm the Windows prompt and the Tailscale adapter's profile in the VM. Add `NSLocalNetworkUsageDescription` with the macOS bundle (Phase 6).
 
+**Progress (5d, 2026-10-07): zoom and torch for a paired phone.**
+
+- **The control channel.** The phone's page opens a data channel. On it, the page reports its camera (zoom range, zoom, torch) when the channel opens and once for each message, and applies `{"zoom"}` and `{"torch"}` with `applyConstraints`. The camera's zoom is asked for in `getUserMedia`, since Chrome hides it otherwise.
+- **`WebrtcControl`** sends only the newest zoom and torch. It shows what was asked until the phone has answered every message.
+- **The engine:** a paired phone's capabilities are what it reports. Its zoom takes any ratio in range at once, rather than walking scrcpy's steps.
+- **The desktop app:** the toolbar gains a camera zoom slider (logarithmic) and a torch toggle whenever the source has them, for the ADB phone too, which had none in this app. Shortcuts: `[` and `]` for zoom, `t` for the torch.
+- **Tests:** str0m's fake phone answers controls like the page. Tests cover the control's bookkeeping, a real session's control round trip, and the engine. An end-to-end test (`--dev-fake-phone`) turns the torch on and zooms to the end from the keyboard, and checks the phone received both.
+- **Still to do:** try it on real phones. Chrome on Android has zoom and torch on most back cameras. Safari on iOS has zoom from iOS 17 and no torch. Firefox has neither.
+
 **Exit criteria:**
 
 - QR pairing works on Linux and on Windows (in the VM). On macOS *(tester)*.

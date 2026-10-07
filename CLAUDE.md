@@ -155,7 +155,14 @@ this crate's synchronous style with no async runtime) to answer the offer, restr
 H.264 only (`clear_codecs().enable_h264(true)`); `run` then blocks decoding
 frames the same way `CameraSession::run` does. str0m's H.264 depacketizer already hands
 back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` unchanged --
-no format conversion between the two sources. LAN-only by design: a host ICE candidate
+no format conversion between the two sources. Camera controls go over a data channel the
+page opens (`CONTROL_CHANNEL`, JSON text): the page reports a `RemoteCamera` (zoom range,
+zoom, torch -- `getCapabilities`/`getSettings`; `getUserMedia` asks `zoom: true`, without
+which Chrome hides it) on opening and exactly once per message, and takes `{"zoom": r}` /
+`{"torch": b}` (`applyConstraints`); `WebrtcSource::control()` is a `WebrtcControl`
+usable from any thread, keeping only the newest zoom and torch to send (the session loop
+wakes at least every 50 ms to send them) and showing what was asked until every message
+is answered, so a stale report does not jump a slider back. LAN-only by design: a host ICE candidate
 on the bound interface, no STUN/TURN, no auth.
 
 `crates/squigl-cli` is a clap CLI over this library (`linux.rs`; on other OSes
@@ -230,8 +237,11 @@ config's `options`/`resolution`, which are kept while another source is in use),
 `TestPattern` or `Network` (a phone paired by QR code: `Shared::pair`/`Engine::pair`
 hands a session over -- a second replaces the first -- and the worker streams it,
 sized at its first frame, then waits for the next; until one comes the status is
-`Connecting`); `SourceSpec::capabilities()` says which camera controls exist (only
-the phone has zoom, torch and facing; `set_zoom` is a no-op without), and
+`Connecting`); `SourceSpec::capabilities()` says which camera controls exist (the
+ADB phone has zoom, torch and facing; `set_zoom` is a no-op without), and
+`Shared::capabilities()` adds a paired phone's from its `WebrtcControl` (zoom and
+torch as its camera reports them: its zoom is any ratio in range, sent at once and
+never walked in steps, and nothing of it touches the ADB phone's `options`), and
 `Shared::use_source` switches through a restart (the 1.5 s camera-release grace only
 between two phone sessions);
 `geometry.rs`: `Crop` and `Selection` in *view* (rotated) coordinates, mapped back to
@@ -303,7 +313,8 @@ Hidden flags `--dev-keys "r + m"`, `--dev-snapshot-after SECS --dev-snapshot-pat
 FILE` (the canvas as PNG, then quit), `--dev-stats` (frames drawn per second and the
 request-to-drawn times, to the log), `--dev-canvas2d`, `--dev-config FILE` (start from
 the defaults, save there), `--dev-text-scale F`, `--dev-window-size WxH`,
-`--dev-pairing-bind IP,...` (pair at 127.0.0.1, say, not this machine's addresses; comma-separated, since msedgedriver keeps only the last of a repeated switch) and `--dev-probe` (`window.squiglProbe`:
+`--dev-fake-phone` (pairs `FakePhone` at start, with zoom and a torch; `dev_phone_camera`
+reads what it was asked: the e2e test of the camera controls), `--dev-pairing-bind IP,...` (pair at 127.0.0.1, say, not this machine's addresses; comma-separated, since msedgedriver keeps only the last of a repeated switch) and `--dev-probe` (`window.squiglProbe`:
 the last frame's header, and drawn pixels beside `Engine::displayed_pixel`, the
 engine's reference -- what `e2e/app.test.mjs` checks each display mode with) drive it
 from a script; page errors and warnings go to the app's log (target `page`). The page
@@ -321,6 +332,10 @@ shows each network's QR code (a radio group picks it when there are several), th
 address with Copy, what the phone's browser will ask, and what to do when the phone is on
 another network; `pairing_start` is async (a `tailscale cert` can take a while); a phone
 that pairs goes to the engine through the host (`Host::pair`) and closes the dialog.
+The camera's own zoom (a slider, 0-100 over the log of the range, `lib/camera.ts`, so
+its ends are exact and an arrow key is a visible step; `[`/`]` move 4 grid steps) and
+torch (`t`) appear in the toolbar when the stream slice's capabilities have them.
+After changing the UI, `npm run build` before `cargo build`: the binary embeds `ui/dist`.
 Toolbar icons are Lucide's (`@lucide/svelte`, ISC, in NOTICE), drawn in `currentColor`
 so they follow the theme. In a small window (`max-width: 48rem` or `max-height: 28rem`:
 a small screen or large text) the toolbar goes compact -- icons alone, no key hints --
@@ -468,6 +483,6 @@ white-balance control exists at any version.
 Camera→V4L2 only (no audio, display mirroring, or input control). Two camera sources:
 USB/TCP-IP ADB (`--connect`; the one-time `--tcpip` switch needs USB) via scrcpy-server,
 and `--webrtc` (any browser, no app, LAN only -- see `webrtc_source.rs` above; no
-STUN/TURN means it does not reach a phone outside the local network, and it has none of
-the zoom/torch/facing control the ADB path gets from scrcpy). Cross-platform
+STUN/TURN means it does not reach a phone outside the local network, and of the ADB path's
+camera controls it has zoom and torch, when the phone's browser offers them, not facing). Cross-platform
 virtual-camera sinks (Windows/macOS) are explicitly out of scope — V4L2 is Linux-only.

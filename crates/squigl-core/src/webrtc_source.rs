@@ -16,20 +16,158 @@
 //! str0m's H.264 depacketizer hands back complete Annex-B access units (start-code
 //! delimited, exactly what [`crate::decode::Decoder::decode`] already expects from the
 //! scrcpy protocol path), so no format conversion is needed between the two sources.
+//!
+//! Camera controls travel on a data channel the page opens, labelled
+//! [`CONTROL_CHANNEL`], as JSON text: the page reports its camera as a
+//! [`RemoteCamera`] when the channel opens and after every change, and takes
+//! `{"zoom": ratio}` and `{"torch": on}` (`MediaStreamTrack.applyConstraints`). A
+//! page without the channel, or a camera without either control, simply has none
+//! ([`WebrtcControl::camera`]).
 
 use crate::decode::{self, Decoder, YuvFrame};
 use crate::error::{Error, Result};
 use crate::session::STALL_TIMEOUT;
 use crate::sink::FrameSink;
+use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use str0m::change::{SdpAnswer, SdpOffer};
+use str0m::channel::ChannelId;
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 
 /// Max UDP datagram str0m expects to handle (matches its own internal ceiling).
 const RECV_BUF: usize = 2000;
+
+/// The label of the data channel camera controls travel on.
+pub const CONTROL_CHANNEL: &str = "squigl-control";
+
+/// The longest the session loop waits on the socket, so a control asked for from
+/// another thread goes out within about this long.
+const CONTROL_LATENCY: Duration = Duration::from_millis(50);
+
+/// What the phone's page says about its camera (`MediaStreamTrack.getCapabilities`
+/// and `getSettings`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RemoteCamera {
+    /// The zoom's range, if the camera has one.
+    pub zoom_range: Option<(f32, f32)>,
+    /// The zoom it is at.
+    #[serde(default = "one")]
+    pub zoom: f32,
+    /// Whether the torch is on, if the camera has one.
+    pub torch: Option<bool>,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+/// A session's camera controls, usable from any thread while [`WebrtcSource::run`]
+/// blocks (as [`crate::CameraControl`] is for the ADB session). Asking for a zoom
+/// or torch queues it; only the newest of each goes out.
+#[derive(Clone, Default)]
+pub struct WebrtcControl(Arc<Mutex<ControlState>>);
+
+#[derive(Default)]
+struct ControlState {
+    camera: Option<RemoteCamera>,
+    zoom: Option<f32>,
+    torch: Option<bool>,
+    /// What is still to be sent.
+    send_zoom: Option<f32>,
+    send_torch: Option<bool>,
+    /// Messages sent and not yet answered (the page reports once per message).
+    unanswered: usize,
+}
+
+impl WebrtcControl {
+    /// The camera as the phone last reported it; `None` until it has (or if its
+    /// page has no control channel).
+    pub fn camera(&self) -> Option<RemoteCamera> {
+        self.0.lock().unwrap().camera
+    }
+
+    /// The zoom last asked for, else the one reported.
+    pub fn zoom(&self) -> Option<f32> {
+        let state = self.0.lock().unwrap();
+        state.zoom.or(state.camera.map(|c| c.zoom))
+    }
+
+    /// The torch last asked for, else the one reported.
+    pub fn torch(&self) -> Option<bool> {
+        let state = self.0.lock().unwrap();
+        state.torch.or(state.camera.and_then(|c| c.torch))
+    }
+
+    /// Asks for the zoom `ratio`, clamped to the camera's range. Returns the zoom
+    /// asked for, or `None` if the camera has no zoom.
+    pub fn set_zoom(&self, ratio: f32) -> Option<f32> {
+        let mut state = self.0.lock().unwrap();
+        let (min, max) = state.camera?.zoom_range?;
+        let ratio = ratio.clamp(min, max);
+        state.zoom = Some(ratio);
+        state.send_zoom = Some(ratio);
+        Some(ratio)
+    }
+
+    /// Turns the torch on or off. Returns whether the camera has one.
+    pub fn set_torch(&self, on: bool) -> bool {
+        let mut state = self.0.lock().unwrap();
+        if state.camera.and_then(|c| c.torch).is_none() {
+            return false;
+        }
+        state.torch = Some(on);
+        state.send_torch = Some(on);
+        true
+    }
+
+    /// Takes in a report from the page. Once the page has answered everything
+    /// asked of it, its own word stands (until then, what was asked for: a report
+    /// in between would jump a slider back).
+    fn reported(&self, text: &str) {
+        match serde_json::from_str::<RemoteCamera>(text) {
+            Ok(camera) => {
+                let mut state = self.0.lock().unwrap();
+                state.unanswered = state.unanswered.saturating_sub(1);
+                if state.unanswered == 0 && state.send_zoom.is_none() && state.send_torch.is_none()
+                {
+                    state.zoom = None;
+                    state.torch = None;
+                }
+                state.camera = Some(camera);
+            }
+            Err(e) => log::debug!("ignoring a control message ({e}): {text}"),
+        }
+    }
+
+    /// The messages waiting to go to the page.
+    fn outgoing(&self) -> Vec<String> {
+        let mut state = self.0.lock().unwrap();
+        let zoom = state.send_zoom.take().map(|z| format!(r#"{{"zoom":{z}}}"#));
+        let torch = state
+            .send_torch
+            .take()
+            .map(|t| format!(r#"{{"torch":{t}}}"#));
+        let messages: Vec<String> = zoom.into_iter().chain(torch).collect();
+        state.unanswered += messages.len();
+        messages
+    }
+
+    /// A message that never went out: no answer is coming for it.
+    fn answered(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.unanswered = state.unanswered.saturating_sub(1);
+    }
+
+    /// Whether anything waits to be sent.
+    fn pending(&self) -> bool {
+        let state = self.0.lock().unwrap();
+        state.send_zoom.is_some() || state.send_torch.is_some()
+    }
+}
 
 pub struct WebrtcSource {
     rtc: Rtc,
@@ -43,6 +181,9 @@ pub struct WebrtcSource {
     /// or the wrong network), which would otherwise hang the session thread forever and
     /// leave the server's one-session-at-a-time slot stuck.
     accept_time: Instant,
+    control: WebrtcControl,
+    /// The control channel, once the page has opened it.
+    channel: Option<ChannelId>,
 }
 
 impl WebrtcSource {
@@ -84,9 +225,16 @@ impl WebrtcSource {
                 connected: false,
                 last_activity: Instant::now(),
                 accept_time: Instant::now(),
+                control: WebrtcControl::default(),
+                channel: None,
             },
             answer.to_sdp_string(),
         ))
+    }
+
+    /// The session's camera controls (zoom and torch, when the page reports them).
+    pub fn control(&self) -> WebrtcControl {
+        self.control.clone()
     }
 
     /// Blocks, decoding the incoming stream and handing each frame to `sink`, until:
@@ -112,6 +260,18 @@ impl WebrtcSource {
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Ok(None);
+            }
+            if let Some(id) = self.channel.filter(|_| self.control.pending()) {
+                for message in self.control.outgoing() {
+                    let written = self
+                        .rtc
+                        .channel(id)
+                        .map(|mut c| c.write(false, message.as_bytes()));
+                    if !matches!(written, Some(Ok(true))) {
+                        log::warn!("could not send {message} to the phone");
+                        self.control.answered();
+                    }
+                }
             }
 
             let timeout = match self.rtc.poll_output().map_err(str0m_err)? {
@@ -143,12 +303,36 @@ impl WebrtcSource {
                         }
                     }
                 }
+                Output::Event(Event::ChannelOpen(id, label)) => {
+                    log::debug!("data channel {label:?} open");
+                    if label == CONTROL_CHANNEL {
+                        self.channel = Some(id);
+                    }
+                    continue;
+                }
+                Output::Event(Event::ChannelData(data)) => {
+                    log::debug!(
+                        "control message on {:?}: {} bytes",
+                        data.id,
+                        data.data.len()
+                    );
+                    if Some(data.id) == self.channel && !data.binary {
+                        self.control.reported(&String::from_utf8_lossy(&data.data));
+                    }
+                    continue;
+                }
+                Output::Event(Event::ChannelClose(id)) => {
+                    if Some(id) == self.channel {
+                        self.channel = None;
+                    }
+                    continue;
+                }
                 Output::Event(_) => continue,
             };
 
             let wait = timeout
                 .saturating_duration_since(Instant::now())
-                .clamp(Duration::from_millis(1), Duration::from_millis(500));
+                .clamp(Duration::from_millis(1), CONTROL_LATENCY);
             self.socket.set_read_timeout(Some(wait))?;
 
             match self.socket.recv_from(&mut buf) {
@@ -184,4 +368,50 @@ impl WebrtcSource {
 
 fn str0m_err(e: str0m::RtcError) -> Error {
     Error::Protocol(format!("WebRTC error: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CAMERA: &str = r#"{"zoom_range":[1,8],"zoom":1,"torch":false}"#;
+
+    #[test]
+    fn nothing_is_asked_of_a_camera_that_has_not_reported() {
+        let control = WebrtcControl::default();
+        assert_eq!(control.set_zoom(2.0), None);
+        assert!(!control.set_torch(true));
+        assert!(control.outgoing().is_empty());
+        // A camera with neither control.
+        control.reported(r#"{"zoom_range":null,"zoom":1,"torch":null}"#);
+        assert_eq!(control.set_zoom(2.0), None);
+        assert!(!control.set_torch(true));
+    }
+
+    #[test]
+    fn only_the_newest_ask_goes_out_and_is_shown_until_answered() {
+        let control = WebrtcControl::default();
+        control.reported(CAMERA);
+        assert_eq!(control.set_zoom(2.0), Some(2.0));
+        assert_eq!(control.set_zoom(20.0), Some(8.0), "clamped to the range");
+        assert!(control.set_torch(true));
+        assert_eq!(control.outgoing(), [r#"{"zoom":8}"#, r#"{"torch":true}"#]);
+        assert!(!control.pending());
+        // A report from before the page took them in does not move what is shown.
+        control.reported(CAMERA);
+        assert_eq!((control.zoom(), control.torch()), (Some(8.0), Some(true)));
+        // Once both are answered the phone's word stands, even where it differs.
+        control.reported(r#"{"zoom_range":[1,8],"zoom":7.5,"torch":true}"#);
+        assert_eq!((control.zoom(), control.torch()), (Some(7.5), Some(true)));
+        assert_eq!(control.camera().unwrap().zoom_range, Some((1.0, 8.0)));
+    }
+
+    #[test]
+    fn a_report_may_leave_out_the_zoom() {
+        let control = WebrtcControl::default();
+        control.reported(r#"{"zoom_range":null,"torch":true}"#);
+        assert_eq!(control.zoom(), Some(1.0));
+        control.reported("not json");
+        assert_eq!(control.torch(), Some(true));
+    }
 }

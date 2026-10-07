@@ -11,7 +11,7 @@ use squigl_core::decode::YuvFrame;
 use squigl_core::sink::FrameSink;
 use squigl_core::{
     adb::AdbDevice, CameraControl, CameraInfo, CameraSession, ConnectOptions, Facing, Replay,
-    TestPattern, WebrtcSource, ZOOM_STEP,
+    TestPattern, WebrtcControl, WebrtcSource, ZOOM_STEP,
 };
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -212,6 +212,9 @@ pub struct Shared {
     zoom_changed: Condvar,
     /// A paired phone's session, from [`Shared::pair`] until the worker takes it.
     paired: Mutex<Option<WebrtcSource>>,
+    /// The streaming paired phone's camera controls (its zoom and torch, which it
+    /// reports itself: unlike the ADB phone's, nothing is tracked here).
+    remote: Mutex<Option<WebrtcControl>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -268,8 +271,34 @@ impl Shared {
         self.config.lock().unwrap().source.clone()
     }
 
+    /// What the source can do; for a paired phone, what its camera reported.
     pub fn capabilities(&self) -> Capabilities {
-        self.config.lock().unwrap().source.capabilities()
+        let source = self.source();
+        if source != SourceSpec::Network {
+            return source.capabilities();
+        }
+        let camera = self.remote().and_then(|r| r.camera());
+        Capabilities {
+            zoom: camera.and_then(|c| c.zoom_range).is_some(),
+            torch: camera.and_then(|c| c.torch).is_some(),
+            facing: false,
+        }
+    }
+
+    /// The paired phone's controls, while it is the source and streaming.
+    fn remote(&self) -> Option<WebrtcControl> {
+        if self.source() != SourceSpec::Network {
+            return None;
+        }
+        self.remote.lock().unwrap().clone()
+    }
+
+    /// The camera's zoom range, once known.
+    pub fn zoom_range(&self) -> Option<(f32, f32)> {
+        match self.remote() {
+            Some(remote) => remote.camera().and_then(|c| c.zoom_range),
+            None => self.camera().and_then(|c| c.zoom_range),
+        }
     }
 
     /// Switches to `source` (through a restart) unless it is already in use.
@@ -315,11 +344,17 @@ impl Shared {
 
     /// The zoom ratio the user asked for (what a slider should show).
     pub fn zoom(&self) -> f32 {
+        if let Some(remote) = self.remote() {
+            return remote.zoom().unwrap_or(1.0);
+        }
         steps_to_zoom(self.zoom.lock().unwrap().target)
     }
 
     /// The zoom ratio the phone is believed to be at right now.
     pub fn zoom_applied(&self) -> f32 {
+        if let Some(remote) = self.remote() {
+            return remote.camera().map_or(1.0, |c| c.zoom);
+        }
         steps_to_zoom(self.zoom.lock().unwrap().applied)
     }
 
@@ -328,10 +363,17 @@ impl Shared {
     /// up, and remembered for the next connection either way. Returns whether the
     /// target moved: a value that snaps back to the current grid step (a slider
     /// re-rounding what it shows) is no change, and so is any zoom while the source
-    /// has none.
+    /// has none. A paired phone takes any ratio in its range, asked of it at once.
     pub fn set_zoom(&self, zoom: f32) -> bool {
         if !self.capabilities().zoom {
             return false;
+        }
+        if let Some(remote) = self.remote() {
+            let (min, max) = self.zoom_range().unwrap_or((1.0, 1.0));
+            if (remote.zoom().unwrap_or(1.0) - zoom.clamp(min, max)).abs() < 0.005 {
+                return false;
+            }
+            return remote.set_zoom(zoom).is_some();
         }
         let target = zoom_to_steps(zoom);
         let mut state = self.zoom.lock().unwrap();
@@ -348,6 +390,9 @@ impl Shared {
     /// One grid step in (`+1`) or out (`-1`) from the current target. Returns
     /// whether the target moved (it does not below 1x).
     pub fn step_zoom(&self, steps: i32) -> bool {
+        if let Some(remote) = self.remote() {
+            return self.set_zoom(remote.zoom().unwrap_or(1.0) * ZOOM_STEP.powi(steps));
+        }
         let target = self.zoom.lock().unwrap().target + steps;
         self.set_zoom(steps_to_zoom(target.max(0)))
     }
@@ -388,11 +433,19 @@ impl Shared {
     }
 
     pub fn torch(&self) -> bool {
+        if let Some(remote) = self.remote() {
+            return remote.torch().unwrap_or(false);
+        }
         self.config.lock().unwrap().options.torch
     }
 
-    /// Torch on/off: live when a session is up, and remembered for the next one.
+    /// Torch on/off: live when a session is up, and remembered for the next one
+    /// (a paired phone's only while it streams).
     pub fn set_torch(&self, on: bool) {
+        if let Some(remote) = self.remote() {
+            remote.set_torch(on);
+            return;
+        }
         self.config.lock().unwrap().options.torch = on;
         if let Some(control) = self.control.lock().unwrap().clone() {
             if let Err(e) = control.set_torch(on) {
@@ -440,6 +493,7 @@ impl Shared {
             }),
             zoom_changed: Condvar::new(),
             paired: Mutex::new(None),
+            remote: Mutex::new(None),
         }
     }
 
@@ -731,6 +785,8 @@ fn run_paired(
             }
             deliver(shared, tee, session_stop, wake, frame)
         };
+        log::info!("a paired phone is streaming");
+        *shared.remote.lock().unwrap() = Some(session.control());
         // Until frames flow, nothing else would pass a stop or a restart on.
         let done = AtomicBool::new(false);
         let result = std::thread::scope(|scope| {
@@ -746,6 +802,7 @@ fn run_paired(
             done.store(true, Ordering::Relaxed);
             result
         });
+        shared.remote.lock().unwrap().take();
         result.context("paired phone")?;
         if ended() {
             return Ok(());
@@ -1145,7 +1202,6 @@ mod tests {
         let (session, _first) = paired_phone((320, 240));
         worker.shared.pair(session);
         assert_eq!(worker.shared.source(), SourceSpec::Network);
-        assert!(!worker.shared.capabilities().zoom);
         wait_for(|| worker.shared.latest().is_some_and(|f| f.width == 320));
         assert!(matches!(
             worker.shared.status(),
@@ -1159,6 +1215,50 @@ mod tests {
         worker.shared.pair(session);
         wait_for(|| worker.shared.latest().is_some_and(|f| f.width == 160));
         assert_eq!(worker.shared.latest().unwrap().height, 120);
+        worker.stop();
+    }
+
+    /// A paired phone's zoom and torch are what it reports, and go to it live.
+    #[test]
+    fn a_paired_phone_has_the_zoom_and_torch_it_reports() {
+        let mut worker = worker(SourceSpec::TestPattern);
+        let shared = Arc::clone(&worker.shared);
+        assert!(!shared.set_zoom(2.0), "colour bars have no zoom");
+
+        let (session, phone) = paired_phone((160, 120));
+        shared.pair(session);
+        wait_for(|| shared.capabilities().zoom);
+        assert_eq!(
+            shared.capabilities(),
+            Capabilities {
+                zoom: true,
+                torch: true,
+                facing: false
+            }
+        );
+        assert_eq!(shared.zoom_range(), Some((1.0, 8.0)));
+        assert!(shared.set_zoom(2.5));
+        assert!(!shared.set_zoom(2.501), "a slider re-rounding is no change");
+        assert_eq!(shared.zoom(), 2.5);
+        shared.set_torch(true);
+        assert!(shared.torch());
+        wait_for(|| phone.camera().zoom == 2.5 && phone.camera().torch == Some(true));
+        wait_for(|| shared.zoom_applied() == 2.5);
+        assert!(shared.step_zoom(1));
+        assert!((shared.zoom() - 2.5 * ZOOM_STEP).abs() < 1e-4);
+        assert!(shared.set_zoom(100.0));
+        assert_eq!(shared.zoom(), 8.0, "clamped to the phone's range");
+        assert!(!shared.step_zoom(1), "nothing beyond it");
+
+        // Another source has none of it, and the ADB phone's settings are untouched.
+        shared.use_source(SourceSpec::TestPattern);
+        assert_eq!(
+            shared.capabilities(),
+            SourceSpec::TestPattern.capabilities()
+        );
+        assert_eq!(shared.zoom(), 1.0);
+        assert!(!shared.torch());
+        assert_eq!(shared.config.lock().unwrap().options.zoom, None);
         worker.stop();
     }
 
