@@ -389,6 +389,16 @@ crates/
 - **Tests:** a phone pairing over a second address streams frames; the interface naming is table-tested; the end-to-end test picks the second of two addresses from the keyboard.
 - **Still to do:** Tailscale's certificate from a real `tailscale cert`, and pairing a phone on mobile data over Tailscale.
 
+**Progress (5c, 2026-10-06): firewall notes.**
+
+- **`docs/pairing.md`** says what must get through (TCP 8443 or a free port for the page, a UDP port per phone for the video), and how to tell which is blocked.
+- **Per platform:**
+  - Windows: the Defender prompt, Private vs Public profiles, and undoing a Cancel.
+  - macOS: the application firewall, and local network privacy with `NSLocalNetworkUsageDescription`. These come from Apple's documentation and are marked unconfirmed.
+  - Linux: ufw (off on Ubuntu), and Fedora Workstation's default zone, which already allows it.
+- **The dialog** adds a firewall hint.
+- **Still to do:** confirm the Windows prompt and the Tailscale adapter's profile in the VM. Add `NSLocalNetworkUsageDescription` with the macOS bundle (Phase 6).
+
 **Exit criteria:**
 
 - QR pairing works on Linux and on Windows (in the VM). On macOS *(tester)*.

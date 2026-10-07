@@ -192,7 +192,7 @@ tailnet's operator); else it falls back to the self-signed one. The certificate 
 needs a secure context and a LAN IP isn't CA-certifiable, so the phone's browser warns);
 with `cert_dir` it is kept (`pairing.crt`/`.key`/`.names`, the key 0600; its names are
 every offered IP) and remade only when the addresses change, so each phone warns once; the CLI passes none (a fresh one per
-run). Port 8443 unless taken (Firefox keys its exception on host and port). Its
+run). Port 8443 unless taken (Firefox keys its exception on host and port). `docs/pairing.md` is the user-facing account of what a firewall must let in (that TCP port; a free UDP port per session, `webrtc_source.rs` binds port 0) per OS. Its
 `testing` feature has `FakePhone`: str0m as the browser, sending openh264 colour bars
 from 127.0.0.1, which the pairing and engine tests stream through a real session.
 Stopping the server closes the listener, but a connection kept alive goes on hanging
