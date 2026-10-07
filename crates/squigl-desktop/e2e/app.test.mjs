@@ -387,3 +387,46 @@ describe("each UI theme", () => {
     });
   }
 });
+
+describe("a paired phone's camera", () => {
+  let s;
+  // What the fake phone (--dev-fake-phone: str0m playing the phone's browser) has
+  // been asked to do.
+  const phone = () => s.execute(`return window.__TAURI_INTERNALS__.invoke("dev_phone_camera");`);
+  const torchButton = () =>
+    s.execute(
+      `return [...document.querySelectorAll("header button")].find((b) => b.textContent.includes("Torch")) ?? null;`,
+    );
+  before(async () => {
+    s = await Session.start(["--test-pattern", "--dev-fake-phone"]);
+  });
+  after(() => s?.quit());
+
+  test("shows the zoom and torch the phone reports, and both reach it", async () => {
+    const torch = await until(torchButton, "the torch button", 30000);
+    assert.equal(await status(s), "Live");
+    assert.equal(await s.attribute(torch[ELEMENT], "aria-pressed"), "false");
+    // From the keyboard: WebKitWebDriver's click does not reach this button.
+    await s.execute(`arguments[0].focus();`, torch);
+    await s.press("\uE007"); // Enter
+    await until(async () => (await phone())?.torch === true, "the torch on at the phone");
+    assert.equal(await s.attribute(torch[ELEMENT], "aria-pressed"), "true");
+
+    // The slider, from the keyboard: End is the camera's longest zoom.
+    const zoomLabel = () =>
+      s.execute(
+        `return [...document.querySelectorAll("header label")].find((l) => l.textContent.includes("Camera zoom")) ?? null;`,
+      );
+    const label = (await zoomLabel())[ELEMENT];
+    await s.execute(`arguments[0].querySelector("input").focus();`, { [ELEMENT]: label });
+    await s.press(KEY.End);
+    await until(async () => (await phone())?.zoom === 8, "the phone at 8x");
+    await until(async () => (await s.text(label)).includes("8.0×"), "8.0× shown");
+
+    // The shortcuts: [ zooms out, t turns the torch off.
+    await s.type(await canvas(s), "[");
+    await until(async () => (await phone())?.zoom < 8, "the phone zoomed out");
+    await s.type(await canvas(s), "t");
+    await until(async () => (await phone())?.torch === false, "the torch off at the phone");
+  });
+});

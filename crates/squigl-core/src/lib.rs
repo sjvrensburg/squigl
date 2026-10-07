@@ -26,4 +26,4 @@ pub use error::{Error, Result};
 pub use replay::{Recorder, Replay};
 pub use session::{CameraControl, CameraSession, ConnectOptions, Facing, ZOOM_STEP};
 pub use test_pattern::TestPattern;
-pub use webrtc_source::WebrtcSource;
+pub use webrtc_source::{RemoteCamera, WebrtcControl, WebrtcSource};

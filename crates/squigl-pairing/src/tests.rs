@@ -235,3 +235,50 @@ fn a_start_offers_every_address_it_could_listen_at() {
     assert!(start(&["192.0.2.1"]).is_err());
     assert!(start(&[]).is_err());
 }
+
+/// Waits up to 20 s for `done`.
+fn eventually(what: &str, done: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !done() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The phone reports its camera on the control channel, and zoom and torch reach
+/// it while the session streams.
+#[test]
+fn zoom_and_torch_reach_the_phone() {
+    use squigl_core::decode::YuvFrame;
+    let (tx, rx) = mpsc::channel();
+    let phone = crate::testing::FakePhone::connect((160, 120), |offer| {
+        let (session, answer) = WebrtcSource::accept_offer(offer, LOCAL, Backend::Openh264)
+            .map_err(|e| e.to_string())?;
+        tx.send(session).unwrap();
+        Ok(answer)
+    })
+    .unwrap();
+    let mut session = rx.recv().unwrap();
+    let control = session.control();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || session.run(&mut |_: &YuvFrame| Ok(()), &stop)
+    });
+    eventually("the phone's report", || control.camera().is_some());
+    assert_eq!(control.camera(), Some(crate::testing::CAMERA));
+    assert_eq!(control.set_zoom(3.0), Some(3.0));
+    assert!(control.set_torch(true));
+    eventually("the zoom and torch", || {
+        let camera = phone.camera();
+        camera.zoom == 3.0 && camera.torch == Some(true)
+    });
+    // The phone's answer becomes what is shown.
+    eventually("the answer", || control.camera().unwrap().zoom == 3.0);
+    assert_eq!((control.zoom(), control.torch()), (Some(3.0), Some(true)));
+    stop.store(true, Ordering::Relaxed);
+    thread.join().unwrap().unwrap();
+}

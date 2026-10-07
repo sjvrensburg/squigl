@@ -1329,7 +1329,7 @@ impl App {
     /// The phone's own zoom and torch, when the phone reports a zoom range for this
     /// camera. Both apply live over the control channel.
     fn zoom_control(&mut self, ui: &mut egui::Ui) {
-        let Some((lo, hi)) = self.shared().camera().and_then(|c| c.zoom_range) else {
+        let Some((lo, hi)) = self.shared().zoom_range() else {
             return;
         };
         ui.separator();

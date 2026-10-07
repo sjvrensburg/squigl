@@ -815,7 +815,7 @@ fn stream_slice(shared: &Shared, now: Instant) -> StreamSlice {
         facing: shared.facing(),
         zoom: shared.zoom(),
         zoom_applied: shared.zoom_applied(),
-        zoom_range: shared.camera().and_then(|c| c.zoom_range),
+        zoom_range: shared.zoom_range(),
         torch: shared.torch(),
     }
 }

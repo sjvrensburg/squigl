@@ -16,6 +16,9 @@ export type Action =
   | "pan-down"
   | "next-mode"
   | "reading-line"
+  | "camera-zoom-in"
+  | "camera-zoom-out"
+  | "torch"
   | "fullscreen"
   | "settings";
 
@@ -32,6 +35,9 @@ export const ACTIONS: { action: Action; label: string; key: string }[] = [
   { action: "pan-down", label: "Move down", key: "ArrowDown" },
   { action: "next-mode", label: "Next colours", key: "m" },
   { action: "reading-line", label: "Reading line", key: "l" },
+  { action: "camera-zoom-in", label: "Camera zoom in", key: "]" },
+  { action: "camera-zoom-out", label: "Camera zoom out", key: "[" },
+  { action: "torch", label: "Torch on or off", key: "t" },
   { action: "fullscreen", label: "Full screen", key: "f" },
   { action: "settings", label: "Settings", key: "," },
 ];

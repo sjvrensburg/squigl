@@ -7775,6 +7775,7 @@ dependencies = [
  "log",
  "openh264",
  "serde",
+ "serde_json",
  "sha2",
  "str0m",
  "thiserror 2.0.20",
