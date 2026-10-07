@@ -233,8 +233,10 @@ impl Kokoro {
             voices.insert(
                 id.to_string(),
                 bytes
-                    .chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().expect("four bytes")))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|b| f32::from_le_bytes(*b))
                     .collect(),
             );
         }

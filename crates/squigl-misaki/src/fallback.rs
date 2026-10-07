@@ -166,8 +166,10 @@ fn read_safetensors(path: &Path) -> Result<HashMap<String, Tensor>> {
         );
         let raw = data.get(a..b).context("offsets out of range")?;
         let values = raw
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes(c.try_into().expect("four bytes")))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| f32::from_le_bytes(*c))
             .collect();
         out.insert(name, (shape, values));
     }
