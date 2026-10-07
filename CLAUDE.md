@@ -216,8 +216,22 @@ and `PrepareModel`/`CancelModelDownload`); `pump(now)` returns the `Event`s sinc
 last call: every versioned slice in `EngineState` (stream, capture, blocks, reading,
 models, config) whose version moved since it was last sent (commands refresh slices
 too, so `pump` tracks sent versions, not "changed this time"), `Frame { seq }`, and
-`Notice`s. The blocks/reading slices and the result/history events are defined but
-not filled yet -- reads still run in `app.rs` (roadmap Phase 7). `render_planes`
+`Notice`s, plus `ResultAppended`/`ResultsCleared`/`HistoryAppended` (the lists are
+too long to resend as slices). `engine/reads.rs` is reading, moved out of the egui
+window (roadmap Phase 7): the selection (`SetSelection`, a hand edit, drops a block's
+quad and role; `MoveCorner` keeps a quad's other corners), block mode
+(`SetBlockMode`; `pump` re-runs the detector whenever the shown frame is new,
+throttled to `LIVE_DETECT_INTERVAL` live, not while a read holds the GPU; a fresh
+detection hands the selection to the new block with the highest IoU,
+`follow_selection`), erasures (`SetErasures`, the whole list: the front end paints,
+erasing a live picture captures it, they go with their capture), reads (`Read`,
+`ReadAll` -- captures, waits for the capture's own detection, then a snapshot queue
+one read at a time --, `SecondOpinion`, `CancelRead`) on threads that call the
+waker, results (kept per capture and scope; `results_generation` changes when the
+list empties) and the session's `History`. A read refused with "try again shortly"
+(a lost GPU, the model reloading on the CPU) is sent again once the backend is ready,
+up to `RELOAD_RETRIES`. Its tests drive it with a scripted fake reader and
+detector, gated where a test needs something held. `render_planes`
 answers a `view::ViewRequest` (from `view::Viewport::request`: the visible region and
 the largest step keeping >= 1 sent pixel per device pixel) with raw planes
 (`convert::i420_region_planes`, unrotated, chroma sampled where
@@ -261,8 +275,9 @@ trait, `Block`/`Quad` in view space, `Role` (the 25 classes folded into
 text/formula/figure/other -- colour and prompt follow it, `Mode::Formula` for a
 formula block) and the perspective `rectify` (imageproc) a
 non-rectangular block goes through before it is shown or read; `history.rs`: every
-finished read of the session (`App::history`, appended alongside `results`, which
-only ever drops its prefix -- "copy all" relies on that), Markdown export by capture;
+finished read of the session (`Engine::history`, appended alongside the results,
+so the last N history entries are the N results -- "copy all" relies on that),
+Markdown export by capture;
 `typeset.rs`: the `Typesetter` trait and `typeset_source` (the tint colours are the
 front end's); `paths.rs`: the config, cache and pictures directories per OS via the
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
@@ -350,11 +365,9 @@ for a window that is not being drawn.
 
 `crates/squigl-egui` is the egui document-camera window, on an `Engine` (eager
 models; it pumps once per pass, shows `Notice`s in its status line, and reads the
-capture, rotation, config and backends from the engine; erasures follow the
-engine's capture number, so the engine going live on a zoom or a new source drops
-them) (`app.rs`: preview, crop,
-capture, save, and hand erasures (`App::erased`, view-space `erase::Stroke`s -- path
-plus radius -- painted with a brush over the Zoom pane, whose size is in screen
+capture, rotation, config, backends and all of reading from the engine) (`app.rs`:
+preview, crop, capture, save, and hand erasures (the engine's, view-space
+`erase::Stroke`s -- path plus radius -- painted with a brush over the Zoom pane, whose size is in screen
 points, each point mapped back through the rectification by `zoom_to_view`; a
 retake, zoom or rotation drops them; ctrl+wheel is egui's `zoom_delta`, so it never
 reaches the box-resizing wheel); `panes.rs`: which
@@ -413,15 +426,10 @@ segfault), after which `attempts()` yields the CPU only (as it does for `auto` w
 `gpu_present()` -- wgpu's adapter list on D3D12/Metal/Vulkan, asked once -- finds only
 software rasterisers: WebGPU on WARP or llvmpipe read a crop ~10x slower than ONNX
 Runtime's CPU kernels) and both services drop their
-model and reload (`Lifecycle::reload`, phase `Reloading`). In `app.rs` the crop
-is a rectangle plus an optional quad (`Selection`); any hand edit of the crop drops
-the quad (`set_rect`) except dragging a quad corner, which moves that corner and
-refits the rectangle. Block mode (`block_mode`) re-runs the detector whenever the
-shown frame is new (throttled to `LIVE_DETECT_INTERVAL` live, paused while a read
-holds the GPU), so blocks follow zoom and aim; a fresh detection hands the selection
-to the new block with the highest IoU (`follow_selection`, so tab keeps its place and
-an untouched crop tracks its block); "read all" captures first, waits for the
-capture's own detection, then drains a snapshot queue one read at a time. `ort` is pinned to a git commit because the published rc.13 has a different
+model and reload (`Lifecycle::reload`, phase `Reloading`). `app.rs` draws the
+engine's reading state (`engine/reads.rs`) and turns gestures and keys into its
+commands; it keeps only view state (drags, the brush, the typeset textures per
+result, panes, the live enhancement, flushed into the config before a read). `ort` is pinned to a git commit because the published rc.13 has a different
 API (the pin carries ONNX Runtime 1.30; after moving it, run `glmocr_handwriting`, which
 reads `crates/squigl-models/testdata/handwriting/` on WebGPU and CPU against the readings
 recorded there -- a near-tie can flip on a kernel change, so re-record with

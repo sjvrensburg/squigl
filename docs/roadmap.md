@@ -437,6 +437,25 @@ crates/
   - `CancelRead`.
 - **Geometry tests** ported from `app.rs`.
 
+**Progress (2026-10-07):**
+
+- **`squigl-engine/src/engine/reads.rs` holds reading.** It covers the selection (with block quads and roles, corner drags and clamping), block mode and live detection, `follow_selection`, erasures, reads (one, read-all, second opinion, cancel), results per capture and scope, and the history. Saving moved there too. They are commands and accessors on `Engine`, and the blocks and reading slices and the result and history events are filled.
+- **A GPU-lost read is retried by the engine.** A read refused with "try again shortly" is sent again once its model is back (twice at most), rather than only under `--dev-read`.
+- **`app.rs` draws the engine's state and sends commands.** It is 2,959 lines, about 650 of them tests; the rest is view code: drawing, gestures, panes, typesetting.
+- **Tests:** a scripted fake reader and detector (gated where a test must hold one) cover:
+  - the read and the second opinion;
+  - a fresh list for another selection;
+  - read-all waiting for the capture's detection;
+  - `follow_selection`;
+  - the reload retry and giving up;
+  - cancel;
+  - selection editing;
+  - erasures per capture.
+- **Checked with the real models** (WebGPU, Ubuntu box), the dev flags behave as before:
+  - `--dev-detect --dev-read-all` on a handwriting sample;
+  - `--dev-crop --dev-erase --dev-read --dev-second`. The erased word is gone from the reading, and the unreachable second backend's error is listed.
+- **The desktop UI's `lib/engine.ts`** has the new commands and slices, ready for Phase 8.
+
 **Exit criteria:**
 
 - `app.rs` is view code only (roughly 2,000 lines or fewer).

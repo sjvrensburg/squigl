@@ -5,23 +5,25 @@
 //! progress -- into [`Event`]s.
 //!
 //! The state is a set of versioned slices ([`EngineState`]), each re-sent whole when
-//! it changes, so a front end that keeps the last of each is always current. They
-//! are all defined here, the reading ones included, though in this phase the engine
-//! fills only the stream, capture, model and config slices: block detection and
-//! reading still run in the egui window and move in later.
+//! it changes, so a front end that keeps the last of each is always current. Reading
+//! -- the selection, block detection, erasures, reads and their results -- is in
+//! `engine/reads.rs`; its results come as events, the list being too long to resend.
 //!
 //! The engine has no thread of its own. Its stream worker and the built-in models
 //! run on theirs and call the waker; everything else happens in `handle` and `pump`
 //! on the caller's thread.
 
+mod reads;
+
 use crate::config::{Config, LayoutConfig};
 use crate::display::{self, Lut};
-use crate::geometry::Crop;
+use crate::erase::Stroke;
+use crate::geometry::{Crop, Selection};
 use crate::history;
 use crate::layout::{Block, BlockDetector};
 use crate::model::{ModelContext, ModelPhase};
 use crate::stream::{Capabilities, Problem, Shared, SourceSpec, Status, StreamConfig, Worker};
-use crate::transcribe::{BackendConfig, Transcriber, Transcription};
+use crate::transcribe::{BackendConfig, Mode, Transcriber, Transcription};
 use crate::view::{render_planes, FrameRef, ViewPlanes, ViewRequest};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -130,6 +132,55 @@ pub enum Command {
     CancelModelDownload {
         name: String,
     },
+    /// The selection in view space, as drawn by hand (`None`: the whole view); a
+    /// block's quad and role go with any hand edit.
+    SetSelection {
+        selection: Option<Crop>,
+    },
+    /// Drags corner `corner` (0-3, clockwise from the top-left) of the selection to
+    /// a view point: a rectangle stays one, a block's quad keeps its other corners.
+    MoveCorner {
+        corner: usize,
+        to: (usize, usize),
+    },
+    /// Makes a detected block the selection.
+    SelectBlock {
+        index: usize,
+    },
+    /// The next (`1`) or previous (`-1`) block in reading order.
+    StepBlock {
+        delta: i32,
+    },
+    /// Block detection on whatever is shown.
+    SetBlockMode {
+        on: bool,
+    },
+    /// The capture's hand erasures, in view space, oldest first (a front end paints
+    /// them and sends the list); erasing a live picture captures it.
+    SetErasures {
+        strokes: Vec<Stroke>,
+    },
+    /// Which backend reads.
+    SelectBackend {
+        index: usize,
+    },
+    /// Reads the selection (or the page), capturing first if live.
+    Read,
+    /// Reads every block of the capture in reading order (block mode on).
+    ReadAll,
+    /// Reads the selection again with the next backend, listed alongside.
+    SecondOpinion,
+    /// Stops waiting for the read in flight and the rest of a "read all".
+    CancelRead,
+    ClearResults,
+    /// Writes the selection of what is shown (or all of it) as a PNG into `dir`.
+    Save {
+        dir: PathBuf,
+    },
+    /// Writes the session's readings as Markdown into `dir`.
+    SaveHistory {
+        dir: PathBuf,
+    },
 }
 
 /// What a command did.
@@ -226,16 +277,20 @@ pub struct Frozen {
     pub height: usize,
 }
 
-/// What is shown: frozen or live, and turned how.
+/// What is shown: frozen or live, and turned how, and what of it is selected.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CaptureSlice {
     pub frozen: Option<Frozen>,
     pub rotation: Rotation,
     /// The shown frame's size after the rotation, once there is a frame.
     pub view: Option<(usize, usize)>,
+    /// In view space.
+    pub selection: Option<Selection>,
+    /// The capture's hand erasures.
+    pub erasures: Vec<Stroke>,
 }
 
-/// Block detection on the shown frame. Filled from a later phase; empty until then.
+/// Block detection on the shown frame.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct BlocksSlice {
     /// Block mode is on: the detector runs on whatever is shown.
@@ -256,8 +311,7 @@ pub struct ReadInProgress {
     pub queued: usize,
 }
 
-/// Reading. The backends are listed from now; the rest is filled from a later
-/// phase. The results themselves come as [`Event::ResultAppended`].
+/// Reading. The results themselves come as [`Event::ResultAppended`].
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct ReadingSlice {
     pub backends: Vec<String>,
@@ -266,6 +320,10 @@ pub struct ReadingSlice {
     /// How many results the current list holds, and the session's history.
     pub results: usize,
     pub history: usize,
+    /// How a read of the selection would go: a box, a formula, the page.
+    pub mode: Mode,
+    /// The results are every block's in page order (else one read after another).
+    pub in_page_order: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -365,6 +423,7 @@ pub struct Engine {
     unsaved: bool,
     /// Each slice's version when [`pump`](Self::pump) last sent it (0: never).
     sent: Sent,
+    reads: reads::Reads,
 }
 
 #[derive(Default)]
@@ -413,6 +472,8 @@ impl Engine {
                     frozen: None,
                     rotation: Rotation::None,
                     view: None,
+                    selection: None,
+                    erasures: Vec::new(),
                 }),
                 blocks: Versioned::new(BlocksSlice::default()),
                 reading: Versioned::new(ReadingSlice::default()),
@@ -424,6 +485,7 @@ impl Engine {
             notices: Vec::new(),
             unsaved: false,
             sent: Sent::default(),
+            reads: reads::Reads::default(),
         };
         engine.build(&config, true);
         engine.refresh(now);
@@ -531,18 +593,7 @@ impl Engine {
 
     pub fn handle(&mut self, command: Command) -> Result<Reply> {
         let reply = match command {
-            Command::Freeze => {
-                if self.capture.is_some() {
-                    Reply::Unchanged
-                } else {
-                    let Some((_, frame)) = self.worker.shared.latest_numbered() else {
-                        bail!("nothing to capture yet");
-                    };
-                    self.captures += 1;
-                    self.capture = Some((self.captures, frame));
-                    Reply::Done
-                }
-            }
+            Command::Freeze => self.freeze()?,
             Command::Live => {
                 if self.capture.take().is_some() {
                     Reply::Done
@@ -555,6 +606,10 @@ impl Engine {
                     Reply::Unchanged
                 } else {
                     self.rotation = rotation;
+                    // The selection and erasures are in view space; rather than
+                    // turn them, start over.
+                    self.set_selection(None);
+                    self.reads_erase_all();
                     Reply::Done
                 }
             }
@@ -620,9 +675,42 @@ impl Engine {
                 self.model(&name)?.cancel();
                 Reply::Done
             }
+            Command::SetSelection { selection } => self.set_selection(selection),
+            Command::MoveCorner { corner, to } => self.move_corner(corner, to),
+            Command::SelectBlock { index } => self.select_block(index),
+            Command::StepBlock { delta } => self.step_block(delta),
+            Command::SetBlockMode { on } => self.set_block_mode(on),
+            Command::SetErasures { strokes } => self.set_erasures(strokes),
+            Command::SelectBackend { index } => self.select_backend(index),
+            Command::Read => self.read(),
+            Command::ReadAll => self.read_all(),
+            Command::SecondOpinion => self.second_opinion(),
+            Command::CancelRead => self.cancel_read(),
+            Command::ClearResults => self.clear_results(),
+            Command::Save { dir } => {
+                self.save(&dir)?;
+                Reply::Done
+            }
+            Command::SaveHistory { dir } => {
+                self.save_history(&dir)?;
+                Reply::Done
+            }
         };
         self.refresh(Instant::now());
         Ok(reply)
+    }
+
+    /// Freezes the newest live frame, unless a capture is already shown.
+    fn freeze(&mut self) -> Result<Reply> {
+        if self.capture.is_some() {
+            return Ok(Reply::Unchanged);
+        }
+        let Some((_, frame)) = self.worker.shared.latest_numbered() else {
+            bail!("nothing to capture yet");
+        };
+        self.captures += 1;
+        self.capture = Some((self.captures, frame));
+        Ok(Reply::Done)
     }
 
     /// Puts `config` in force (see [`Command::SetConfig`]); `Unchanged` if it is.
@@ -630,8 +718,13 @@ impl Engine {
         if config == *self.config() {
             return Reply::Unchanged;
         }
+        let selected = self
+            .backends
+            .get(self.reads.selected_backend())
+            .map(|b| b.name().to_string());
         self.build(&config, false);
         self.state.config.update(config);
+        self.follow_backends(selected);
         Reply::Done
     }
 
@@ -717,6 +810,8 @@ impl Engine {
             }),
             rotation: self.rotation,
             view: shown.map(|(_, f)| self.rotation.rotated_size(f.width, f.height)),
+            selection: self.selection(),
+            erasures: self.erased().to_vec(),
         });
 
         let mut models: Vec<ModelStatus> = self
@@ -741,17 +836,16 @@ impl Engine {
         }
         self.state.models.update(ModelsSlice { models });
 
-        let names: Vec<String> = self.backends.iter().map(|b| b.name().to_string()).collect();
-        self.state.reading.update(ReadingSlice {
-            backends: names,
-            ..self.state.reading.value.clone()
-        });
+        let (blocks, reading) = self.reads_slices();
+        self.state.blocks.update(blocks);
+        self.state.reading.update(reading);
     }
 
     /// Collects what happened since the last call: every slice whose version moved
     /// since it was last sent (by a command or in the background), a new frame,
     /// notices. The first call sends every slice.
     pub fn pump(&mut self, now: Instant) -> Vec<Event> {
+        self.pump_reads();
         self.refresh(now);
         let mut events = Vec::new();
         let (s, sent) = (&self.state, &mut self.sent);
@@ -781,6 +875,7 @@ impl Engine {
             self.seen_frame = frames;
             events.push(Event::Frame { seq: frames });
         }
+        events.append(&mut self.reads.events);
         events.extend(self.notices.drain(..).map(Event::Notice));
         events
     }
@@ -1301,5 +1396,53 @@ mod tests {
             serde_json::to_string(&event).unwrap(),
             r#"{"type":"frame","data":{"seq":3}}"#
         );
+        // Reading's commands, as a web front end sends them.
+        for (json, command) in [
+            (
+                r#"{"type":"set-selection","selection":{"x":1,"y":2,"w":3,"h":4}}"#,
+                Command::SetSelection {
+                    selection: Some(Crop {
+                        x: 1,
+                        y: 2,
+                        w: 3,
+                        h: 4,
+                    }),
+                },
+            ),
+            (
+                r#"{"type":"set-selection","selection":null}"#,
+                Command::SetSelection { selection: None },
+            ),
+            (
+                r#"{"type":"move-corner","corner":2,"to":[5,6]}"#,
+                Command::MoveCorner {
+                    corner: 2,
+                    to: (5, 6),
+                },
+            ),
+            (
+                r#"{"type":"set-erasures","strokes":[{"points":[[1.0,2.0]],"radius":3.0}]}"#,
+                Command::SetErasures {
+                    strokes: vec![Stroke {
+                        points: vec![[1.0, 2.0]],
+                        radius: 3.0,
+                    }],
+                },
+            ),
+            (r#"{"type":"read-all"}"#, Command::ReadAll),
+            (r#"{"type":"second-opinion"}"#, Command::SecondOpinion),
+            (
+                r#"{"type":"set-block-mode","on":true}"#,
+                Command::SetBlockMode { on: true },
+            ),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<Command>(json).unwrap(),
+                command,
+                "{json}"
+            );
+        }
+        let slice = serde_json::to_value(ReadingSlice::default()).unwrap();
+        assert_eq!(slice["mode"], "page");
     }
 }

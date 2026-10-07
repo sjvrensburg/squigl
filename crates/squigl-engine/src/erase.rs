@@ -18,7 +18,7 @@ const PAPER_PERCENTILE: f32 = 0.75;
 /// One brush stroke: the pointer's path and the brush's radius, in the pixels of
 /// whatever it is drawn on. Everything within `radius` of the path is erased; one
 /// point is a dot.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Stroke {
     pub points: Vec<[f32; 2]>,
     pub radius: f32,
