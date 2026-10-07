@@ -114,7 +114,7 @@ impl Crop {
 
 /// What is selected on the view: a rectangle, and -- when it came from a detected
 /// block that is not rectangular -- the quad inside it that is the actual block.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Selection {
     pub rect: Crop,
     pub quad: Option<Quad>,

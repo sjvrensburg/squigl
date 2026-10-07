@@ -37,13 +37,15 @@ pub const PAGE_PROMPT: &str =
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Mode {
     /// One word or line the operator boxed: read it character for character.
     Crop,
     /// A block the layout model called a formula: read it as maths.
     Formula,
     /// A whole page.
+    #[default]
     Page,
 }
 
