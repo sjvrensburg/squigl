@@ -135,6 +135,11 @@
       Phone on a different network, such as mobile data? Connect both to the same
       hotspot, or install Tailscale on both and pair through its address.
     </p>
+    <p class="hint">
+      Phone on the same network but the page will not open, or never starts streaming?
+      This computer's firewall may be in the way: allow Squigl when it asks (on Windows,
+      for the kind of network this is: Private for home).
+    </p>
   {:else}
     <p>Starting…</p>
   {/if}
