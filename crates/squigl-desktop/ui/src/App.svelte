@@ -9,12 +9,16 @@
     lut,
     openImage,
     subscribe,
+    type BlocksSlice,
     type CaptureSlice,
+    type Command,
     type Config,
     type DisplayMode,
     type Event,
+    type ReadingSlice,
     type StreamSlice,
   } from "./lib/engine";
+  import type { ModelStatus, ReadResult } from "./lib/reading";
   import { SLIDER_STEPS, fromSlider, toSlider, zoomBounds } from "./lib/camera";
   import { FrameClient, type FrameHeader, type Viewport } from "./lib/frames";
   import { MODES, modeLabel } from "./lib/modes";
@@ -23,10 +27,14 @@
   import { keyFor, keyLabel, table, type Action } from "./lib/shortcuts";
   import { pan, turn, zoom, type View } from "./lib/viewport";
   import Connection from "./Connection.svelte";
+  import Overlay from "./Overlay.svelte";
+  import Reading from "./Reading.svelte";
   import Pair from "./Pair.svelte";
   import Settings from "./Settings.svelte";
   // Lucide's outline icons, drawn in currentColor so they follow the theme.
+  import BookOpenText from "@lucide/svelte/icons/book-open-text";
   import Camera from "@lucide/svelte/icons/camera";
+  import LayoutPanelTop from "@lucide/svelte/icons/layout-panel-top";
   import Flashlight from "@lucide/svelte/icons/flashlight";
   import FolderOpen from "@lucide/svelte/icons/folder-open";
   import Maximize from "@lucide/svelte/icons/maximize";
@@ -48,6 +56,14 @@
   let stream = $state<StreamSlice | null>(null);
   let capture = $state<CaptureSlice | null>(null);
   let config = $state<Config | null>(null);
+  let blocks = $state<BlocksSlice | null>(null);
+  let reading = $state<ReadingSlice | null>(null);
+  let models = $state<ModelStatus[]>([]);
+  // This list's results, as the engine appends them (it says when it empties it).
+  let results = $state<ReadResult[]>([]);
+  let readingOpen = $state(false);
+  // Blocks were asked for before the block finder was ready: on once it is.
+  let blocksAsked = $state(false);
   let view = $state<View>({ centre: [0.5, 0.5], magnification: 1 });
   // The status on the left says "Starting…"; this is for what happens after.
   let notice = $state("");
@@ -63,7 +79,7 @@
   let firstFrame: (() => void) | null = null;
   // Frames drawn so far (for --dev-stats), and the last one's header.
   let drawn = 0;
-  let shown: FrameHeader | null = null;
+  let shown = $state.raw<FrameHeader | null>(null);
   // Milliseconds from asking for each frame to having drawn it (for --dev-stats).
   let fetchTimes: number[] = [];
 
@@ -98,6 +114,14 @@
         return `${s.reason} — trying again shortly`;
       case "stopped":
         return "Stopped";
+    }
+  });
+
+  $effect(() => {
+    const detector = models.find((m) => m.kind === "detector");
+    if (blocksAsked && detector?.phase.phase === "ready" && !blocks?.enabled) {
+      blocksAsked = false;
+      toggleBlocks();
     }
   });
 
@@ -163,6 +187,21 @@
       }
       case "frame":
         if (!frozen) fetchFrame();
+        break;
+      case "blocks":
+        blocks = event.data.value;
+        break;
+      case "reading":
+        reading = event.data.value;
+        break;
+      case "models":
+        models = (event.data.value as { models: ModelStatus[] }).models;
+        break;
+      case "result-appended":
+        results = [...results, event.data as ReadResult];
+        break;
+      case "results-cleared":
+        results = [];
         break;
       case "notice":
         say(event.data.text);
@@ -242,6 +281,39 @@
     }
   }
 
+  /** A reading command: the pane opens to show what comes of it. */
+  async function readCommand(command: Command) {
+    readingOpen = true;
+    try {
+      await dispatch(command);
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
+  async function toggleBlocks() {
+    const on = !(blocks?.enabled ?? false);
+    try {
+      if ((await dispatch({ type: "set-block-mode", on })) === "done") {
+        say(on ? "Finding blocks" : "Blocks off");
+      } else if (on) {
+        // Not ready: the pane offers to get it ready, and blocks come on when it is.
+        blocksAsked = true;
+        readingOpen = true;
+      }
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
+  async function command(c: Command) {
+    try {
+      await dispatch(c);
+    } catch (e) {
+      say(String(e));
+    }
+  }
+
   async function toggleFullscreen() {
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen()));
@@ -312,6 +384,23 @@
         return stepCameraZoom(-4);
       case "torch":
         return toggleTorch();
+      case "reading-pane":
+        readingOpen = !readingOpen;
+        return;
+      case "read":
+        return readCommand({ type: "read" });
+      case "read-all":
+        return readCommand({ type: "read-all" });
+      case "second-opinion":
+        return readCommand({ type: "second-opinion" });
+      case "block-mode":
+        return toggleBlocks();
+      case "next-block":
+        return command({ type: "step-block", delta: 1 });
+      case "previous-block":
+        return command({ type: "step-block", delta: -1 });
+      case "clear-selection":
+        return command({ type: "set-selection", selection: null });
       case "fullscreen":
         return toggleFullscreen();
       case "settings":
@@ -558,6 +647,16 @@
         <Smartphone class="icon" /><span class="long">Use phone</span>
       </button>
     {/if}
+    {#if models.some((m) => m.kind === "detector")}
+      <button onclick={toggleBlocks} aria-pressed={blocks?.enabled ?? false}>
+        <LayoutPanelTop class="icon" /><span class="long">Blocks</span>
+        <kbd>{shortcut("block-mode")}</kbd>
+      </button>
+    {/if}
+    <button onclick={() => (readingOpen = !readingOpen)} aria-pressed={readingOpen}>
+      <BookOpenText class="icon" /><span class="long">Reading</span>
+      <kbd>{shortcut("reading-pane")}</kbd>
+    </button>
     <button onclick={() => (pairOpen = true)}>
       <QrCode class="icon" /><span class="long">Pair phone</span>
     </button>
@@ -571,8 +670,17 @@
     </button>
   </header>
 
+  <div class="workspace" class:with-reading={readingOpen}>
   <div class="picture">
     <canvas bind:this={canvas} tabindex="0" aria-label="Magnified camera picture"></canvas>
+    <Overlay
+      placement={shown?.placement ?? null}
+      view={capture?.view ?? null}
+      dpr={window.devicePixelRatio}
+      selection={capture?.selection ?? null}
+      {blocks}
+      onnotice={say}
+    />
     {#if config?.magnifier.reading_line}
       <div class="reading-line" aria-hidden="true"></div>
     {/if}
@@ -586,6 +694,19 @@
     {#if dropping}
       <div class="drop" aria-hidden="true">Drop an image or a recording to open it</div>
     {/if}
+  </div>
+  {#if readingOpen}
+    <Reading
+      {reading}
+      {blocks}
+      {models}
+      {results}
+      {config}
+      shortcut={(a) => shortcut(a)}
+      {blocksAsked}
+      onnotice={say}
+    />
+  {/if}
   </div>
 
   <footer>
@@ -711,6 +832,21 @@
   :global(:focus-visible) {
     outline: 0.2rem solid var(--focus);
     outline-offset: 0.15rem;
+  }
+  .workspace {
+    display: grid;
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+  /* The readings beside the picture, or under it in a narrow window. */
+  .workspace.with-reading {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 38%);
+  }
+  @media (max-width: 48rem) {
+    .workspace.with-reading {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(0, 1fr) minmax(0, 45%);
+    }
   }
   .picture {
     position: relative;
