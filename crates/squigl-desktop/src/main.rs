@@ -248,6 +248,12 @@ fn save_dir() -> String {
         .into_owned()
 }
 
+/// A reading as text and maths runs, the maths as MathML (`squigl_engine::math`).
+#[tauri::command]
+fn math_parts(text: String) -> Vec<squigl_engine::math::Part> {
+    squigl_engine::math::parts(&text)
+}
+
 /// The backends and detector: the HTTP backends always, the built-in models when
 /// built with them (prepared only on request: the person agrees to the download).
 fn engine_deps() -> EngineDeps {
@@ -535,6 +541,7 @@ fn main() -> anyhow::Result<()> {
             pairing_stop,
             page_log,
             save_dir,
+            math_parts,
             dev_options,
             dev_save_snapshot,
             dev_reference,

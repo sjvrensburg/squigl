@@ -451,6 +451,7 @@ describe("a paired phone's camera", () => {
  * An OpenAI-compatible backend: answers each read with the size of the image it
  * was sent ("seen WxH"), the size a wavering token, so the page's marks show.
  */
+/** An OpenAI-compatible server answering "seen WxH" (the image's size), or `server.answer` when set. */
 function fakeBackend() {
   const server = http.createServer((req, res) => {
     let body = "";
@@ -467,6 +468,14 @@ function fakeBackend() {
         [size, 0.7],
       ];
       res.setHeader("content-type", "application/json");
+      if (server.answer) {
+        res.end(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: server.answer }, finish_reason: "stop" }],
+          }),
+        );
+        return;
+      }
       res.end(
         JSON.stringify({
           choices: [
@@ -627,6 +636,31 @@ describe("reading", () => {
       const inside = now.filter((_, i) => i % 3 === 1 && near(now[i - 1][1], now[i][1]) && near(now[i + 1][1], now[i][1]));
       return inside.length > 0 && inside.every(([d, e]) => e && near(d, e));
     }, "the picture redrawn");
+  });
+
+  test("maths is shown as MathML, built from MathML alone", async () => {
+    backend.answer = 'area $\\frac{1}{2} b h$, or $\\text{<img src=x onerror="window.pwned=1">}$ and $x^$';
+    await s.execute(`document.querySelector("canvas").focus();`);
+    await s.press("\uE007");
+    const latest = `document.querySelector(".results li:first-child .text")`;
+    await until(
+      async () => s.execute(`return !!${latest}?.querySelector("math mfrac");`),
+      "a fraction in MathML",
+    );
+    const seen = await s.execute(`
+      const p = ${latest};
+      return {
+        maths: p.querySelectorAll("math").length,
+        img: p.querySelectorAll("img").length,
+        pwned: window.pwned ?? null,
+        text: p.textContent,
+      };`);
+    assert.equal(seen.maths, 2, "the fraction and the \\text");
+    assert.equal(seen.img, 0, "no HTML from the reading");
+    assert.equal(seen.pwned, null);
+    assert.match(seen.text, /^area /);
+    assert.match(seen.text, /and \$x\^\$$/, "maths that does not convert stays as its source");
+    backend.answer = null;
   });
 
   test("Shift+F shows the readings alone, and Escape brings the picture back", async () => {
