@@ -1,0 +1,20 @@
+[package]
+name = "s8-kokoro"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Roadmap spike S8: Kokoro-82M (ONNX) as squigl's reading-aloud voice"
+
+# Its own workspace: not part of squigl's build or CI.
+[workspace]
+
+[dependencies]
+squigl-engine = { path = "../../crates/squigl-engine" }
+# The same pin as squigl-models.
+ort = { git = "https://github.com/pykeio/ort", rev = "085eb2af3d55fa2f4eacceb6ef43825dbf1b771c", features = ["half", "webgpu"] }
+ndarray = "0.17"
+mathcat = { version = "=0.7.7-alpha.1", features = ["include-zip"] }
+serde_json = "1"
+hound = "3"
+anyhow = "1"
+cpal = "0.16"
