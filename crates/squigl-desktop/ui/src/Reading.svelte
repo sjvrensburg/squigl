@@ -3,9 +3,13 @@
   // person's agreement to the download), Read / Read all / a second opinion / Stop,
   // and the readings as large text. Words the model was unsure of are underlined --
   // dotted when it wavered, wavy when it hesitated -- and tinted, never told by
-  // colour alone; what else it might have been is in the word's tooltip.
+  // colour alone; what else it might have been is in the word's tooltip. Also the
+  // erase brush (what the model should not read), the text size, the session's
+  // history, and the readings-only view.
   import { invoke } from "@tauri-apps/api/core";
   import { dispatch, type BlocksSlice, type Config, type ReadingSlice } from "./lib/engine";
+  import { BRUSH_MAX, BRUSH_MIN } from "./lib/erase";
+  import type { Action } from "./lib/shortcuts";
   import {
     describe,
     idle,
@@ -13,9 +17,9 @@
     plainText,
     spans,
     uncertain,
+    type HistoryEntry,
     type ModelStatus,
     type ReadResult,
-    type Thresholds,
   } from "./lib/reading";
 
   let {
@@ -23,25 +27,34 @@
     blocks,
     models,
     results,
+    history,
     config,
     shortcut,
     blocksAsked,
+    erase,
+    readingOnly,
+    onaction,
+    onbrush,
     onnotice,
   }: {
     reading: ReadingSlice | null;
     blocks: BlocksSlice | null;
     models: ModelStatus[];
     results: ReadResult[];
+    history: HistoryEntry[];
     config: Config | null;
-    shortcut: (action: "read" | "read-all" | "second-opinion") => string;
+    shortcut: (action: Action) => string;
     /** Blocks were asked for: offer to get the block finder ready if it is not. */
     blocksAsked: boolean;
+    /** The erase brush: on, its radius (CSS px), the strokes so far, whether there is a box to erase. */
+    erase: { on: boolean; brush: number; strokes: number; box: boolean };
+    readingOnly: boolean;
+    onaction: (action: Action) => void;
+    onbrush: (radius: number) => void;
     onnotice: (text: string) => void;
   } = $props();
 
-  const ui = $derived((config?.ui ?? { steady_threshold: 0.92, wavering_threshold: 0.6, reading_size: 20 }) as Thresholds & {
-    reading_size: number;
-  });
+  const ui = $derived(config?.ui ?? { steady_threshold: 0.92, wavering_threshold: 0.6, reading_size: 20, scale: 1 });
   const backend = $derived(reading?.backends[reading.selected] ?? null);
   // The selected backend's built-in model, if it is one.
   const model = $derived(models.find((m) => m.kind === "transcriber" && m.name === backend) ?? null);
@@ -96,6 +109,19 @@
     run({ type: "save-history", dir: await invoke<string>("save_dir") });
   }
 
+  // The reading text size, in points, as the settings keep it.
+  const SIZE_MIN = 10;
+  const SIZE_MAX = 60;
+  function textSize(delta: number) {
+    if (!config) return;
+    const size = Math.min(SIZE_MAX, Math.max(SIZE_MIN, ui.reading_size + delta));
+    if (size === ui.reading_size) return;
+    run({ type: "set-config", config: { ...config, ui: { ...config.ui, reading_size: size } } });
+    onnotice(`Reading text ${size} points`);
+  }
+
+  const time = (at: string) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   function seconds(r: ReadResult): string {
     const o = outcome(r);
     return "ok" in o ? `${o.ok.elapsed.secs + Math.round(o.ok.elapsed.nanos / 1e8) / 10} s` : "";
@@ -103,7 +129,24 @@
 </script>
 
 <aside class="reading" aria-labelledby="reading-title" style:--reading-size="{ui.reading_size * 1.5}px">
-  <h2 id="reading-title">Reading</h2>
+  <div class="title">
+    <h2 id="reading-title">Reading</h2>
+    <div class="controls tight">
+      <button
+        aria-label="Smaller reading text"
+        disabled={!config || ui.reading_size <= SIZE_MIN}
+        onclick={() => textSize(-2)}>A−</button
+      >
+      <button
+        aria-label="Larger reading text"
+        disabled={!config || ui.reading_size >= SIZE_MAX}
+        onclick={() => textSize(2)}>A+</button
+      >
+      <button aria-pressed={readingOnly} onclick={() => onaction("reading-only")}>
+        {readingOnly ? "Back to the picture" : "Readings only"} <kbd>{shortcut("reading-only")}</kbd>
+      </button>
+    </div>
+  </div>
 
   {#if !reading || reading.backends.length === 0}
     <p>No way to read is set up. Add a model or a server in the settings file.</p>
@@ -160,6 +203,34 @@
       {/if}
     </div>
 
+    {#if !readingOnly}
+      <div class="controls" role="group" aria-label="Erasing">
+        <button aria-pressed={erase.on} onclick={() => onaction("erase-brush")}>
+          Erase brush <kbd>{shortcut("erase-brush")}</kbd>
+        </button>
+        {#if erase.on}
+          <label>
+            Size
+            <input
+              type="range"
+              min={BRUSH_MIN}
+              max={BRUSH_MAX}
+              step="2"
+              value={erase.brush}
+              oninput={(e) => onbrush(Number(e.currentTarget.value))}
+            />
+          </label>
+        {/if}
+        {#if erase.box}
+          <button onclick={() => onaction("erase-box")}>Erase the box <kbd>{shortcut("erase-box")}</kbd></button>
+        {/if}
+        {#if erase.strokes > 0}
+          <button onclick={() => onaction("undo-erase")}>Undo erasing <kbd>{shortcut("undo-erase")}</kbd></button>
+          <button onclick={() => run({ type: "set-erasures", strokes: [] })}>Erase nothing</button>
+        {/if}
+      </div>
+    {/if}
+
     <p role="status" class="status">
       {#if reading.reading}
         Reading{reading.reading.label ? ` ${reading.reading.label}` : ""} with {reading.reading.backend}…
@@ -213,6 +284,24 @@
         </li>
       {/each}
     </ol>
+
+    {#if history.length > 0}
+      <details class="history">
+        <summary>This session's readings ({history.length})</summary>
+        <ol aria-label="This session's readings">
+          {#each [...history].reverse() as h}
+            {@const text = plainText({ label: null, result: h.result })}
+            <li>
+              <div class="meta">
+                <span>{time(h.at)}, picture {h.capture}, {h.what}</span>
+                <button class="small" onclick={() => copy(text, "Reading")}>Copy</button>
+              </div>
+              <p class="past">{text}</p>
+            </li>
+          {/each}
+        </ol>
+      </details>
+    {/if}
   {/if}
 </aside>
 
@@ -224,9 +313,19 @@
     border-left: 0.15rem solid var(--edge);
     min-width: 0;
   }
+  .title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
   h2 {
     margin: 0.25rem 0 0.75rem;
     font-size: 1.25rem;
+  }
+  .tight {
+    margin-bottom: 0.5rem;
   }
   .controls {
     display: flex;
@@ -296,5 +395,27 @@
   }
   .error {
     font-weight: bold;
+  }
+  .history {
+    margin-top: 1rem;
+    border-top: 0.15rem solid var(--edge);
+    padding-top: 0.5rem;
+  }
+  .history summary {
+    cursor: pointer;
+    font-weight: bold;
+  }
+  .history ol {
+    list-style: none;
+    padding: 0;
+  }
+  .history li {
+    border-top: 0.1rem solid var(--edge);
+    padding: 0.4rem 0;
+  }
+  .past {
+    margin: 0.25rem 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 </style>

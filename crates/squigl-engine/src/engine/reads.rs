@@ -81,6 +81,8 @@ pub(super) struct Reads {
     erased: Vec<Stroke>,
     /// The capture `erased` belongs to.
     erased_capture: u64,
+    /// The capture, and it with `erased` painted over: what is shown of it.
+    erased_view: Option<(Arc<YuvFrame>, Arc<YuvFrame>)>,
     block_mode: bool,
     /// Of the shown frame, in reading order.
     blocks: Vec<Block>,
@@ -368,6 +370,31 @@ impl Engine {
     /// Drops every erasure (a rotation: they are in view space).
     pub(super) fn reads_erase_all(&mut self) {
         self.reads.erased.clear();
+        self.reads.erased_view = None;
+    }
+
+    /// The frame to show for `frame`: the capture with its erasures painted over,
+    /// else `frame` itself.
+    pub(super) fn shown_erased(&self, frame: Arc<YuvFrame>) -> Arc<YuvFrame> {
+        match &self.reads.erased_view {
+            Some((capture, erased)) if Arc::ptr_eq(capture, &frame) => erased.clone(),
+            _ => frame,
+        }
+    }
+
+    /// Paints the erasures over the capture once, for every view of it to show.
+    fn refresh_erased_view(&mut self) {
+        self.reads.erased_view = match &self.capture {
+            Some((_, frame)) if !self.reads.erased.is_empty() => Some((
+                frame.clone(),
+                Arc::new(crate::render::erased_frame(
+                    frame,
+                    self.rotation,
+                    &self.reads.erased,
+                )),
+            )),
+            _ => None,
+        };
     }
 
     pub(super) fn set_erasures(&mut self, strokes: Vec<Stroke>) -> Reply {
@@ -382,6 +409,7 @@ impl Engine {
         }
         self.reads.erased = strokes;
         self.reads.erased_capture = self.capture_seq();
+        self.refresh_erased_view();
         Reply::Done
     }
 
@@ -540,7 +568,7 @@ impl Engine {
     /// erasures are of a capture, and go with it; results go with their capture.
     fn follow_view(&mut self) {
         if self.reads.erased_capture != self.capture_seq() {
-            self.reads.erased.clear();
+            self.reads_erase_all();
             self.reads.erased_capture = self.capture_seq();
         }
         let view = self
@@ -1545,6 +1573,28 @@ mod tests {
         assert_eq!(engine.state().capture.value.erasures, [stroke]);
         let captured = engine.captured().unwrap();
         assert_eq!(engine.erased_on(&captured).len(), 1);
+        // What is shown of the capture is erased; the capture itself is not.
+        let whole = |engine: &Engine| {
+            let request = crate::view::ViewRequest {
+                frame: FrameRef::Captured,
+                region: Crop::whole(400, 300),
+                step: 1,
+                format: squigl_core::convert::PlaneFormat::Luma,
+            };
+            engine.render_planes(&request).unwrap().planes.y
+        };
+        let shown = whole(&engine);
+        let at = |y: &[u8], x: usize, row: usize| y[row * 400 + x];
+        assert_ne!(at(&shown, 30, 10), at(&captured.y, 30, 10), "painted over");
+        assert_eq!(at(&shown, 30, 100), at(&captured.y, 30, 100), "left alone");
+        engine
+            .handle(Command::SetErasures { strokes: vec![] })
+            .unwrap();
+        assert_eq!(
+            whole(&engine),
+            captured.y,
+            "an undo shows the capture again"
+        );
         engine.handle(Command::Live).unwrap();
         engine.pump(Instant::now());
         assert!(engine.erased().is_empty());

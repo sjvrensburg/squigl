@@ -8,7 +8,7 @@
 use image::{Rgba, RgbaImage};
 
 /// How far around a stroke (in the image's own pixels) its paper colour is sampled.
-const RING_PX: f32 = 6.0;
+pub const RING_PX: f32 = 6.0;
 
 /// The ring's brightness percentile taken as the paper: paper is the brighter
 /// majority around handwriting, so this holds while up to three quarters of the

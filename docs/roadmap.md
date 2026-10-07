@@ -496,10 +496,21 @@ crates/
   - vitest for the selection arithmetic and the readings' marks;
   - end-to-end against a fake OpenAI-compatible server: Enter reads the page (freezing it) and the marks show; a box drawn with the pointer is what is read; Escape clears it.
   - On the Ubuntu box with the real models: blocks, then read all, read the handwriting sample.
+- **Still to do in Phase 8:** see 8b.
+
+**Progress (8b, 2026-10-07): erasing, history and the reading view.**
+
+- **The erase brush** (`e`): a drag paints out what should not be read. The engine now shows the capture with its erasures painted over, so the picture is what a read sees. Only the pixels a stroke covers change.
+- **Its keyboard alternative:** `x` erases the box, so a block picked with `n`/`N` can be erased without a pointer. `u` undoes a step.
+- **History:** the session's readings, newest first, in the pane. Clear leaves them.
+- **Reading size:** A−/A+ in the pane and a slider in Settings (10 to 60 points, egui's range widened to match).
+- **Readings only** (`Shift+F`): the readings fill the screen; Escape brings the picture back.
+- **Tests:**
+  - engine: the shown capture is erased and an undo restores it, and an erased frame matches what a read sees under every rotation;
+  - vitest: the box's covering strokes;
+  - end to end: `x` paints the box and `u` undoes it, the brush paints its stroke, the history outlives Clear, and Shift+F and Escape.
 - **Still to do in Phase 8:**
-  - the erase brush and its keyboard alternative;
-  - history;
-  - a reading-size setting and a reading-only full-screen view;
+  - a high-contrast reading theme beyond the app's themes, if testers want one;
   - MathML (after S7);
   - read-aloud.
 

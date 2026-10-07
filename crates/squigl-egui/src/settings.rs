@@ -68,7 +68,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, draft: &mut Config) -> Outcome
                     ui.horizontal(|ui| {
                         ui.label("Reading text size");
                         ui.add(
-                            Slider::new(&mut draft.ui.reading_size, 10.0..=40.0)
+                            Slider::new(&mut draft.ui.reading_size, 10.0..=60.0)
                                 .step_by(1.0)
                                 .fixed_decimals(0)
                                 .suffix(" pt"),
