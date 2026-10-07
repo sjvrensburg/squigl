@@ -410,7 +410,11 @@ describe("a paired phone's camera", () => {
     await s.execute(`arguments[0].focus();`, torch);
     await s.press("\uE007"); // Enter
     await until(async () => (await phone())?.torch === true, "the torch on at the phone");
-    assert.equal(await s.attribute(torch[ELEMENT], "aria-pressed"), "true");
+    // The page hears of it with the next stream update (4 a second).
+    await until(
+      async () => (await s.attribute(torch[ELEMENT], "aria-pressed")) === "true",
+      "the button pressed",
+    );
 
     // The slider, from the keyboard: End is the camera's longest zoom.
     const zoomLabel = () =>
