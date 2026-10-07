@@ -1,0 +1,6 @@
+target/
+out/
+out-espeak/
+g2p/
+sentences.txt
+phonemes*.txt

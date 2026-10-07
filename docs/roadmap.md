@@ -164,6 +164,17 @@ crates/
   - one for MathCAT: no variation selectors, the vector arrow as U+2192, and no invisible separator after `cases`. With it, ClearSpeak says "script cap L", "vector v" and "2 cases".
 - **Still open (tester):** speech through `tts` on each OS; rendering in WebView2 and WKWebView.
 
+**S8 findings (2026-10-07; `spikes/s8-kokoro`): Kokoro-82M as the reading-aloud voice**
+
+- **Understood far better than the system voice.** Whisper word errors on the recorded readings, as squigl says them: 15.5% for Kokoro (fp32, `af_heart`), against 38.9% for espeak-ng, which speech-dispatcher uses. On maths sentences it is 16% against 25%.
+- **Fast enough on the CPU:** 0.23 of real time on 20 threads, 0.39 on 4 (fp32, 326 MB; fp16 the same at 163 MB). The 8-bit export (92 MB) runs at 0.65–0.78. The 86 MB `q8f16` export segfaults in ONNX Runtime 1.30.
+- **It runs beside GLM-OCR.** Kokoro on the CPU outside `RUNTIME`, alongside GLM-OCR on WebGPU in one process, made 51 reads and 72 syntheses with no crash.
+- **Phonemes: port Misaki (Apache-2.0), not misaki-rs.** misaki-rs rewrote most of the dictionary from eSpeak, in another phoneme style.
+  - Misaki's spaCy tagging can be replaced by a function-word list: 1.0% of words differ, against 6.1% with no tags.
+  - Its fallback for unknown words is a 751k-parameter BART, Apache-2.0. As ONNX it is 3 MB, matches PyTorch, and takes about 10 ms a word.
+- **Playback** goes through cpal (`libasound2-dev` on Linux), resampled from 24 kHz.
+- **Still for a person:** listen and choose the export and a default voice.
+
 **S2 findings (CI, 2026-10-04):**
 
 - core, engine, models, math and the egui window build, pass clippy and pass their tests on `windows-latest` and `macos-14` unchanged, apart from the per-OS rpath.
