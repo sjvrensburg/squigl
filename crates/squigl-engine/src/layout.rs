@@ -25,7 +25,8 @@ pub struct Block {
 
 /// What kind of thing a block is, as far as reading it is concerned: the 25
 /// detector classes fold into what gets a different prompt or colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Role {
     /// Prose, titles, references, notes: read as handwriting.
     Text,

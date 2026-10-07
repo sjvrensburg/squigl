@@ -27,26 +27,21 @@ use squigl_engine::engine::{Command, Engine, Event, Reply};
 use squigl_engine::enhance::{self, EnhanceConfig, EnhanceMode};
 use squigl_engine::erase;
 use squigl_engine::geometry::{zoom_to_view, Crop, Selection};
-use squigl_engine::history::{self, History};
-use squigl_engine::layout::{self, Block, BlockDetector, Quad, Role};
-use squigl_engine::render::{render_region, render_selection};
+use squigl_engine::history;
+use squigl_engine::layout::{self, Role};
+use squigl_engine::render::render_selection;
 use squigl_engine::stream::{Shared, SourceSpec, Status};
 use squigl_engine::transcribe::{Confidence, Mode, Reading, Transcription};
 use squigl_engine::typeset::{typeset_source, Typesetter};
 use squigl_engine::view::FrameRef;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Longest preview edge we bother converting: the preview is for aiming, the crop
 /// view and the capture are the real pixels.
 const PREVIEW_MAX_EDGE: usize = 1920;
-/// Longest edge handed to the block detector (its own input is 800 px square).
-const DETECT_MAX_EDGE: usize = 1600;
-/// How often, at most, the detector runs on the live preview.
-const LIVE_DETECT_INTERVAL: Duration = Duration::from_millis(200);
 /// How close (screen px) to a corner a drag must start to take the corner.
 const HANDLE_PX: f32 = 10.0;
 const SELECTED_COLOUR: Color32 = Color32::from_rgb(255, 196, 0);
@@ -66,9 +61,6 @@ fn role_colour(role: Role) -> Color32 {
         Role::Other => Color32::from_rgb(170, 170, 170),
     }
 }
-/// Blocks with a side shorter than this fraction of the view's shorter edge are
-/// slivers the detector leaves at line edges, not blocks.
-const MIN_BLOCK_FRACTION: f32 = 0.012;
 
 /// "1 stroke", "3 strokes".
 fn strokes(n: usize) -> String {
@@ -139,23 +131,6 @@ impl SettledWidth {
     }
 }
 
-/// One entry in the results list: its block label (in a "read all"), the answer,
-/// and the typeset readings, made on first show.
-struct ResultEntry {
-    label: Option<String>,
-    result: Result<Transcription, String>,
-    typeset: HashMap<usize, Typeset>,
-}
-
-/// What a results list belongs to.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum ResultsScope {
-    /// One read of this selection (`None`: the whole page).
-    One(Option<Selection>),
-    /// Every block, in order.
-    AllBlocks,
-}
-
 /// A drag in progress on the preview.
 #[derive(Debug, Clone, Copy)]
 enum Drag {
@@ -191,15 +166,6 @@ type ViewKey = (
     Vec<erase::Stroke>,
     Option<EnhanceConfig>,
     (usize, usize),
-);
-
-/// A read in flight: its result channel, when it started, which backend, and the
-/// block label if it is one of a "read all".
-type PendingRead = (
-    Receiver<anyhow::Result<Transcription>>,
-    Instant,
-    String,
-    Option<String>,
 );
 
 impl View {
@@ -257,26 +223,16 @@ impl View {
 
 pub struct App {
     /// The stream, the capture and its rotation, the settings and the backends.
+    /// The stream, the capture, and reading: the selection, blocks, erasures, reads
+    /// and their results all live in the engine.
     engine: Engine,
     preview: View,
     crop_view: View,
-    /// In view space.
-    crop: Option<Crop>,
-    /// The crop's quad when it came from a non-rectangular block; cleared by any
-    /// hand edit of the crop.
-    quad: Option<Quad>,
-    /// What the crop is, when it came from a block: picks the prompt.
-    crop_role: Option<Role>,
     drag: Option<Drag>,
-    /// Brush strokes painted over with paper before anything reads the capture (a
-    /// light scratch-out the model would read through), in view space, oldest first.
-    /// They belong to the capture: a retake, a zoom or a rotation drops them.
-    erased: Vec<erase::Stroke>,
-    /// The engine's capture number `erased` belongs to: when it moves (a retake, a
-    /// zoom, a new source) they go.
-    erased_capture: u64,
-    /// A stroke is being painted: the last of `erased` grows with the pointer.
+    /// A stroke is being painted: the engine's last erasure grows with the pointer.
     painting: bool,
+    /// The capture `painting` began on: a new one ends it.
+    painting_capture: u64,
     /// The brush's diameter in screen points on the Zoom pane.
     brush_px: f32,
     /// Scroll accumulators (egui smooths wheel input over frames).
@@ -285,20 +241,15 @@ pub struct App {
     save_dir: PathBuf,
     message: Option<(String, Instant)>,
     fps: FpsCounter,
-    /// View size the crop was drawn against; a different frame size (camera switch)
-    /// invalidates it.
-    crop_space: Option<(usize, usize)>,
-    selected_backend: usize,
     /// The Settings window's draft while it is open.
     draft: Option<Config>,
     settings_open: bool,
-    /// For waking the UI from the read thread; set on the first frame.
+    /// Set on the first frame.
     ctx: Option<egui::Context>,
-    pending: Option<PendingRead>,
-    /// Readings for the current capture, oldest first.
-    results: Vec<ResultEntry>,
-    /// Every read of the session.
-    history: History,
+    /// The typeset readings of each of the engine's results, made on first show,
+    /// and the results list they belong to.
+    typeset: Vec<HashMap<usize, Typeset>>,
+    typeset_generation: u64,
     history_open: bool,
     /// The Zoom pane's enhancement knobs are shown (collapsed, only the mode is).
     enhance_open: bool,
@@ -314,30 +265,12 @@ pub struct App {
     typeset_on: bool,
     /// The zoom factor the typeset textures were rendered for.
     last_zoom: Option<f32>,
-    /// What `results` were read from; they are dropped when a read of something
-    /// else starts or the capture goes.
-    results_key: Option<(Arc<YuvFrame>, ResultsScope)>,
-    /// Detected blocks of the captured frame, in reading order, in view space.
-    blocks: Vec<Block>,
-    /// The frame and rotation `blocks` were found on; they go when it changes.
-    blocks_key: Option<(Arc<YuvFrame>, Rotation)>,
-    /// Which block the crop is, for tab to move on from.
-    selected_block: Option<usize>,
-    /// Block mode: the detector runs on whatever is shown and its blocks are drawn.
-    block_mode: bool,
-    pending_detect: Option<(Receiver<anyhow::Result<Vec<Block>>>, Instant)>,
-    last_detect: Option<Instant>,
-    /// Blocks still to read, for "read all": label, where and how, taken when it
-    /// began so a live re-detection cannot reshuffle them.
-    read_queue: VecDeque<(String, Selection, Mode)>,
-    /// A "read all" waiting for the capture's own blocks to arrive.
-    read_all_armed: bool,
     /// Development aid: read once, as soon as a frame is available.
     dev_read: bool,
     /// Development aid: then ask the next backend too.
     dev_second: bool,
-    /// Development aid: retries left for a read refused while a model reloads.
-    dev_read_retries: u32,
+    /// Development aid: block mode at the first frame (once the detector is ready).
+    dev_detect: bool,
     /// Development aid: read every block once there are some.
     dev_read_all: bool,
     /// Development aid: a zoom to apply live, and when the first frame was seen.
@@ -366,27 +299,20 @@ impl App {
             engine,
             preview: View::new("preview"),
             crop_view: View::new("crop"),
-            crop: None,
-            quad: None,
-            crop_role: None,
             drag: None,
-            erased: Vec::new(),
-            erased_capture: 0,
             painting: false,
+            painting_capture: 0,
             brush_px: BRUSH_DEFAULT_PX,
             wheel_preview: 0.0,
             wheel_crop: 0.0,
             save_dir,
             message: None,
             fps: FpsCounter::default(),
-            crop_space: None,
-            selected_backend: 0,
             draft: None,
             settings_open: false,
             ctx: None,
-            pending: None,
-            results: Vec::new(),
-            history: History::default(),
+            typeset: Vec::new(),
+            typeset_generation: 0,
             history_open: false,
             enhance_open: true,
             panes: Panes::default(),
@@ -394,18 +320,9 @@ impl App {
             reading_width: SettledWidth::default(),
             typeset_on: typesetter.is_some(),
             last_zoom: None,
-            results_key: None,
-            blocks: Vec::new(),
-            blocks_key: None,
-            selected_block: None,
-            block_mode: false,
-            pending_detect: None,
-            last_detect: None,
-            read_queue: VecDeque::new(),
-            read_all_armed: false,
             dev_read: false,
             dev_second: false,
-            dev_read_retries: 0,
+            dev_detect: false,
             dev_read_all: false,
             dev_zoom: None,
             dev_erase: Vec::new(),
@@ -421,35 +338,21 @@ impl App {
     }
 
     /// Puts `new` in force through the engine -- which keeps the backends whose
-    /// entry did not change (a local model stays loaded), rebuilds the detector if
-    /// its section changed, and saves the file -- then follows it here: the
-    /// selected backend by name, block mode without a detector, the scale, and the
-    /// typeset textures when the reading size changed. An error is the save's; the
-    /// settings are in force regardless.
+    /// entry did not change (a local model stays loaded) and the selected one, rebuilds
+    /// the detector if its section changed, and saves the file -- then follows it
+    /// here: the scale, and the typeset textures when the reading size changed. An
+    /// error is the save's; the settings are in force regardless.
     fn apply_config(&mut self, new: Config) -> anyhow::Result<()> {
         let old_reading_size = self.config().ui.reading_size;
-        let selected_name = self
-            .engine
-            .backends()
-            .get(self.selected_backend)
-            .map(|b| b.name().to_string());
         let result = self.engine.handle(Command::SetConfig {
             config: Box::new(new),
         });
-        self.selected_backend = selected_name
-            .and_then(|n| self.engine.backends().iter().position(|b| b.name() == n))
-            .unwrap_or(0);
-        if self.engine.detector().is_none() {
-            self.block_mode = false;
-        }
         let scale = self.config().ui.scale;
         if let Some(ctx) = &self.ctx {
             ctx.set_zoom_factor(scale);
         }
         if (self.config().ui.reading_size - old_reading_size).abs() > 0.01 {
-            for entry in &mut self.results {
-                entry.typeset.clear();
-            }
+            self.typeset.iter_mut().for_each(HashMap::clear);
         }
         result.map(|_| ())
     }
@@ -477,21 +380,14 @@ impl App {
                     if ui.button("Copy all").clicked() {
                         copy = true;
                     }
-                    ui.weak(format!(
-                        "{} reading{}",
-                        self.history.entries.len(),
-                        if self.history.entries.len() == 1 {
-                            ""
-                        } else {
-                            "s"
-                        }
-                    ));
+                    let n = self.engine.history().entries.len();
+                    ui.weak(format!("{} reading{}", n, if n == 1 { "" } else { "s" }));
                 });
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for e in self.history.entries.iter().rev() {
+                        for e in self.engine.history().entries.iter().rev() {
                             ui.horizontal(|ui| {
                                 ui.weak(e.at.format("%H:%M:%S").to_string());
                                 ui.weak(format!("capture {}", e.capture));
@@ -510,13 +406,17 @@ impl App {
                     });
             });
         if save {
-            match self.history.save(&self.save_dir, &ui_cfg) {
-                Ok(path) => self.say(format!("readings saved to {}", path.display())),
-                Err(e) => self.say(format!("saving readings failed: {e}")),
+            let dir = self.save_dir.clone();
+            if let Err(e) = self.engine.save_history(&dir) {
+                self.say(format!("saving readings failed: {e:#}"));
             }
+            ctx.request_repaint();
         }
         if copy {
-            ctx.copy_text(history::joined(self.history.entries.iter(), &ui_cfg));
+            ctx.copy_text(history::joined(
+                self.engine.history().entries.iter(),
+                &ui_cfg,
+            ));
             self.say("all readings copied");
         }
         self.history_open = open;
@@ -575,9 +475,7 @@ impl App {
                     log::warn!("saving the window scale: {e:#}");
                 }
             }
-            for entry in &mut self.results {
-                entry.typeset.clear();
-            }
+            self.typeset.iter_mut().for_each(HashMap::clear);
         }
         self.last_zoom = Some(zoom);
     }
@@ -608,7 +506,6 @@ impl App {
     pub fn set_dev_read(&mut self, on: bool, second: bool) {
         self.dev_read = on;
         self.dev_second = second;
-        self.dev_read_retries = if on { 3 } else { 0 };
     }
 
     pub fn set_settings_open(&mut self, open: bool) {
@@ -626,7 +523,7 @@ impl App {
 
     /// Starts in block mode, optionally reading every block once there are some.
     pub fn set_dev_detect(&mut self, detect: bool, read_all: bool) {
-        self.block_mode = detect;
+        self.dev_detect = detect;
         self.dev_read_all = read_all;
     }
 
@@ -639,55 +536,14 @@ impl App {
         self.set_rect(crop);
     }
 
-    /// A hand edit of the crop: any quad it carried no longer applies.
+    /// A hand edit of the crop: any block's quad no longer applies.
     fn set_rect(&mut self, crop: Option<Crop>) {
-        self.crop = crop;
-        self.quad = None;
-        self.crop_role = None;
-        self.selected_block = None;
+        self.command(Command::SetSelection { selection: crop });
     }
 
-    /// The mode a read of the current selection takes: a formula block is read as
-    /// maths, any other selection as handwriting, no selection as a page.
-    fn read_mode(&self) -> Mode {
-        match (self.crop, self.crop_role) {
-            (None, _) => Mode::Page,
-            (Some(_), Some(Role::Formula)) => Mode::Formula,
-            (Some(_), _) => Mode::Crop,
-        }
-    }
-
-    fn selection(&self) -> Option<Selection> {
-        self.crop.map(|rect| Selection {
-            rect,
-            quad: self.quad,
-        })
-    }
-
-    /// Makes block `i` the crop.
-    fn select_block(&mut self, i: usize) {
-        let Some(b) = self.blocks.get(i) else {
-            return;
-        };
-        self.crop = Some(b.rect);
-        self.quad = b.quad;
-        self.crop_role = Some(b.role());
-        self.selected_block = Some(i);
-    }
-
-    /// Tab: the next (or previous) block in reading order.
-    fn step_block(&mut self, delta: i32) {
-        if self.blocks.is_empty() {
-            self.say("no blocks: detect them first [L]");
-            return;
-        }
-        let n = self.blocks.len() as i32;
-        let next = match self.selected_block {
-            Some(i) => (i as i32 + delta).rem_euclid(n),
-            None if delta < 0 => n - 1,
-            None => 0,
-        };
-        self.select_block(next as usize);
+    /// The crop, in view space.
+    fn crop(&self) -> Option<Crop> {
+        self.engine.selection().map(|s| s.rect)
     }
 
     fn shared(&self) -> &Arc<Shared> {
@@ -703,10 +559,26 @@ impl App {
         self.engine.rotation()
     }
 
+    /// Sends a command to the engine; true if it changed anything. What it has to
+    /// say comes with the next pass, which this asks for.
+    fn command(&mut self, command: Command) -> bool {
+        let done = match self.engine.handle(command) {
+            Ok(reply) => reply == Reply::Done,
+            Err(e) => {
+                self.say(format!("{e:#}"));
+                false
+            }
+        };
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
+        done
+    }
+
     /// Sends a camera command (zoom, torch, facing, reconnect); true if it changed
     /// anything. The engine itself goes live when the zoom moves.
     fn camera(&mut self, command: Command) -> bool {
-        matches!(self.engine.handle(command), Ok(Reply::Done))
+        self.command(command)
     }
 
     /// The frame on screen: the capture if there is one, else the newest live frame.
@@ -716,18 +588,29 @@ impl App {
 
     /// The erasures that apply to `frame`: the capture's, none on a live frame.
     fn erased_on(&self, frame: &Arc<YuvFrame>) -> Vec<erase::Stroke> {
-        match self.engine.captured() {
-            Some(c) if Arc::ptr_eq(&c, frame) => self.erased.clone(),
-            _ => Vec::new(),
-        }
+        self.engine.erased_on(frame).to_vec()
     }
 
     /// ctrl+Z: takes back the last stroke.
     fn undo_erase(&mut self) {
         self.painting = false;
-        match self.erased.pop() {
-            Some(_) => self.say(format!("{} erased", strokes(self.erased.len()))),
+        let mut strokes = self.engine.erased().to_vec();
+        match strokes.pop() {
+            Some(_) => {
+                let n = strokes.len();
+                self.command(Command::SetErasures { strokes });
+                self.say(format!("{} erased", self::strokes(n)));
+            }
             None => self.say("nothing to undo"),
+        }
+    }
+
+    /// Collects what the engine has to say since the last pass.
+    fn pump(&mut self) {
+        for event in self.engine.pump(Instant::now()) {
+            if let Event::Notice(notice) = event {
+                self.say(notice.text);
+            }
         }
     }
 
@@ -735,447 +618,55 @@ impl App {
         self.message = Some((text.into(), Instant::now()));
     }
 
+    /// Space: freezes the picture, or goes live again.
     fn capture(&mut self) {
-        self.erased.clear();
         if self.frozen() {
-            self.engine.handle(Command::Live).ok();
+            self.command(Command::Live);
             self.say("live again");
-        } else if self.engine.handle(Command::Freeze).is_ok() {
+        } else if self.command(Command::Freeze) {
             if let Some(frame) = self.engine.captured() {
                 self.say(format!("captured {}x{}", frame.width, frame.height));
             }
         }
-        self.erased_capture = self.engine.capture_seq();
     }
 
-    /// Sends the crop (or the whole view) to the selected backend on a thread.
-    /// Reading a live frame freezes it first, so the answer stays next to its ink.
+    /// The enhancement being adjusted goes into the settings before anything reads
+    /// with it.
+    fn settle_enhance(&mut self) {
+        if self.enhance != self.config().enhance {
+            let mut config = self.config().clone();
+            config.enhance = self.enhance;
+            if let Err(e) = self.engine.handle(Command::SetConfig {
+                config: Box::new(config),
+            }) {
+                log::warn!("saving the enhancement: {e:#}");
+            }
+        }
+    }
+
+    /// Reads the crop (or the whole view) with the selected backend; reading a live
+    /// frame freezes it first, so the answer stays next to its ink.
     fn read(&mut self) {
-        self.read_queue.clear();
-        let selection = self.selection();
-        let mode = self.read_mode();
-        self.read_selection(selection, mode, ResultsScope::One(selection), None);
+        self.settle_enhance();
+        self.command(Command::Read);
     }
 
-    /// Reads every detected block in reading order, one after the other. Reads are
-    /// of a capture, so a live view is captured first and its own detection awaited.
+    /// Reads every detected block in reading order.
     fn read_all(&mut self) {
-        if !self.block_mode {
-            self.say("turn on Blocks [L] first");
-            return;
-        }
-        if !self.frozen() {
-            self.capture();
-        }
-        self.read_all_armed = true;
-        self.start_read_all_if_ready();
+        self.settle_enhance();
+        self.command(Command::ReadAll);
     }
 
-    /// The armed "read all" begins once the blocks are the capture's.
-    fn start_read_all_if_ready(&mut self) {
-        if !self.read_all_armed || self.pending_detect.is_some() {
-            return;
-        }
-        let Some(captured) = self.engine.captured() else {
-            self.read_all_armed = false;
-            return;
-        };
-        if !self
-            .blocks_key
-            .as_ref()
-            .is_some_and(|(f, _)| Arc::ptr_eq(f, &captured))
-        {
-            return;
-        }
-        self.read_all_armed = false;
-        if self.blocks.is_empty() {
-            self.say("no blocks found on this page");
-            return;
-        }
-        self.read_queue = self
-            .blocks
-            .iter()
-            .enumerate()
-            .map(|(i, b)| {
-                let mode = if b.role() == Role::Formula {
-                    Mode::Formula
-                } else {
-                    Mode::Crop
-                };
-                (
-                    format!("#{} {}", i + 1, b.label),
-                    Selection {
-                        rect: b.rect,
-                        quad: b.quad,
-                    },
-                    mode,
-                )
-            })
-            .collect();
-        self.set_results_key(ResultsScope::AllBlocks);
-        self.results.clear();
-        self.next_queued_read();
-    }
-
-    /// Starts the next block of a "read all" once the previous one has landed.
-    fn next_queued_read(&mut self) {
-        if self.pending.is_some() {
-            return;
-        }
-        if let Some((label, selection, mode)) = self.read_queue.pop_front() {
-            self.crop = Some(selection.rect);
-            self.quad = selection.quad;
-            self.selected_block = None;
-            self.read_selection(Some(selection), mode, ResultsScope::AllBlocks, Some(label));
-        }
-    }
-
-    /// A second opinion: the current selection read again by the next backend in
-    /// the list, listed alongside. The selected backend does not change.
+    /// The selection read again by the next backend, listed alongside.
     fn second_opinion(&mut self) {
-        if self.engine.backends().len() < 2 {
-            self.say("a second opinion needs a second backend (Settings)");
-            return;
-        }
-        self.read_queue.clear();
-        let selection = self.selection();
-        let mode = self.read_mode();
-        let other = (self.selected_backend + 1) % self.engine.backends().len();
-        // Keep the list: same scope as the reading it seconds.
-        let scope = match self.results_key {
-            Some((_, ResultsScope::AllBlocks)) => ResultsScope::AllBlocks,
-            _ => ResultsScope::One(selection),
-        };
-        let label = self
-            .results
-            .last()
-            .and_then(|e| e.label.clone())
-            .map(|l| format!("{l} (2nd opinion)"));
-        self.read_with(other, selection, mode, scope, label);
-    }
-
-    fn read_selection(
-        &mut self,
-        selection: Option<Selection>,
-        mode: Mode,
-        scope: ResultsScope,
-        label: Option<String>,
-    ) {
-        self.read_with(self.selected_backend, selection, mode, scope, label);
-    }
-
-    fn read_with(
-        &mut self,
-        backend_index: usize,
-        selection: Option<Selection>,
-        mode: Mode,
-        scope: ResultsScope,
-        label: Option<String>,
-    ) {
-        if self.pending.is_some() {
-            self.say("still reading the last one");
-            return;
-        }
-        let Some(backend) = self.engine.backends().get(backend_index).cloned() else {
-            self.say(format!(
-                "no transcription backends configured (see {})",
-                Config::path().display()
-            ));
-            return;
-        };
-        if !self.frozen() {
-            self.capture();
-        }
-        let Some(frame) = self.engine.captured() else {
-            self.say("nothing to read yet");
-            return;
-        };
-        // Results belong to this frame and selection; a read of something else
-        // starts a fresh list.
-        self.set_results_key(scope);
-        let (vw, vh) = self.rotation().rotated_size(frame.width, frame.height);
-        let (rgba, w, h) = render_selection(
-            &frame,
-            self.rotation(),
-            selection,
-            1,
-            &self.erased,
-            Some(&self.enhance),
-        );
-        let mut png = Vec::new();
-        let encoded = image::RgbaImage::from_raw(w as u32, h as u32, rgba)
-            .expect("buffer matches size")
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
-        if let Err(e) = encoded {
-            self.say(format!("encoding the crop failed: {e}"));
-            return;
-        }
-        let (tx, rx) = mpsc::sync_channel(1);
-        let ctx = self.ctx.clone();
-        let name = backend.name().to_string();
-        let prompt = self.config().prompts.for_mode(mode).to_string();
-        std::thread::Builder::new()
-            .name("squigl-read".into())
-            .spawn(move || {
-                let result = backend.read(&png, mode, &prompt, (vw as u32, vh as u32));
-                let _ = tx.send(result);
-                if let Some(ctx) = ctx {
-                    ctx.request_repaint();
-                }
-            })
-            .expect("spawning read thread");
-        self.pending = Some((rx, Instant::now(), name, label));
-    }
-
-    /// Readings are kept while they are of the captured frame and `scope`; anything
-    /// else starts a fresh list.
-    fn set_results_key(&mut self, scope: ResultsScope) {
-        let key = self.engine.captured().map(|f| (f, scope));
-        let same = match (&self.results_key, &key) {
-            (Some((a, sa)), Some((b, sb))) => Arc::ptr_eq(a, b) && sa == sb,
-            (None, None) => true,
-            _ => false,
-        };
-        if !same {
-            self.results.clear();
-            self.results_key = key;
-        }
-    }
-
-    /// Readings go with the capture they were made from.
-    fn drop_stale_results(&mut self) {
-        let stale = match (&self.results_key, &self.engine.captured()) {
-            (Some((a, _)), Some(b)) => !Arc::ptr_eq(a, b),
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        if stale {
-            self.results.clear();
-            self.results_key = None;
-            self.read_queue.clear();
-        }
-    }
-
-    /// Collects a finished read, and a finished detection.
-    fn poll_read(&mut self) {
-        self.drop_stale_results();
-        if let Some((rx, _, _, label)) = &self.pending {
-            let done = match rx.try_recv() {
-                Ok(result) => Some(result.map_err(|e| format!("{e:#}"))),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => Some(Err("the read thread died".into())),
-            };
-            if let Some(result) = done {
-                let label = label.clone();
-                let what = label.clone().unwrap_or_else(|| {
-                    if self.crop.is_some() {
-                        "box".into()
-                    } else {
-                        "page".into()
-                    }
-                });
-                self.history.push(history::Entry {
-                    at: chrono::Local::now(),
-                    capture: self.engine.captures() as u32,
-                    what,
-                    result: result.clone(),
-                });
-                self.results.push(ResultEntry {
-                    label,
-                    result,
-                    typeset: HashMap::new(),
-                });
-                self.pending = None;
-                self.next_queued_read();
-            }
-        }
-        if let Some((rx, started)) = &self.pending_detect {
-            let done = match rx.try_recv() {
-                Ok(result) => Some(result),
-                Err(mpsc::TryRecvError::Empty) => None,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    Some(Err(anyhow::anyhow!("the detection thread died")))
-                }
-            };
-            if let Some(result) = done {
-                let elapsed = started.elapsed();
-                self.pending_detect = None;
-                match result {
-                    Ok(blocks) => {
-                        if self.frozen() {
-                            self.say(format!(
-                                "{} block{} in {:.2}s",
-                                blocks.len(),
-                                if blocks.len() == 1 { "" } else { "s" },
-                                elapsed.as_secs_f32()
-                            ));
-                        }
-                        self.follow_selection(&blocks);
-                        self.blocks = blocks;
-                    }
-                    Err(e) => {
-                        // Live mode would repeat the failure every tick.
-                        self.block_mode = false;
-                        self.say(format!("block detection failed: {e:#}"));
-                    }
-                }
-                self.start_read_all_if_ready();
-            }
-        }
+        self.settle_enhance();
+        self.command(Command::SecondOpinion);
     }
 
     /// Block mode: `L` or the toolbar toggle.
     fn toggle_block_mode(&mut self) {
-        let Some(detector) = self.engine.detector() else {
-            self.say("no block detector in this build");
-            return;
-        };
-        if !self.block_mode {
-            if let Some(status) = detector.status() {
-                self.say(status);
-                return;
-            }
-        }
-        self.block_mode = !self.block_mode;
-    }
-
-    /// In block mode, runs the detector over whatever is shown whenever it is not
-    /// already running, the frame is new, and (live) the interval has passed. A
-    /// read in flight gets the GPU to itself.
-    fn maybe_detect(&mut self, ctx: &egui::Context) {
-        if !self.block_mode || self.pending_detect.is_some() || self.pending.is_some() {
-            return;
-        }
-        let Some(detector) = self.engine.detector().cloned() else {
-            return;
-        };
-        if !detector.ready() {
-            return;
-        }
-        let Some(frame) = self.current_frame() else {
-            return;
-        };
-        if self
-            .blocks_key
-            .as_ref()
-            .is_some_and(|(f, r)| Arc::ptr_eq(f, &frame) && *r == self.rotation())
-        {
-            return;
-        }
-        if !self.frozen() {
-            if let Some(at) = self.last_detect {
-                let since = at.elapsed();
-                if since < LIVE_DETECT_INTERVAL {
-                    ctx.request_repaint_after(LIVE_DETECT_INTERVAL - since);
-                    return;
-                }
-            }
-        }
-        self.detect(detector, frame);
-    }
-
-    /// Runs the block detector over `frame`, on a thread. The result lands in
-    /// `blocks` in view space.
-    fn detect(&mut self, detector: Arc<dyn BlockDetector>, frame: Arc<YuvFrame>) {
-        let rotation = self.rotation();
-        let (vw, vh) = rotation.rotated_size(frame.width, frame.height);
-        let step = vw.max(vh).div_ceil(DETECT_MAX_EDGE).max(1);
-        let (rgba, w, h) = render_region(&frame, rotation, Crop::whole(vw, vh), step);
-        let img = layout::rgba_to_rgb(&rgba, w, h);
-        self.blocks_key = Some((Arc::clone(&frame), rotation));
-        let (tx, rx) = mpsc::sync_channel(1);
-        let ctx = self.ctx.clone();
-        std::thread::Builder::new()
-            .name("squigl-detect".into())
-            .spawn(move || {
-                // Back from the decimated image to view pixels.
-                let min_side = (vw.min(vh) as f32 * MIN_BLOCK_FRACTION) as usize;
-                let result = detector.detect(&img).map(|blocks| {
-                    blocks
-                        .into_iter()
-                        .filter_map(|mut b| {
-                            if b.rect.w * step < min_side || b.rect.h * step < min_side {
-                                return None;
-                            }
-                            b.rect = Crop {
-                                x: b.rect.x * step,
-                                y: b.rect.y * step,
-                                w: b.rect.w * step,
-                                h: b.rect.h * step,
-                            }
-                            .clamped(vw, vh)?;
-                            b.quad = b
-                                .quad
-                                .map(|q| q.map(|[x, y]| [x * step as f32, y * step as f32]));
-                            Some(b)
-                        })
-                        .collect()
-                });
-                let _ = tx.send(result);
-                if let Some(ctx) = ctx {
-                    ctx.request_repaint();
-                }
-            })
-            .expect("spawning detection thread");
-        self.pending_detect = Some((rx, Instant::now()));
-        self.last_detect = Some(Instant::now());
-    }
-
-    /// Carries the selected block over to a fresh detection: the new block that
-    /// overlaps it most keeps the selection (so tab goes on from there), and if the
-    /// crop was still exactly that block, the crop follows it.
-    fn follow_selection(&mut self, new: &[Block]) {
-        let Some(old) = self.selected_block.and_then(|i| self.blocks.get(i)) else {
-            self.selected_block = None;
-            return;
-        };
-        let untouched = self.crop == Some(old.rect) && self.quad == old.quad;
-        let best = new
-            .iter()
-            .enumerate()
-            .map(|(j, b)| (j, old.rect.iou(b.rect)))
-            .filter(|(_, iou)| *iou > 0.3)
-            .max_by(|a, b| a.1.total_cmp(&b.1));
-        match best {
-            Some((j, _)) => {
-                self.selected_block = Some(j);
-                if untouched {
-                    self.crop = Some(new[j].rect);
-                    self.quad = new[j].quad;
-                }
-            }
-            None => self.selected_block = None,
-        }
-    }
-
-    /// Blocks stay until the next detection replaces them, unless the view they
-    /// were found in is gone (rotation, block mode off; the caller handles a frame
-    /// size change).
-    fn drop_stale_blocks(&mut self) {
-        let stale = !self.block_mode
-            || self
-                .blocks_key
-                .as_ref()
-                .is_some_and(|(_, r)| *r != self.rotation());
-        if stale {
-            self.clear_blocks();
-        }
-    }
-
-    fn clear_blocks(&mut self) {
-        self.blocks.clear();
-        self.blocks_key = None;
-        self.selected_block = None;
-    }
-
-    /// Whether the selected backend can take a read now (a local model may still
-    /// be downloading or loading).
-    fn backend_ready(&self) -> bool {
-        self.engine
-            .backends()
-            .get(self.selected_backend)
-            .and_then(|b| b.status())
-            .is_none_or(|s| s.starts_with("ready") || s.starts_with("unavailable"))
+        let on = !self.engine.block_mode();
+        self.command(Command::SetBlockMode { on });
     }
 
     /// Switches what the window shows; the engine drops a capture of the old source
@@ -1208,35 +699,19 @@ impl App {
         }
     }
 
+    /// The crop and erasures are in view space; the engine starts them over.
     fn rotate(&mut self, rotation: Rotation) {
-        if self.camera(Command::SetRotation { rotation }) {
-            // The crop and erasures are in view space; rather than spin them, start
-            // over.
-            self.set_rect(None);
-            self.erased.clear();
-        }
+        self.camera(Command::SetRotation { rotation });
     }
 
     /// Writes the crop (or the whole view) at native resolution, rotated as shown.
     fn save(&mut self) {
-        let Some(frame) = self.current_frame() else {
-            self.say("nothing to save yet");
-            return;
-        };
-        let erased = self.erased_on(&frame);
-        let (rgba, w, h) =
-            render_selection(&frame, self.rotation(), self.selection(), 1, &erased, None);
-        let path = self.save_dir.join(format!(
-            "squigl-{}.png",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        ));
-        let result = std::fs::create_dir_all(&self.save_dir).and_then(|()| {
-            image::save_buffer(&path, &rgba, w as u32, h as u32, image::ColorType::Rgba8)
-                .map_err(std::io::Error::other)
-        });
-        match result {
-            Ok(()) => self.say(format!("saved {w}x{h} to {}", path.display())),
-            Err(e) => self.say(format!("save failed: {e}")),
+        let dir = self.save_dir.clone();
+        if let Err(e) = self.engine.save(&dir) {
+            self.say(format!("save failed: {e:#}"));
+        }
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
         }
     }
 
@@ -1255,7 +730,7 @@ impl App {
             if ui.button("Save PNG  [ctrl+S]").clicked() {
                 self.save();
             }
-            ui.add_enabled_ui(self.crop.is_some(), |ui| {
+            ui.add_enabled_ui(self.crop().is_some(), |ui| {
                 if ui.button("Clear crop  [esc]").clicked() {
                     self.set_rect(None);
                 }
@@ -1264,7 +739,7 @@ impl App {
                 let status = detector.status();
                 let toggle = ui.add_enabled(
                     status.is_none(),
-                    egui::Button::selectable(self.block_mode, "Blocks  [L]"),
+                    egui::Button::selectable(self.engine.block_mode(), "Blocks  [L]"),
                 );
                 let toggle = match status {
                     Some(status) => toggle.on_disabled_hover_text(status),
@@ -1421,22 +896,23 @@ impl App {
                 ui.strong("CAPTURED");
                 ui.weak("preview frozen — space or esc goes back to live");
             }
-            if self.block_mode {
+            if self.engine.block_mode() {
                 ui.separator();
-                if !self.frozen() && self.pending_detect.is_some() {
+                if !self.frozen() && self.engine.detecting() {
                     ui.spinner();
                 }
+                let blocks = self.engine.blocks();
                 ui.label(format!(
                     "{} block{} — click one, tab through them, ctrl+enter reads all",
-                    self.blocks.len(),
-                    if self.blocks.len() == 1 { "" } else { "s" }
+                    blocks.len(),
+                    if blocks.len() == 1 { "" } else { "s" }
                 ));
                 for (role, name) in [
                     (Role::Text, "text"),
                     (Role::Formula, "formula"),
                     (Role::Figure, "figure"),
                 ] {
-                    if self.blocks.iter().any(|b| b.role() == role) {
+                    if blocks.iter().any(|b| b.role() == role) {
                         ui.colored_label(role_colour(role), name);
                     }
                 }
@@ -1493,7 +969,7 @@ impl App {
         };
 
         // The selection's corners on screen, for the handles.
-        let corners: Option<[Pos2; 4]> = self.selection().map(|sel| {
+        let corners: Option<[Pos2; 4]> = self.engine.selection().map(|sel| {
             sel.quad
                 .unwrap_or_else(|| layout::rect_quad(sel.rect))
                 .map(|[x, y]| to_screen(x, y))
@@ -1519,7 +995,7 @@ impl App {
                     response.drag_stopped(),
                     self.drag.is_some(),
                     pos.map(to_view),
-                    pos.map(|p| self.block_at(to_view(p))),
+                    pos.map(|p| self.engine.block_at(to_view(p))),
                 );
             }
         }
@@ -1537,12 +1013,12 @@ impl App {
                 // As a drag would: on a corner or inside the box it moves nothing.
                 let on_handle =
                     corners.is_some_and(|c| c.iter().any(|h| h.distance(pos) <= HANDLE_PX));
-                let in_box = self.crop.is_some_and(|c| c.contains(at.0, at.1));
+                let in_box = self.crop().is_some_and(|c| c.contains(at.0, at.1));
                 if !on_handle && !in_box {
-                    match self.block_at(at) {
-                        Some(i) => self.select_block(i),
-                        None => self.set_rect(None),
-                    }
+                    match self.engine.block_at(at) {
+                        Some(index) => self.command(Command::SelectBlock { index }),
+                        None => self.command(Command::SetSelection { selection: None }),
+                    };
                 }
             }
         }
@@ -1552,7 +1028,7 @@ impl App {
                 let handle =
                     corners.and_then(|c| (0..4).find(|&i| c[i].distance(pos) <= HANDLE_PX));
                 // On a corner: drag it. Inside the box: pan it. Outside: draw a new one.
-                self.drag = Some(match (handle, self.crop) {
+                self.drag = Some(match (handle, self.crop()) {
                     (Some(i), _) => Drag::Corner(i),
                     (None, Some(c)) if c.contains(start.0, start.1) => Drag::Move {
                         last: start,
@@ -1571,8 +1047,10 @@ impl App {
                         // A click (too small to be a box) on a detected block
                         // selects it; anywhere else it clears the crop.
                         match (drawn, response.drag_stopped()) {
-                            (None, true) => match self.block_at(origin) {
-                                Some(i) => self.select_block(i),
+                            (None, true) => match self.engine.block_at(origin) {
+                                Some(index) => {
+                                    self.command(Command::SelectBlock { index });
+                                }
                                 None => self.set_rect(None),
                             },
                             _ => self.set_rect(drawn),
@@ -1583,7 +1061,9 @@ impl App {
                             (here.0 as i64 - last.0 as i64, here.1 as i64 - last.1 as i64);
                         self.set_rect(Some(box_at_start.moved(dx, dy, vw, vh)));
                     }
-                    Drag::Corner(i) => self.drag_corner(i, here, vw, vh),
+                    Drag::Corner(corner) => {
+                        self.command(Command::MoveCorner { corner, to: here });
+                    }
                 }
             }
         }
@@ -1602,8 +1082,8 @@ impl App {
         let painter = ui.painter_at(image_rect);
         // Detected blocks: their quads, numbered in reading order. Each line sits on
         // a dark underlay so it reads on white paper and on ink alike.
-        for (i, b) in self.blocks.iter().enumerate() {
-            let selected = self.selected_block == Some(i);
+        for (i, b) in self.engine.blocks().iter().enumerate() {
+            let selected = self.engine.selected_block() == Some(i);
             let quad = b.quad.unwrap_or_else(|| layout::rect_quad(b.rect));
             let points: Vec<Pos2> = quad.iter().map(|[x, y]| to_screen(*x, *y)).collect();
             let colour = if selected {
@@ -1642,7 +1122,7 @@ impl App {
             }
         }
 
-        if let Some(crop) = self.crop {
+        if let Some(crop) = self.crop() {
             let rect = Rect::from_min_max(
                 to_screen(crop.x as f32, crop.y as f32),
                 to_screen((crop.x + crop.w) as f32, (crop.y + crop.h) as f32),
@@ -1671,7 +1151,7 @@ impl App {
             );
             // The quad, when the selection is one, and the corner handles.
             if let Some(corners) = corners {
-                if self.quad.is_some() {
+                if self.engine.selection().is_some_and(|s| s.quad.is_some()) {
                     painter.add(Shape::closed_line(
                         corners.to_vec(),
                         Stroke::new(2.0, SELECTED_COLOUR),
@@ -1682,54 +1162,6 @@ impl App {
                 }
             }
         }
-    }
-
-    /// Moves corner `i` of the selection to `here`. A rectangle stays a rectangle
-    /// (the opposite corner is fixed); a quad's corner moves on its own and the
-    /// rectangle around it follows.
-    fn drag_corner(&mut self, i: usize, here: (usize, usize), vw: usize, vh: usize) {
-        let Some(sel) = self.selection() else {
-            return;
-        };
-        match sel.quad {
-            None => {
-                let q = layout::rect_quad(sel.rect);
-                let opposite = q[(i + 2) % 4];
-                let opposite = (opposite[0] as usize, opposite[1] as usize);
-                if let Some(rect) = Crop::from_corners(opposite, here).clamped(vw, vh) {
-                    self.set_rect(Some(rect));
-                }
-            }
-            Some(mut q) => {
-                q[i] = [here.0 as f32, here.1 as f32];
-                let (x0, x1) = q.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
-                    (lo.min(p[0]), hi.max(p[0]))
-                });
-                let (y0, y1) = q.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| {
-                    (lo.min(p[1]), hi.max(p[1]))
-                });
-                let rect = Crop {
-                    x: x0.floor() as usize,
-                    y: y0.floor() as usize,
-                    w: (x1.ceil() - x0.floor()) as usize,
-                    h: (y1.ceil() - y0.floor()) as usize,
-                };
-                if let Some(rect) = rect.clamped(vw, vh) {
-                    self.crop = Some(rect);
-                    self.quad = Some(q);
-                }
-            }
-        }
-    }
-
-    /// The smallest detected block under a view point, if any.
-    fn block_at(&self, (x, y): (usize, usize)) -> Option<usize> {
-        self.blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.rect.contains(x, y))
-            .min_by_key(|(_, b)| b.rect.area())
-            .map(|(i, _)| i)
     }
 
     /// The right-hand column, the Zoom and Reading panes that are shown.
@@ -1849,7 +1281,7 @@ impl App {
     /// The crop at native pixels (decimated only if it is wider than the preview
     /// budget), scaled to the panel: this is the zoom.
     fn crop_image(&mut self, ui: &mut egui::Ui, frame: &Arc<YuvFrame>) {
-        let Some(selection) = self.selection() else {
+        let Some(selection) = self.engine.selection() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0);
                 ui.label("Drag a box on the preview to zoom to a region.");
@@ -1908,15 +1340,10 @@ impl App {
         // Native size of what is shown (a rectified quad is its own size).
         let (nw, nh) = (tw * step, th * step);
         let block = self
-            .selected_block
-            .and_then(|i| self.blocks.get(i))
-            .map(|b| {
-                format!(
-                    " — block {} ({})",
-                    self.selected_block.unwrap() + 1,
-                    b.label
-                )
-            })
+            .engine
+            .selected_block()
+            .and_then(|i| Some((i, self.engine.blocks().get(i)?)))
+            .map(|(i, b)| format!(" — block {} ({})", i + 1, b.label))
             .unwrap_or_default();
         ui.label(format!(
             "{nw}×{nh} px at ({}, {}){}{}{}{}",
@@ -2003,38 +1430,42 @@ impl App {
                 return;
             };
             let radius = ((off[0] - at[0]).powi(2) + (off[1] - at[1]).powi(2)).sqrt();
-            if !self.frozen() {
-                self.capture();
-            }
-            if !self.frozen() || radius <= 0.0 {
+            if radius <= 0.0 {
                 return;
             }
-            self.erased.push(erase::Stroke {
+            // Erasing a live frame captures it (the engine does, as a read does).
+            let mut strokes = self.engine.erased_on_capture();
+            strokes.push(erase::Stroke {
                 points: vec![at],
                 radius,
             });
+            if !self.command(Command::SetErasures { strokes }) {
+                return;
+            }
             self.painting = !response.clicked();
+            self.painting_capture = self.engine.capture_seq();
         } else if self.painting && response.dragged() {
-            let (Some(pos), Some(stroke)) =
-                (response.interact_pointer_pos(), self.erased.last_mut())
-            else {
+            let Some(pos) = response.interact_pointer_pos() else {
                 return;
             };
-            if let Some(p) = to_view(pos) {
-                // A new point once the pointer has moved a third of the brush, so a
-                // long stroke stays a few dozen segments.
-                let last = stroke.points[stroke.points.len() - 1];
-                let moved = ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2)).sqrt();
-                if moved >= stroke.radius / 3.0 {
-                    stroke.points.push(p);
-                }
+            let mut strokes = self.engine.erased().to_vec();
+            let (Some(p), Some(stroke)) = (to_view(pos), strokes.last_mut()) else {
+                return;
+            };
+            // A new point once the pointer has moved a third of the brush, so a long
+            // stroke stays a few dozen segments.
+            let last = stroke.points[stroke.points.len() - 1];
+            let moved = ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2)).sqrt();
+            if moved >= stroke.radius / 3.0 {
+                stroke.points.push(p);
+                self.command(Command::SetErasures { strokes });
             }
         }
         if response.clicked() || (self.painting && response.drag_stopped()) {
             self.painting = false;
             self.say(format!(
                 "{} erased (ctrl+Z takes back the last)",
-                strokes(self.erased.len())
+                strokes(self.engine.erased().len())
             ));
         }
     }
@@ -2042,26 +1473,28 @@ impl App {
     /// Backend picker, the Read button, and the readings so far.
     fn read_section(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
+        let reading = self.engine.reading();
         // Wrapped, so a narrow pane stacks the controls rather than cutting them off.
         ui.horizontal_wrapped(|ui| {
-            let what = match self.read_mode() {
+            let what = match self.engine.read_mode() {
                 Mode::Crop => "Read the box  [enter]",
                 Mode::Formula => "Read the formula  [enter]",
                 Mode::Page => "Read the page  [enter]",
             };
             ui.add_enabled_ui(
-                self.pending.is_none() && !self.engine.backends().is_empty(),
+                reading.is_none() && !self.engine.backends().is_empty(),
                 |ui| {
                     if ui.button(what).clicked() {
                         self.read();
                     }
-                    if !self.blocks.is_empty()
+                    if !self.engine.blocks().is_empty()
                         && ui.button("Read all blocks  [ctrl+enter]").clicked()
                     {
                         self.read_all();
                     }
                     if self.engine.backends().len() > 1 {
-                        let other = (self.selected_backend + 1) % self.engine.backends().len();
+                        let other =
+                            (self.engine.selected_backend() + 1) % self.engine.backends().len();
                         if ui
                             .button("2nd opinion  [shift+enter]")
                             .on_hover_text(format!(
@@ -2078,54 +1511,69 @@ impl App {
             let current = self
                 .engine
                 .backends()
-                .get(self.selected_backend)
+                .get(self.engine.selected_backend())
                 .map(|b| b.name().to_string())
                 .unwrap_or_else(|| "no backends".into());
+            let mut selected = self.engine.selected_backend();
             egui::ComboBox::from_id_salt("backend")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
                     for (i, b) in self.engine.backends().iter().enumerate() {
-                        ui.selectable_value(&mut self.selected_backend, i, b.name());
+                        ui.selectable_value(&mut selected, i, b.name());
                     }
                 });
-            if let Some((_, started, name, label)) = &self.pending {
+            if selected != self.engine.selected_backend() {
+                self.command(Command::SelectBackend { index: selected });
+            }
+            if let Some((r, started)) = &reading {
                 ui.spinner();
-                let what = label.as_deref().unwrap_or("");
+                let what = r.label.as_deref().unwrap_or("");
                 ui.label(format!(
-                    "{name}: {what} {:.0}s",
+                    "{}: {what} {:.0}s",
+                    r.backend,
                     started.elapsed().as_secs_f32()
                 ));
-                if !self.read_queue.is_empty() {
-                    ui.weak(format!("{} to go", self.read_queue.len()));
+                if r.queued > 0 {
+                    ui.weak(format!("{} to go", r.queued));
+                }
+                if ui
+                    .small_button("stop")
+                    .on_hover_text("stop waiting for this reading (and the rest)")
+                    .clicked()
+                {
+                    self.command(Command::CancelRead);
                 }
             } else if let Some(status) = self
                 .engine
                 .backends()
-                .get(self.selected_backend)
+                .get(self.engine.selected_backend())
                 .and_then(|b| b.status())
             {
                 ui.add(egui::Label::new(egui::RichText::new(status).weak()).extend());
             }
-            if !self.results.is_empty() {
+            if !self.engine.results().is_empty() {
                 if ui
                     .small_button("copy all")
                     .on_hover_text("every reading below, in this order, as text")
                     .clicked()
                 {
-                    let n = self.results.len();
+                    let n = self.engine.results().len();
                     let text = history::joined(
-                        self.history.entries.iter().rev().take(n).rev(),
+                        self.engine.history().entries.iter().rev().take(n).rev(),
                         &self.config().ui,
                     );
                     ui.ctx().copy_text(text);
                     self.say("readings copied");
                 }
                 if ui.small_button("clear").clicked() {
-                    self.results.clear();
+                    self.command(Command::ClearResults);
                 }
             }
             if ui
-                .small_button(format!("history ({})  [H]", self.history.entries.len()))
+                .small_button(format!(
+                    "history ({})  [H]",
+                    self.engine.history().entries.len()
+                ))
                 .on_hover_text("every reading this session; save them as Markdown")
                 .clicked()
             {
@@ -2137,6 +1585,18 @@ impl App {
             }
         });
         ui.separator();
+        // One typeset cache per result, started over with each new list.
+        if self.typeset_generation != self.engine.results_generation() {
+            self.typeset_generation = self.engine.results_generation();
+            self.typeset.clear();
+        }
+        // One read at a time: newest on top. A "read all": in page order.
+        let in_order = self.engine.results_in_page_order();
+        let typesetter = self.typeset_on.then(|| self.typesetter.clone()).flatten();
+        let reading_size = self.config().ui.reading_size;
+        let ui_cfg = self.config().ui.clone();
+        let results = self.engine.results();
+        self.typeset.resize_with(results.len(), HashMap::new);
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -2148,16 +1608,11 @@ impl App {
                 if settling {
                     ui.ctx().request_repaint_after(RESIZE_SETTLE);
                 }
-                // One read at a time: newest on top. A "read all": in page order.
-                let in_order = matches!(self.results_key, Some((_, ResultsScope::AllBlocks)));
-                let typesetter = self.typeset_on.then(|| self.typesetter.clone()).flatten();
-                let reading_size = self.config().ui.reading_size;
-                let ui_cfg = self.config().ui.clone();
-                let mut ordered: Vec<_> = self.results.iter_mut().collect();
+                let mut ordered: Vec<_> = results.iter().zip(self.typeset.iter_mut()).collect();
                 if !in_order {
                     ordered.reverse();
                 }
-                for entry in ordered {
+                for (entry, typeset) in ordered {
                     if let Some(label) = &entry.label {
                         ui.strong(label);
                     }
@@ -2166,7 +1621,7 @@ impl App {
                             ui,
                             t,
                             typesetter.as_deref(),
-                            &mut entry.typeset,
+                            typeset,
                             typeset_width,
                             reading_size,
                             &ui_cfg,
@@ -2242,7 +1697,7 @@ impl App {
             self.say(format!("enhancement: {}", self.enhance.mode.label()));
         }
         if tab != 0 {
-            self.step_block(tab);
+            self.command(Command::StepBlock { delta: tab });
         }
         // Phone zoom: + / - step, 0 resets.
         let (zoom_in, zoom_out, zoom_reset) = ctx.input(|i| {
@@ -2262,7 +1717,7 @@ impl App {
             self.camera(Command::SetZoom { zoom: 1.0 });
         }
         // Digital box: [ / ] shrink and grow, arrows pan (shift: finer).
-        if let (Some(crop), Some((vw, vh))) = (self.crop, self.crop_space) {
+        if let (Some(crop), Some((vw, vh))) = (self.crop(), self.engine.view_size()) {
             let (grow, shrink, dx, dy, fine) = ctx.input(|i| {
                 (
                     i.key_pressed(Key::CloseBracket),
@@ -2300,7 +1755,7 @@ impl App {
         }
         if esc {
             // Back out one level: the box first, then the capture, then full screen.
-            if self.crop.is_some() {
+            if self.crop().is_some() {
                 self.set_rect(None);
             } else if self.frozen() {
                 self.capture();
@@ -2384,17 +1839,11 @@ impl App {
             self.ctx = Some(ui.ctx().clone());
             ui.ctx().set_zoom_factor(self.config().ui.scale);
         }
-        for event in self.engine.pump(Instant::now()) {
-            if let Event::Notice(notice) = event {
-                self.say(notice.text);
-            }
-        }
-        // Erasures belong to a capture; the engine may have dropped it (a zoom, a new
-        // source).
-        if self.engine.capture_seq() != self.erased_capture {
-            self.erased.clear();
+        self.pump();
+        // A stroke belongs to its capture; the engine may have dropped it (a zoom, a
+        // new source).
+        if self.painting && self.engine.capture_seq() != self.painting_capture {
             self.painting = false;
-            self.erased_capture = self.engine.capture_seq();
         }
         self.track_zoom(ui.ctx());
         self.keep_enhance(ui.ctx());
@@ -2408,10 +1857,7 @@ impl App {
         }
         self.handle_screenshot(ui.ctx());
         self.handle_dropped_files(ui.ctx());
-        self.drop_stale_blocks();
-        self.poll_read();
-        self.maybe_detect(ui.ctx());
-        if self.pending.is_some() || self.pending_detect.is_some() {
+        if self.engine.reading().is_some() || self.engine.detecting() {
             // Keep the elapsed counter moving even when no frames arrive.
             ui.ctx().request_repaint_after(Duration::from_millis(250));
         }
@@ -2429,18 +1875,11 @@ impl App {
         };
 
         // The crop must fit the frame about to be drawn: frames change size when the
-        // camera is switched, and a stale box would index outside the new frame.
+        // camera is switched (the engine drops the crop at its next pump), and a
+        // stale box would index outside the new frame.
         let view = self.rotation().rotated_size(frame.width, frame.height);
-        if self.crop_space != Some(view) {
-            if self.crop_space.is_some() {
-                self.set_rect(None);
-                self.clear_blocks();
-            }
-            self.crop_space = Some(view);
-        }
-        let clamped = self.crop.and_then(|c| c.clamped(view.0, view.1));
-        if clamped != self.crop {
-            self.set_rect(clamped);
+        if self.engine.view_size() != Some(view) {
+            self.pump();
         }
 
         if let Some((zoom, seen)) = &mut self.dev_zoom {
@@ -2456,38 +1895,28 @@ impl App {
                 }
             }
         }
+        // Kept until the engine has them (it captures the frame first).
         if !self.dev_erase.is_empty() {
-            if !self.frozen() {
-                self.capture();
-            }
-            if self.frozen() {
-                self.erased = std::mem::take(&mut self.dev_erase);
+            let strokes = self.dev_erase.clone();
+            if self.command(Command::SetErasures { strokes }) {
+                self.dev_erase.clear();
             }
         }
-        if self.dev_read && self.backend_ready() {
+        if self.dev_detect && self.engine.detector().is_some_and(|d| d.ready()) {
+            self.dev_detect = false;
+            self.command(Command::SetBlockMode { on: true });
+        }
+        if self.dev_read && self.engine.backend_ready() {
             self.dev_read = false;
             self.read();
         }
-        // A read refused because the model is reloading (a lost GPU) is retried
-        // once the backend is ready again, so the recovery can be scripted.
-        if !self.dev_read
-            && self.pending.is_none()
-            && self.dev_read_retries > 0
-            && self
-                .results
-                .last()
-                .is_some_and(|e| matches!(&e.result, Err(m) if m.contains("try again shortly")))
-            && self.backend_ready()
-        {
-            self.dev_read_retries -= 1;
-            self.results.pop();
-            self.read();
-        }
-        if self.dev_second && self.pending.is_none() && !self.results.is_empty() {
+        // (A read refused while a model reloads -- a lost GPU -- is sent again by the
+        // engine once the model is back.)
+        if self.dev_second && self.engine.reading().is_none() && !self.engine.results().is_empty() {
             self.dev_second = false;
             self.second_opinion();
         }
-        if self.dev_read_all && !self.blocks.is_empty() && self.backend_ready() {
+        if self.dev_read_all && !self.engine.blocks().is_empty() && self.engine.backend_ready() {
             self.dev_read_all = false;
             self.read_all();
         }

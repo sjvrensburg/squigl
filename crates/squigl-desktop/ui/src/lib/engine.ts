@@ -97,10 +97,59 @@ export interface StreamSlice {
   torch: boolean;
 }
 
+/** A rectangle in view pixels. */
+export interface Crop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Four corners, clockwise from the top-left. */
+export type Quad = [[number, number], [number, number], [number, number], [number, number]];
+
+export interface Selection {
+  rect: Crop;
+  quad: Quad | null;
+}
+
+export interface Stroke {
+  points: [number, number][];
+  radius: number;
+}
+
 export interface CaptureSlice {
   frozen: { seq: number; width: number; height: number } | null;
   rotation: Rotation;
   view: [number, number] | null;
+  selection: Selection | null;
+  erasures: Stroke[];
+}
+
+export interface Block {
+  label: string;
+  score: number;
+  rect: Crop;
+  quad: Quad | null;
+}
+
+export interface BlocksSlice {
+  enabled: boolean;
+  detecting: boolean;
+  blocks: Block[];
+  selected: number | null;
+}
+
+export type ReadMode = "crop" | "formula" | "page";
+
+export interface ReadingSlice {
+  backends: string[];
+  selected: number;
+  reading: { backend: string; label: string | null; queued: number } | null;
+  results: number;
+  history: number;
+  mode: ReadMode;
+  in_page_order: boolean;
 }
 
 export interface Versioned<T> {
@@ -116,8 +165,8 @@ export interface Notice {
 export type Event =
   | { type: "stream"; data: Versioned<StreamSlice> }
   | { type: "capture"; data: Versioned<CaptureSlice> }
-  | { type: "blocks"; data: Versioned<unknown> }
-  | { type: "reading"; data: Versioned<unknown> }
+  | { type: "blocks"; data: Versioned<BlocksSlice> }
+  | { type: "reading"; data: Versioned<ReadingSlice> }
   | { type: "models"; data: Versioned<unknown> }
   | { type: "config"; data: Versioned<Config> }
   | { type: "frame"; data: { seq: number } }
@@ -137,7 +186,21 @@ export type Command =
   | { type: "set-config"; config: Config }
   | { type: "preview-config"; config: Config }
   | { type: "prepare-model"; name: string }
-  | { type: "cancel-model-download"; name: string };
+  | { type: "cancel-model-download"; name: string }
+  | { type: "set-selection"; selection: Crop | null }
+  | { type: "move-corner"; corner: number; to: [number, number] }
+  | { type: "select-block"; index: number }
+  | { type: "step-block"; delta: number }
+  | { type: "set-block-mode"; on: boolean }
+  | { type: "set-erasures"; strokes: Stroke[] }
+  | { type: "select-backend"; index: number }
+  | { type: "read" }
+  | { type: "read-all" }
+  | { type: "second-opinion" }
+  | { type: "cancel-read" }
+  | { type: "clear-results" }
+  | { type: "save"; dir: string }
+  | { type: "save-history"; dir: string };
 
 export type Reply = "done" | "unchanged";
 
