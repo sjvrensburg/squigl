@@ -63,6 +63,8 @@
   const model = $derived(models.find((m) => m.kind === "transcriber" && m.name === backend) ?? null);
   const ready = $derived(!model || model.phase.phase === "ready");
   const detector = $derived(models.find((m) => m.kind === "detector") ?? null);
+  // squigl's own voice (Kokoro), offered for download when there is one.
+  const voiceModel = $derived(models.find((m) => m.kind === "voice") ?? null);
   // The models to offer to get ready: the selected reader's, and the block finder's
   // once blocks were asked for.
   const preparing = $derived(
@@ -270,6 +272,22 @@
       </div>
     {/if}
 
+    {#if speech?.available && voiceModel && voiceModel.phase.phase !== "ready"}
+      <div class="model" role="group" aria-label="Natural voice: {voiceModel.name}">
+        <p>A natural voice for reading aloud ({voiceModel.name}). {describe(voiceModel.phase)}</p>
+        {#if voiceModel.phase.phase === "downloading"}
+          <progress value={voiceModel.phase.done} max={voiceModel.phase.total}></progress>
+          <button onclick={() => run({ type: "cancel-model-download", name: voiceModel.name })}>
+            Stop the download
+          </button>
+        {:else if idle(voiceModel.phase)}
+          <p class="note">It runs on this computer, and sounds far better than the system's voice.</p>
+          <button onclick={() => run({ type: "prepare-model", name: voiceModel.name })}>
+            {voiceModel.phase.phase === "not-installed" ? "Download it" : "Get it ready"}
+          </button>
+        {/if}
+      </div>
+    {/if}
     {#if speech?.available}
       <div class="controls" role="group" aria-label="Reading aloud">
         <button disabled={results.length === 0} onclick={() => run({ type: "speak" })}>

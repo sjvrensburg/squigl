@@ -714,6 +714,16 @@ describe("reading aloud", () => {
     assert.ok(buttons.some((b) => b.startsWith("Read aloud")), `${buttons}`);
   });
 
+  test("the natural voice is offered for download, and goes once it is ready", async () => {
+    const offer = () =>
+      s.execute(`return document.querySelector('.reading [aria-label^="Natural voice"]')?.textContent ?? null;`);
+    const text = await until(offer, "the offer");
+    assert.match(text.replace(/\s+/g, " "), /Test voice.*175 MB.*Download it/);
+    await s.execute(`document.querySelector('.reading [aria-label^="Natural voice"] button').focus();`);
+    await s.press("\uE007");
+    await until(async () => (await offer()) === null, "the offer gone");
+  });
+
   test("s reads the reading aloud a sentence at a time, the sentence boxed as it is said", async () => {
     await s.execute(`document.querySelector("canvas").focus();`);
     await s.press("s");

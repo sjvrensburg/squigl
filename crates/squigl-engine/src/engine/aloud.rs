@@ -13,7 +13,8 @@ use std::collections::VecDeque;
 #[derive(Default)]
 pub(super) struct Aloud {
     voice: Option<Box<dyn Voice>>,
-    voices: Vec<VoiceInfo>,
+    /// Asked of the voice once (a system may list thousands).
+    voices: Option<Vec<VoiceInfo>>,
     next_id: u64,
     /// The result being said, and its sentences still to say.
     result: Option<usize>,
@@ -55,7 +56,6 @@ pub struct Speaking {
 pub struct SpeechSlice {
     /// There is a voice (a build with speech, and the system's speech working).
     pub available: bool,
-    pub voices: Vec<VoiceInfo>,
     pub speaking: Option<Speaking>,
     pub paused: bool,
     /// The page is being read aloud: what is still to be read is said as it lands.
@@ -69,19 +69,23 @@ impl Engine {
         let Some(voice) = &mut self.aloud.voice else {
             return;
         };
-        if self.aloud.voices.is_empty() {
-            self.aloud.voices = voice.voices();
+        if self.aloud.voices.is_none() {
+            self.aloud.voices = Some(voice.voices());
         }
         if let Err(e) = voice.configure(speech.voice.as_deref(), speech.rate) {
             self.notice(Level::Warning, format!("speech settings: {e:#}"));
         }
     }
 
+    /// The voices there are, for the voices slice (sent once).
+    pub(super) fn voices(&self) -> Vec<VoiceInfo> {
+        self.aloud.voices.clone().unwrap_or_default()
+    }
+
     pub(super) fn speech_slice(&self) -> SpeechSlice {
         let a = &self.aloud;
         SpeechSlice {
             available: a.voice.is_some(),
-            voices: a.voices.clone(),
             speaking: a.result.and_then(|result| {
                 let u = a
                     .saying
@@ -97,6 +101,27 @@ impl Engine {
             paused: a.paused,
             following: a.follow,
         }
+    }
+
+    /// The voice's own model, if it has one to download.
+    pub(super) fn voice_model(&self) -> Option<(String, crate::model::ModelPhase)> {
+        self.aloud.voice.as_ref().and_then(|v| v.model())
+    }
+
+    /// Prepares or cancels the voice's model called `name`; false if it has none.
+    pub(super) fn voice_model_command(&self, name: &str, prepare: bool) -> bool {
+        let Some(v) = &self.aloud.voice else {
+            return false;
+        };
+        if v.model().is_none_or(|(n, _)| n != name) {
+            return false;
+        }
+        if prepare {
+            v.prepare_model();
+        } else {
+            v.cancel_model();
+        }
+        true
     }
 
     fn has_voice(&mut self) -> bool {
@@ -163,8 +188,16 @@ impl Engine {
         }
     }
 
-    /// Stops at once; the sentence is said again from its start on resuming.
+    /// Holds the voice mid-word where it can; else stops it, to say the sentence
+    /// again from its start on resuming.
     pub(super) fn pause_speaking(&mut self) -> Reply {
+        if self.aloud.saying.is_none() || self.aloud.paused {
+            return Reply::Unchanged;
+        }
+        if self.aloud.voice.as_mut().is_some_and(|v| v.pause()) {
+            self.aloud.paused = true;
+            return Reply::Done;
+        }
         let Some((_, sentence)) = self.aloud.saying.take() else {
             return Reply::Unchanged;
         };
@@ -181,6 +214,10 @@ impl Engine {
             return Reply::Unchanged;
         }
         self.aloud.paused = false;
+        // Held mid-word: it goes on. Else the sentence is said again.
+        if self.aloud.saying.is_some() && self.aloud.voice.as_mut().is_some_and(|v| v.resume()) {
+            return Reply::Done;
+        }
         self.say_next();
         Reply::Done
     }
@@ -254,7 +291,15 @@ impl Engine {
                 None => Ok(()),
             };
             match said {
-                Ok(()) => self.aloud.saying = Some((id, sentence)),
+                Ok(()) => {
+                    self.aloud.saying = Some((id, sentence));
+                    // The next sentence made while this one is said.
+                    if let (Some(v), Some(next)) =
+                        (&mut self.aloud.voice, self.aloud.sentences.front())
+                    {
+                        v.prepare(&next.text);
+                    }
+                }
                 Err(e) => {
                     self.notice(Level::Warning, format!("could not speak: {e:#}"));
                     self.stop_voice();

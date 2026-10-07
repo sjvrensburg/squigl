@@ -126,7 +126,7 @@ export type ModelPhase =
 
 export interface ModelStatus {
   name: string;
-  kind: "transcriber" | "detector";
+  kind: "transcriber" | "detector" | "voice";
   phase: ModelPhase;
 }
 

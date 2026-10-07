@@ -1,0 +1,347 @@
+Pairing works over a phone hotspot, and over Tailscale with the phone on mobile data (on the Ubuntu box), with no certificate warning when Tailscale's HTTPS is on.	pˈɛɹɪŋ wˈɜɹks ˈOvəɹ ɐ fˈOn hˈɑtspˌɑt, ænd ˈOvəɹ tˈAlskˌAl wɪð ðə fˈOn ˌɔn mˈObᵊl dˈATə (ˌɔn ði ubˈuntu bˈɑks), wɪð nˈO səɹtˈɪfəkət wˈɔɹnɪŋ wˌɛn tˈAlzkˌAlz ˌAʧtˌitˌipˌiˈɛs ɪz ˌɔn.
+Speaking readings: a button and key to speak the current reading, and an option to speak each reading as it arrives.	spˈikɪŋ ɹˈidɪŋz: ɐ bˈʌtn ænd kˈi tə spˈik ðə kˈɜɹənt ɹˈidɪŋ, ænd ɐn ˈɑpʃən tə spˈik ˈiʧ ɹˈidɪŋ æz ɪt əɹˈIvz.
+Two rules hold throughout: Every phase leaves the egui app working, and CI green for both feature sets.	tˈu ɹˈulz hˈOld θɹuˈWt: ˈɛvəɹi fˈAz lˈivz ði ˈɛɡwi ˈæp wˈɜɹkɪŋ, ænd sˌiˈI ɡɹˈin fɔɹ bˈOθ fˈiʧəɹ sˈɛts.
+On the picture: an overlay draws the blocks (by kind, in colour and line style) and the selection.	ˌɔn ðə pˈɪkʧəɹ: ɐn ˈOvəɹlˌA dɹˈɔz ðə blˈɑks (bI kˈInd, ɪn kˈʌləɹ ænd lˈIn stˈIl) ænd ðə səlˈɛkʃən.
+- Webrtc is added in Phase 5, with the pairing server.	— wˈɛbtk ɪz ˈædᵻd ɪn fˈAz fˈIv, wɪð ðə pˈɛɹɪŋ sˈɜɹvəɹ.
+Kokoro ran on the CPU outside RUNTIME, in a loop, while GLM-OCR read every handwriting sample three times on WebGPU under it, in one process with one ONNX Runtime environment.	kəkˈɔɹO ɹˈæn ˌɔn ðə sˌipˌijˈu ˌWtsˈId ɹˈʌntIm, ɪn ɐ lˈup, wˌIl ʤˌiˌɛlˈɛmOsiˌɑɹ ɹˈɛd ˈɛvəɹi hˈændɹˌITɪŋ sˈæmpᵊl θɹˈi tˈImz ˌɔn wˌɛbʤˌipˌijˈu ˈʌndəɹ ɪt, ɪn wˈʌn pɹˈɑsˌɛs wɪð wˈʌn ˌOˌɛnˌɛnˈɛks ɹˈʌntIm ənvˈIɹənmᵊnt.
+Its own README defers the data's licence to Misaki's.	ˌɪts ˈOn ˌɑɹˌiˌAdˌiˌɛmˈi dəfˈɜɹz ðə dˈATəz lˈIsᵊns tə mˈɪsˌAkiz.
+Each converter's MathML is spoken by MathCAT 0.7.7-alpha.1, built with Pick math-core, in squigl-engine.	ˈiʧ kənvˈɜɹTəɹz mˌæθˌɛmˈɛl ɪz spˈOkən bI mˌæθkˈæt zˈɪɹO sˈɛvən sˈɛvən ˈælfə wˈʌn, bˈɪlt wɪð pˈɪk mˌæθkˈɔɹ, ɪn skwˈɪlənʤˌIn.
+The dev flags become engine commands.	ðə dˈɛv flˈæɡz bəkˈʌm ˈɛnʤən kəmˈændz.
+Such a click is now handled as one (#26).	sˈʌʧ ɐ klˈɪk ɪz nˈW hˈændəld æz wˈʌn (twˈɛnti sˈɪks).
+The 86 MB q8f16 export segfaults in ONNX Runtime 1.30.	ði ˈATi sˈɪks ˌɛmbˈi kjˈu ˈAt ˈɛf sˌɪkstˈin ˈɛkspˌɔɹt sˈɛɡfˌɔlts ɪn ˌOˌɛnˌɛnˈɛks ɹˈʌntIm wˈʌn pYnt θɹˈi.
+Still to do: confirm the Windows prompt and the Tailscale adapter's profile in the VM.	stˈɪl tə dˈu: kənfˈɜɹm ðə wˈɪndOz pɹˈɑmpt ænd ðə tˈAlskˌAl ədˈæptəɹz pɹˈOfˌIl ɪn ðə vˌiˈɛm.
+Signing costs and CI secrets.	sˈInɪŋ kˈɔsts ænd sˌiˈI sˈikɹəts.
+They download with consent on first use of reading features.	ðˌA dˈWnlˌOd wɪð kənsˈɛnt ˌɔn fˈɜɹst jˈus ʌv ɹˈidɪŋ fˈiʧəɹz.
+It is no longer a dependency of the core.	ˌɪt ɪz nˈO lˈɔŋɡəɹ ɐ dəpˈɛndᵊnsi ʌv ðə kˈɔɹ.
+An engine test pairs one fake phone and then a second.	ɐn ˈɛnʤən tˈɛst pˈɛɹz wˈʌn fˈAk fˈOn ænd ðˈɛn ɐ sˈɛkənd.
+Tester sessions at the phases that name them: low-vision users (4, 8) and teachers (8, 10).	tˈɛstəɹ sˈɛʃənz æt ðə fˈAzᵻz ðæt nˈAm ðˌɛm: lˌOvˈɪʒən jˈuzəɹz (fˈɔɹ, ˈɛks ænd tˈiʧəɹz (ˈAt, tˈɛn).
+Roadmap spike S7 asks which converter Phase 8 should use for showing readings' maths as MathML instead of Typst images, and how MathCAT (ClearSpeak) speaks that MathML.	ɹˈOdmæp spˈIk ˈɛs sˈɛvən ˈæsks wˌɪʧ kənvˈɜɹTəɹ fˈAz ˈAt ʃˌʊd jˈuz fɔɹ ʃˈOɪŋ ɹˈidɪŋz mˈæθs æz mˌæθˌɛmˈɛl ɪnstˈɛd ʌv tˈɪpst ˈɪmɪʤᵻz, ænd hˌW mˌæθkˈæt (klˌɪɹspˈik) spˈiks ðæt mˌæθˌɛmˈɛl.
+At 12 MB: 127, 71 and 55 fps.	ˌæt twˈɛlv ˌɛmbˈi: wˈʌn hˈʌndɹəd twˈɛnti sˈɛvən, sˈɛvənti wˈʌn ænd fˈɪfti fˈIv ˈɛfs.
+The server runs only while the dialog is open.	ðə sˈɜɹvəɹ ɹˈʌnz ˈOnli wˌIl ðə dˈIəlˌɔɡ ɪz ˈOpᵊn.
+The UI says so, and visibly flags when a read goes to a cloud (OpenAI-compatible) backend.	ðə jˌuˈI sˈɛz sˌO, ænd vˈɪzəbli flˈæɡz wˌɛn ɐ ɹˈid ɡˈOz tə ɐ klˈWd (ˌOpᵊnˈAˌIkəmpˈæTəbᵊl) bˈækənd.
+Default transport: a localhost WebSocket.	dəfˈɔlt tɹˈænspˌɔɹt: ɐ lˈOkəlhˌOst wˌɛbsˈɑkət.
+"v with right arrow above embellishment above" becomes "vector v".	“vˈi wɪð ɹˈIt ˈɛɹO əbˈʌv əmbˈɛlɪʃmənt əbˈʌv” bəkˈʌmz “vˈɛktəɹ vˈi”.
+- Its fallback for unknown words is a 751k-parameter BART, Apache-2.0.	— ˌɪts fˈɔlbˌæk fɔɹ ˌʌnnˈOn wˈɜɹdz ɪz ɐ sˈɛvən hˈʌndɹəd fˈɪfti wˈʌn kˈA pəɹˈæməTəɹ bˌiˌAˌɑɹtˈi, əpˈæʧi tˈu zˈɪɹO.
+What matters for low vision is legibility at large scales, high contrast, keyboard operation, and staying usable alongside OS magnifiers (GNOME Zoom, Windows Magnifier, macOS Zoom) that follow the focus.	wˌʌt mˈæTəɹz fɔɹ lˈO vˈɪʒən ɪz lˌɛʤəbˈɪləTi æt lˈɑɹʤ skˈAlz, hˈI kˈɑntɹˌæst, kˈibˌɔɹd ˌɑpəɹˈAʃən, ænd stˈAɪŋ jˈuzəbᵊl əlˌɔŋsˈId ˌOˈɛs mˈæɡnəfˌIəɹz (nˈOm zˈum, wˈɪndOz mˈæɡnəfˌIəɹ, mˌækˌOˈɛs zˈum) ðæt fˈɑlO ðə fˈOkəs.
+- squigl-desktop streams live from the phone over adb, with no extra USB driver needed for this Samsung on LineageOS.	dˈi skwˌɪldəsktˈɑp stɹˈimz lˈɪv fɹʌm ðə fˈOn ˈOvəɹ ˈædb, wɪð nˈO ˈɛkstɹə jˌuˌɛsbˈi dɹˈIvəɹ nˈidᵻd fɔɹ ðɪs sˈæmsˌʌŋ ˌɔn lˈɪniɪʤOˌɛs.
+- With the ffmpeg feature (new for squigl-desktop) the app draws 21.	— wˌɪð ði ˈɛfpˌɛɡ fˈiʧəɹ (nˈu fɔɹ skwˌɪldəsktˈɑp) ði ˈæp dɹˈɔz twˈɛnti wˈʌn.
+Painting captures the frame if it is live; strokes apply to every read and save of that capture (tinted red on the preview) and go with a retake.	pˈAntɪŋ kˈæpʧəɹz ðə fɹˈAm ɪf ɪt ɪz lˈIv; stɹˈOks əplˈI tʊ ˈɛvəɹi ɹˈid ænd sˈAv ʌv ðˈæt kˈæpʧəɹ (tˈɪntᵻd ɹˈɛd ˌɔn ðə pɹˈivjˌu) ænd ɡˌO wɪð ɐ ɹˈitˌAk.
+Svelte 5 + TypeScript (chosen 2026-10-04) using native HTML elements, with no component library.	svˈɛlt fˈIv plˈʌs tˌIpskɹˈɪpt (ʧˈOzᵊn twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO fˈɔɹ) jˈuzɪŋ nˈATɪv ˌAʧtˌiˌɛmˈɛl ˈɛləmənts, wɪð nˈO kəmpˈOnənt lˈIbɹˌɛɹi.
+A synchronous state machine.	ɐ sˈɪŋkɹənəs stˈAt məʃˈin.
+Rust crops to the source region and decimates by an integer step, so delivered pixels are at most ~1× display pixels.	ɹˈʌst kɹˈɑps tə ðə sˈɔɹs ɹˈiʤᵊn ænd dˈɛsəmˌAts bI ɐn ˈɪntəʤəɹ stˈɛp, sˌO dəlˈɪvəɹd pˈɪksᵊlz ɑɹ æt mˈOst ˈɛks dəsplˈA pˈɪksᵊlz.
+Reading a whole page: "Read page aloud" captures, detects blocks and reads them in the layout model's reading order, speaking each one as it finishes, with the spoken block highlighted on the preview and its words in the text.	ɹˈidɪŋ ɐ hˈOl pˈAʤ: “ɹˈid pˈAʤ əlˈWd” kˈæpʧəɹz, dətˈɛkts blˈɑks ænd ɹˈidz ðˌɛm ɪn ðə lˈAˌWt mˈɑdᵊlz ɹˈidɪŋ ˈɔɹdəɹ, spˈikɪŋ ˈiʧ wˈʌn æz ɪt fˈɪnəʃᵻz, wɪð ðə spˈOkən blˈɑk hˈIlˌITᵻd ˌɔn ðə pɹˈivjˌu ænd ɪts wˈɜɹdz ɪn ðə tˈɛkst.
+It also has Copy, Clear and Save readings.	ˌɪt ˈɔlsO hæz kˈɑpi, klˈɪɹ ænd sˈAv ɹˈidɪŋz.
+Camera→V4L2 only (no audio, display mirroring, or input control).	kˈæməɹˌæmvəl ˈOnli (nˈO ˈɔdiO, dəsplˈA mˈɪɹəɹɪŋ, ɔɹ ˈɪnpˌʊt kəntɹˈOl).
+There is no Windows PC or Mac.	ðˌɛɹ ɪz nˈO wˈɪndOz pˌisˈi ɔɹ mˈæk.
+Progress: Replay source and recorder: done.	pɹˈɑɡɹəs: ɹˈiplˌA sˈɔɹs ænd ɹəkˈɔɹdəɹ: dˈʌn.
+The erase brush, with a keyboard alternative.	ði əɹˈAs bɹˈʌʃ, wɪð ɐ kˈibˌɔɹd ɔltˈɜɹnəTɪv.
+macOS is built and tested by GitHub's macos-14 runners only.	mˌækˌOˈɛs ɪz bˈɪlt ænd tˈɛstᵻd bI ɡˌɪthˈʌbz mˌækOsˈɛɹ ɹˈʌnəɹz ˈOnli.
+On Windows and macOS (tester).	ˌɔn wˈɪndOz ænd mˌækˌOˈɛs (tˈɛstəɹ).
+The UI is usable at 200% OS text scale and in each high-contrast theme.	ðə jˌuˈI ɪz jˈuzəbᵊl æt tˈu hˈʌndɹəd pəɹsˈɛnt ˌOˈɛs tˈɛkst skˈAl ænd ɪn ˈiʧ hˌIkˈɑntɹˌæst θˈim.
+- DOCX with native equations (MathML→OMML is the risk; Pandoc-style conversion is the fallback).	dˈi dˌiˌOsˌiˈɛks wɪð nˈATɪv əkwˈAʒənz (mˈæθmlˌɔm ɪz ðə ɹˈɪsk; pˌændɑkstˈIl kənvˈɜɹʒən ɪz ðə fˈɔlbˌæk).
+- Pasting an image moves to Phase 4.	— pˈAstɪŋ ɐn ˈɪmɪʤ mˈuvz tə fˈAz fˈɔɹ.
+- "Block all incoming connections" stops pairing altogether.	— “blˈɑk ˈɔl ˈɪnkˌʌmɪŋ kənˈɛkʃənz” stˈɑps pˈɛɹɪŋ ˌɔltəɡˈɛðəɹ.
+Shortcuts: [ and ] for zoom, t for the torch.	ʃˈɔɹtkˌʌts: ( ænd ) fɔɹ zˈum, tˈi fɔɹ ðə tˈɔɹʧ.
+scrcpy parses it with Integer.parseInt(v, 16), so the top bit must be 0 (first hex digit ≤ 7).	skɹˈIpi pˈɑɹsᵻz ɪt wɪð ˌɪntəʤəɹspˈɑɹsənt, sˌɪkstˈin), sˌO ðə tˈɑp bˈɪt mˈʌst bi zˈɪɹO (fˈɜɹst hˈɛks dˈɪʤət ˈɛks sˈɛvən).
+- The app ships its own high-contrast UI themes, because prefers-contrast and forced-colors are uneven on WebKitGTK.	— ði ˈæp ʃˈɪps ɪts ˈOn hˌIkˈɑntɹˌæst jˌuˈI θˈimz, bəkˈʌz pɹifˌɜɹzkˈɑntɹˌæst ænd fˌɔɹstkˈʌləɹz ɑɹ ˌʌnˈivən ˌɔn wˌɛbkˈɪtʤˌitˌikˈA.
+This is the most likely WebKitGTK trouble spot.	ðˌɪs ɪz ðə mˈOst lˈIkli wˌɛbkˈɪtʤˌitˌikˈA tɹˈʌbᵊl spˈɑt.
+The system voice that Phase 8d reads aloud with (speech-dispatcher, which on Linux is espeak-ng) phrases maths well through MathCAT, but it is hard to listen to.	ðə sˈɪstəm vˈYs ðæt fˈAz ˈAt dˈi ɹˈidz əlˈWd wɪð (spˌiʧdəspˈæʧəɹ, wˌɪʧ ˌɔn lˈɪnəks ɪz ɛspˈikɪŋ) fɹˈAzᵻz mˈæθs wˈɛl θɹu mˌæθkˈæt, bˌʌt ɪt ɪz hˈɑɹd tə lˈɪsᵊn tu.
+X11 is within a few per cent, except IPC, which is slower there (p95 9.6 ms at 3 MB).	ˈɛks əlˈɛvᵊn ɪz wɪðˈɪn ɐ fjˈu pɜɹ sˈɛnt, ɪksˈɛpt ˌIpˌisˈi, wˌɪʧ ɪz slˈOəɹ ðɛɹ (pˈi nˈIndi fˈIv nˈIn pYnt sˈɪks ˈɛmz æt θɹˈi ˌɛmbˈi).
+The Colours select was unreadable: WebKitGTK drew it natively, white on light grey, while reporting the theme's colours.	ðə kˈʌləɹz səlˈɛkt wʌz ˌʌnɹˈidəbᵊl: wˌɛbkˈɪtʤˌitˌikˈA dɹˈu ɪt nˈATɪvli, wˈIt ˌɔn lˈIt ɡɹˈA, wˌIl ɹᵻpˈɔɹTɪŋ ðə θˈimz kˈʌləɹz.
+- Open a multi-page PDF of scanned submissions; rasterise with pdfium-render or MuPDF (check licences).	— ˈOpᵊn ɐ mˌʌltipˈAʤ pˌidˌiˈɛf ʌv skˈænd səbmˈɪʃənz; ɹˈæstəɹˌIz wɪð pdɪfjˈuɹˌɛndəɹ ɔɹ mjˌupˌidˌiˈɛf (ʧˈɛk lˈIsᵊnsᵻz).
+- The server runs only while the pairing dialog is open.	— ðə sˈɜɹvəɹ ɹˈʌnz ˈOnli wˌIl ðə pˈɛɹɪŋ dˈIəlˌɔɡ ɪz ˈOpᵊn.
+- A real certificate when there is one.	— ɐ ɹˈiᵊl səɹtˈɪfəkət wˌɛn ðɛɹ ɪz wˈʌn.
+It is the only one that keeps a 12 MB frame (4000x3000) at 30 fps on under one core (0.57 cores, p95 16 ms).	ˌɪt ɪz ði ˈOnli wˈʌn ðæt kˈips ɐ twˈɛlv ˌɛmbˈi fɹˈAm (fˈɔɹ θˈWzᵊnd ˈɛks θɹˈi θˈWzᵊnd) æt θˈɜɹTi ˈɛfs ˌɔn ˈʌndəɹ wˈʌn kˈɔɹ (zˈɪɹO pYnt fˈIv sˈɛvən kˈɔɹz, pˈi nˈIndi fˈIv sˌɪkstˈin ˈɛmz).
+Android 12+ on the phone (camera-as-video-source requires it).	ˈændɹˌYd twˈɛlv plˈʌs ˌɔn ðə fˈOn (kˈæməɹəæzvˈɪdiOsˌɔɹs ɹəkwˈIəɹz ɪt).
+Playback goes through cpal (libasound2-dev on Linux), resampled from 24 kHz.	plˈAbˌæk ɡˈOz θɹu spˈæl (lˌɪbəsˈWndˌʌv ˌɔn lˈɪnəks), ɹᵻsˈæmpᵊld fɹʌm twˈɛnti fˈɔɹ kˈAz.
+With adb forward, the local TCP connect succeeds before the device-side socket exists, so an early read gets EOF.	wˌɪð ˈædb fˈɔɹwəɹd, ðə lˈOkəl tˌisˌipˈi kənˈɛkt səksˈidz bəfˈɔɹ ðə dəvˈIssˌId sˈɑkət ɪɡzˈɪsts, sˌO ɐn ˈɜɹli ɹˈid ɡɛts ˌiˌOˈɛf.
+squigl-egui uses squigl-engine, squigl-models and squigl-math.	skwˌɪɡᵊlˈɛɡi jˈuzᵻz skwˈɪlənʤˌIn, skwˌIlmˈɑdᵊlz ænd skwˈɪlmˌæθ.
+Progress (8a, 2026-10-07): reading in the desktop app.	pɹˈɑɡɹəs (ˈAt ˈA, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO sˈɛvən: ɹˈidɪŋ ɪn ðə dˈɛsktˌɑp ˈæp.
+ctrl+wheel over the zoomed view or the "Erase brush" slider sizes the brush; ctrl+Z takes back the last stroke.	ktlˈɛkhwˌil ˈOvəɹ ðə zˈumd vjˈu ɔɹ ði “əɹˈAs bɹˈʌʃ” slˈIdəɹ sˈIzᵻz ðə bɹˈʌʃ; ktˈɜɹlz tˈAks bˈæk ðə lˈæst stɹˈOk.
+CLAUDE.md is rewritten for the new layout.	klˈAdɪɹmd ɪz ɹiɹˈɪtn fɔɹ ðə nˈu lˈAˌWt.
+The style is the row for the input's phoneme count.	ðə stˈIl ɪz ðə ɹˈO fɔɹ ði ˈɪnpˌʊts fˈOnˌim kˈWnt.
+No frame was corrupted in any run.	nˈO fɹˈAm wʌz kəɹˈʌptᵻd ɪn ˈɛni ɹˈʌn.
+- So does the egui window (25 fps at 2992x2992), once it drew with wgpu: OpenGL there is 1.1.	— sˌO dˈʌz ði ˈɛɡwi wˈɪndO (twˈɛnti fˈIv ˈɛfs æt twˈɛnti nˈIn nˈIndi tˈu ˈɛks twˈɛnti nˈIn nˈIndi tˈu), wˈʌns ɪt dɹˈu wɪð ˈʌɡpˌu: ˌOpᵊnʤˌiˈɛl ðɛɹ ɪz wˈʌn pYnt wˈʌn.
+fmt and clippy -D warnings pass for both feature sets.	ˌɛfmt ænd klˈɪpi dˈi wˈɔɹnɪŋz pˈæs fɔɹ bˈOθ fˈiʧəɹ sˈɛts.
+whenever the phone is reachable (see the comments in the file for install steps).	wənˈɛvəɹ ðə fˈOn ɪz ɹˈiʧəbᵊl (sˈi ðə kˈɑmˌɛnts ɪn ðə fˈIl fɔɹ ɪnstˈɔl stˈɛps).
+Progress (5a, 2026-10-06): squigl-pairing holds the server the CLI had.	pɹˈɑɡɹəs (fˈIv ˈA, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO sˈɪks: skwˈɪlpˌɛɹpɪŋ hˈOldz ðə sˈɜɹvəɹ ðə sˌiˌɛlˈI hˌæd.
+squigl-models and squigl-math implement the engine's traits.	skwˌIlmˈɑdᵊlz ænd skwˈɪlmˌæθ ˈɪmpləmˌɛnt ði ˈɛnʤənz tɹˈAts.
+Readings show as large text, uncertain words underlined dotted or wavy as well as tinted, with the alternatives in a tooltip.	ɹˈidɪŋz ʃˈO æz lˈɑɹʤ tˈɛkst, ˌʌnsˈɜɹtn wˈɜɹdz ˈʌndəɹlˌInd dˈɑTᵻd ɔɹ wˈAvi æz wˈɛl æz tˈɪntᵻd, wɪð ði ɔltˈɜɹnəTɪvz ɪn ɐ tˈultɪp.
+Its MathML for the recorded entropy formula is malformed: MathCAT rejects it with "msub should have 2 children", and it renders wrongly.	ˌɪts mˌæθˌɛmˈɛl fɔɹ ðə ɹəkˈɔɹdᵻd ˈɛntɹəpi fˈɔɹmjələ ɪz mˌælfˈɔɹmd: mˌæθkˈæt ɹəʤˈɛkts ɪt wɪð “ˈɛmsˈʌb ʃˌʊd hæv tˈu ʧˈɪldɹᵊn”, ænd ɪt ɹˈɛndəɹz ɹˈɔŋli.
+Every converter fails on that, so it is shown as source text.	ˈɛvəɹi kənvˈɜɹTəɹ fˈAlz ˌɔn ðˈæt, sˌO ɪt ɪz ʃˈOn æz sˈɔɹs tˈɛkst.
+Each background thread posts an Internal message (ReadDone, DetectDone, Model, StreamStatus, NewFrame) and calls wake.	ˈiʧ bˈækɡɹˌWnd θɹˈɛd pˈOsts ɐn ɪntˈɜɹnəl mˈɛsɪʤ (ɹˌiddˈʌn, dətˈɛktdˌʌn, mˈɑdᵊl, stɹˌimstˈATəs, nˌufɹˈAm) ænd kˈɔlz wˈAk.
+Progress (8d, 2026-10-07): reading aloud.	pɹˈɑɡɹəs (ˈAt dˈi, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO sˈɛvən: ɹˈidɪŋ əlˈWd.
+- Every result now carries the selection it was read from.	— ˈɛvəɹi ɹəzˈʌlt nˈW kˈɛɹiz ðə səlˈɛkʃən ɪt wʌz ɹˈɛd fɹʌm.
+The voice files are 510 × 256 float32 (510 KB each).	ðə vˈYs fˈIlz ɑɹ fˈIv hˈʌndɹəd tˈɛn ˈɛks tˈu hˈʌndɹəd fˈɪfti sˈɪks flˈOt θˈɜɹTi tˈu (fˈIv hˈʌndɹəd tˈɛn kˌAbˈi ˈiʧ).
+Bring that file back to compare machines.	bɹˈɪŋ ðˈæt fˈIl bˈæk tə kəmpˈɛɹ məʃˈinz.
+To undo it, open Control Panel → Windows Defender Firewall → Allow an app or feature through Windows Defender Firewall.	tʊ ˌʌndˈu ɪt, ˈOpᵊn kəntɹˈOl pˈænᵊl ˈɛks wˈɪndOz dəfˈɛndəɹ fˈIəɹwˌɔl  əlˈW ɐn ˈæp ɔɹ fˈiʧəɹ θɹu wˈɪndOz dəfˈɛndəɹ fˈIəɹwˌɔl.
+Reading parity: Selection and quad editing, block mode, read and read-all, and second opinion.	ɹˈidɪŋ pˈɛɹəTi: səlˈɛkʃən ænd kwˈɑd ˈɛdəTɪŋ, blˈɑk mˈOd, ɹˈid ænd ɹˈidˌɔl, ænd sˈɛkənd əpˈɪnjᵊn.
+It covers: how well each voice is understood; how fast Kokoro runs, and which export to use; how text becomes Kokoro's phonemes without GPL code; whether it can run beside GLM-OCR in one process; playback.	ˌɪt kˈʌvəɹz: hˌW wˈɛl ˈiʧ vˈYs ɪz ˌʌndəɹstˈʊd; hˌW fˈæst kəkˈɔɹO ɹˈʌnz, ænd wˌɪʧ ˈɛkspˌɔɹt tə jˈuz; hˌW tˈɛkst bəkˈʌmz kˈOkəɹˌOz fˈOnˌimz wɪðˈWt ʤˌipˌiˈɛl kˈOd; wˈɛðəɹ ɪt kæn ɹˈʌn bəsˈId ʤˌiˌɛlˈɛmOsiˌɑɹ ɪn wˈʌn pɹˈɑsˌɛs; plˈAbˌæk.
+Examples: "the log base 2, of p sub i"; "the fraction with numerator; partial derivative cap l; and denominator partial derivative g hat"; "the 2 by 2 identity matrix"; "n choose k".	ɪɡzˈæmpəlz: “ðə lˈɔɡ bˈAs tˈu, ʌv pˈi sˈʌb ˈI”; “ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; pˈɑɹʃᵊl dəɹˈɪvəTɪv kˈæp ˈɛl; ænd dənˈɑmənˌATəɹ pˈɑɹʃᵊl dəɹˈɪvəTɪv ʤˈi hˈæt”; “ðə tˈu bI tˈu IdˈɛntəTi mˈAtɹɪks”; “ˈɛn ʧˈuz kˈA”.
+Software rendering (llvmpipe, a first S3 data point).	sˈɔftwˌɛɹ ɹˈɛndəɹɪŋ (lˈIvpˌIp, ɐ fˈɜɹst ˈɛs θɹˈi dˈATə pˈYnt).
+The scripted egui run still works, e.g.	ðə skɹˈɪptᵻd ˈɛɡwi ɹˈʌn stˈɪl wˈɜɹks, ˌiʤˈi
+The Windows 11 VM (2026-10-04): - Both apps build there.	ðə wˈɪndOz əlˈɛvᵊn vˌiˈɛm (twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO fˈɔɹ: — bˈOθ ˈæps bˈɪld ðˈɛɹ.
+Kokoro stayed faster than real time throughout.	kəkˈɔɹO stˈAd fˈæstəɹ ðən ɹˈiᵊl tˈIm θɹuˈWt.
+Progress (5d, 2026-10-07): zoom and torch for a paired phone.	pɹˈɑɡɹəs (fˈIv dˈi, mˌidəmməɡzˈɑm zˈum ænd tˈɔɹʧ fɔɹ ɐ pˈɛɹd fˈOn.
+8-bit is smallest that works, but only just faster than real time on four threads.	ˈAt bˈɪt ɪz smˈɔlᵻst ðæt wˈɜɹks, bˌʌt ˈOnli ʤˈʌst fˈæstəɹ ðən ɹˈiᵊl tˈIm ˌɔn fˈɔɹ θɹˈɛdz.
+Latency: from the send time to after the draw.	lˈAtᵊnsi: fɹʌm ðə sˈɛnd tˈIm tʊ ˈæftəɹ ðə dɹˈɔ.
+Fast enough on the CPU: 0.23 of real time on 20 threads, 0.39 on 4 (fp32, 326 MB; fp16 the same at 163 MB).	fˈæst ɪnˈʌf ˌɔn ðə sˌipˌijˈu: zˈɪɹO pYnt tˈu θɹˈi ʌv ɹˈiᵊl tˈIm ˌɔn twˈɛnti θɹˈɛdz, zˈɪɹO pYnt θɹˈi nˈIn ˌɔn fˈɔɹ (ˈɛfsˈɛ, θɹˈi hˈʌndɹəd twˈɛnti sˈɪks ˌɛmbˈi; ˈɛfsˈɛ ðə sˈAm æt wˈʌn hˈʌndɹəd sˈɪksti θɹˈi ˌɛmbˈi).
+Its tests encode synthetic recordings with openh264, so no binary fixture is checked in.	ˌɪts tˈɛsts ɪnkˈOd sɪnθˈɛTɪk ɹəkˈɔɹdɪŋz wɪð ˈOpᵊnɡˌæk, sˌO nˈO bˈInəɹi fˈɪksʧəɹ ɪz ʧˈɛkt ˈɪn.
+The browser then shows no warning.	ðə bɹˈWzəɹ ðˈɛn ʃˈOz nˈO wˈɔɹnɪŋ.
+Containers' and VMs' bridges are left out.	kəntˈAnəɹz ænd vˈiˌɛmz bɹˈɪʤɪz ɑɹ lˈɛft ˈWt.
+Squigl needs the user to aim a camera and check the ink against the reading, so it will never work for someone with no sight.	skwˈɪɡᵊl nˈidz ðə jˈuzəɹ tʊ ˈAm ɐ kˈæməɹə ænd ʧˈɛk ði ˈɪŋk əɡˈɛnst ðə ɹˈidɪŋ, sˌO ɪt wɪl nˈɛvəɹ wˈɜɹk fɔɹ sˈʌmwˌʌn wɪð nˈO sˈIt.
+- Still to measure: the Fedora box, and the phone's own 2992x2992 stream on this box.	— stˈɪl tə mˈɛʒəɹ: ðə fədˈɔɹə bˈɑks, ænd ðə fˈOnz ˈOn twˈɛnti nˈIn nˈIndi tˈu ˈɛks twˈɛnti nˈIn nˈIndi tˈu stɹˈim ˌɔn ðɪs bˈɑks.
+Both steps are connections into this computer, so a firewall that blocks incoming connections stops pairing.	bˈOθ stˈɛps ɑɹ kənˈɛkʃənz ˈɪntu ðɪs kəmpjˈuTəɹ, sˌO ɐ fˈIəɹwˌɔl ðæt blˈɑks ˈɪnkˌʌmɪŋ kənˈɛkʃənz stˈɑps pˈɛɹɪŋ.
+WebRTC has lower resolution than scrcpy and no zoom or torch.	wˌɛbˌɑɹtˌisˈi hæz lˈOəɹ ɹˌɛzəlˈuʃən ðən skɹˈIpi ænd nˈO zˈum ɔɹ tˈɔɹʧ.
+Requests: two are kept in flight.	ɹəkwˈɛsts: tˈu ɑɹ kˈɛpt ɪn flˈIt.
+- Why raw instead of JPEG: JPEG ringing around text edges gets amplified by high-contrast lookup tables at 8–16×.	— wˌI ɹˈɔ ɪnstˈɛd ʌv ʤˈApˌɛɡ: ʤˈApˌɛɡ ɹˈɪŋɪŋ əɹˈWnd tˈɛkst ˈɛʤᵻz ɡɛts ˈæmpləfˌId bI hˌIkˈɑntɹˌæst lˈʊkˌʌp tˈAbᵊlz æt ˈæksˌæɡ
+WebKitGTK already follows GNOME's text scaling: it arrives as the device pixel ratio (1.25 at a 1.25 factor).	wˌɛbkˈɪtʤˌitˌikˈA ˌɔlɹˈɛdi fˈɑlOz nˈOmz tˈɛkst skˈAlɪŋ: ɪt əɹˈIvz æz ðə dəvˈIs pˈɪksᵊl ɹˈAʃiO (wˈʌn pYnt tˈu fˈIv æt ɐ wˈʌn pYnt tˈu fˈIv fˈæktəɹ).
+PrepareModel and the models slice need them.	pɹipˈɛɹmˌɑdᵊl ænd ðə mˈɑdᵊlz slˈIs nˈid ðˌɛm.
+Each problem has plain-language steps, with Try now, Open an image instead, and Hide.	ˈiʧ pɹˈɑbləm hæz plˌAnlˈæŋɡwɪʤ stˈɛps, wɪð tɹˈI nˈW, ˈOpᵊn ɐn ˈɪmɪʤ ɪnstˈɛd, ænd hˈId.
+pauses and goes on; S stops.	pˈɔzᵻz ænd ɡˈOz ˌɔn; ˈɛs stˈɑps.
+The engine: a paired phone's capabilities are what it reports.	ði ˈɛnʤən: ɐ pˈɛɹd fˈOnz kˌApəbˈɪləTiz ɑɹ wˌʌt ɪt ɹəpˈɔɹts.
+V4L2 becomes a Linux-only add-on crate.	vˈi fˈɔɹ ˈɛl tˈu bəkˈʌmz ɐ lˈɪnəksˌOnli ˈædˌɑn kɹˈAt.
+Needs WebKitGTK 4.1 development files on Linux: webkit2gtk4.1-devel on Fedora, libwebkit2gtk-4.1-dev on Ubuntu.	nˈidz wˌɛbkˈɪtʤˌitˌikˈA fˈɔɹ pYnt wˈʌn dəvˈɛləpmənt fˈIlz ˌɔn lˈɪnəks: wˈɛbkɪttʊɡˌikᵊndvˈɛl ˌɔn fədˈɔɹə, lˈɪbwˌɪkɪttəɡˈɛkˌæŋ—dˈɛv ˌɔn ubˈuntu.
+The WebSocket is still the best transport here.	ðə wˌɛbsˈɑkət ɪz stˈɪl ðə bˈɛst tɹˈænspˌɔɹt hˈɪɹ.
+- Phone reads the config's ADB options, which are kept while another source is in use.	— fˈOn ɹˈidz ðə kˈɑnfˌIz ˌAdˌibˈi ˈɑpʃənz, wˌɪʧ ɑɹ kˈɛpt wˌIl ənˈʌðəɹ sˈɔɹs ɪz ɪn jˈus.
+A dry run of the release workflow produces the same artefacts.	ɐ dɹˈI ɹˈʌn ʌv ðə ɹəlˈis wˈɜɹkflˌO pɹədˈusᵻz ðə sˈAm ˈɑɹTəfˌækts.
+Progress (4a, 2026-10-04): Done: the shell.	pɹˈɑɡɹəs (fˈɔɹ ˈA, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO fˈɔɹ: dˈʌn: ðə ʃˈɛl.
+The phone never reports the zoom it ends up at, so the GUI tracks the step count itself.	ðə fˈOn nˈɛvəɹ ɹəpˈɔɹts ðə zˈum ɪt ˈɛndz ˌʌp æt, sˌO ðə ɡˈui tɹˈæks ðə stˈɛp kˈWnt ɪtsˈɛlf.
+The desktop app gets its own CI job (npm ci && npm run build, Node pinned).	ðə dˈɛsktˌɑp ˈæp ɡɛts ɪts ˈOn sˌiˈI ʤˈɑb (ˈɛnpˌiˈɛm sˌiˈI ændænd ˈɛnpˌiˈɛm ɹˈʌn bˈɪld, nˈOd pˈɪnd).
+- The heavier enhance.rs pass stays in Rust, for frozen captures only.	— ðə hˈɛviəɹ ɛnhˈænsəɹz pˈæs stˈAz ɪn ɹˈʌst, fɔɹ fɹˈOzən kˈæpʧəɹz ˈOnli.
+Temml renders as well as math-core, and its MathML is spoken about as well.	tˈɛml ɹˈɛndəɹz æz wˈɛl æz mˌæθkˈɔɹ, ænd ɪts mˌæθˌɛmˈɛl ɪz spˈOkən əbˈWt æz wˈɛl.
+- Every export carries the student or script name and keeps uncertain words marked.	— ˈɛvəɹi ˈɛkspˌɔɹt kˈɛɹiz ðə stˈudᵊnt ɔɹ skɹˈɪpt nˈAm ænd kˈips ˌʌnsˈɜɹtn wˈɜɹdz mˈɑɹkt.
+The AppImage gives way to the Tauri bundles and Flatpak.	ði ˌæpˈɪmɪʤ ɡˈɪvz wˈA tə ðə tˈɔɹi bˈʌndᵊlz ænd flˈætpæk.
+squigl-speech: the system's speech through tts, plus MathCAT (ClearSpeak), on one thread.	skwˌIlspˈiʧ: ðə sˈɪstəmz spˈiʧ θɹu tˈɪsts, plˈʌs mˌæθkˈæt (klˌɪɹspˈik), ˌɔn wˈʌn θɹˈɛd.
+Native elements give keyboard behaviour and focus for free, and focus is what OS magnifiers track.	nˈATɪv ˈɛləmənts ɡˈɪv kˈibˌɔɹd bəhˈAvjəɹ ænd fˈOkəs fɔɹ fɹˈi, ænd fˈOkəs ɪz wˌʌt ˌOˈɛs mˈæɡnəfˌIəɹz tɹˈæk.
+Its US dictionaries are 3 MB of JSON each, about 1.4 MB together gzipped.	ˌɪts jˌuˈɛs dˈɪkʃənˌɛɹiz ɑɹ θɹˈi ˌɛmbˈi ʌv ʤˌAˌɛsˌOˈɛn ˈiʧ, əbˈWt wˈʌn pYnt fˈɔɹ ˌɛmbˈi təɡˈɛðəɹ ʤˈɪzəpt.
+There are two audiences, and they often overlap (the author is in both): 1.	ðˌɛɹ ɑɹ tˈu ˈɔdiənsᵻz, ænd ðA ˈɔfᵊn ˌOvəɹlˈæp (ði ˈɔθəɹ ɪz ɪn bˈOθ: wˈʌn.
+Which export: fp16 is as fast as fp32 at half the size, but understood worse on maths.	wˌɪʧ ˈɛkspˌɔɹt: ˈɛfsˈɛ ɪz æz fˈæst æz ˈɛfsˈɛ æt hˈæf ðə sˈIz, bˌʌt ˌʌndəɹstˈʊd wˈɜɹs ˌɔn mˈæθs.
+The ffmpeg feature has no such limit (4000x3000 verified).	ði ˈɛfpˌɛɡ fˈiʧəɹ hæz nˈO sˈʌʧ lˈɪmət (fˈɔɹ θˈWzᵊnd ˈɛks θɹˈi θˈWzᵊnd vˈɛɹəfˌId).
+Each frame carries a 32-byte header (magic, frame number, send time) and has its frame number burned into the top rows as 32 black and white squares.	ˈiʧ fɹˈAm kˈɛɹiz ɐ θˈɜɹTi tˈu bˈIt hˈɛdəɹ (mˈæʤɪk, fɹˈAm nˈʌmbəɹ, sˈɛnd tˈIm) ænd hæz ɪts fɹˈAm nˈʌmbəɹ bˈɜɹnd ˈɪntu ðə tˈɑp ɹˈOz æz θˈɜɹTi tˈu blˈæk ænd wˈIt skwˈɛɹz.
+They are sized for low vision: an adjustable reading size, a high-contrast reading theme, and a "reading only, full screen" view.	ðˌA ɑɹ sˈIzd fɔɹ lˈO vˈɪʒən: ɐn əʤˈʌstəbᵊl ɹˈidɪŋ sˈIz, ɐ hˌIkˈɑntɹˌæst ɹˈidɪŋ θˈim, ænd ɐ “ɹˈidɪŋ ˈOnli, fˈʊl skɹˈin” vjˈu.
+Contrast, brightness, gamma and threshold are baked into the table, so it can be unit-tested and shared with egui.	kˈɑntɹˌæst, bɹˈItnəs, ɡˈæmə ænd θɹˈɛʃhˌOld ɑɹ bˈAkt ˈɪntu ðə tˈAbᵊl, sˌO ɪt kæn bi jˌunəttˈɛstᵻd ænd ʃˈɛɹd wɪð ˈɛɡwi.
+Its silver dictionary grew from 93k to 300k entries.	ˌɪts sˈɪlvəɹ dˈɪkʃənˌɛɹi ɡɹˈu fɹʌm nˈIndi θɹˈi kˈA tə θɹˈi hˈʌndɹəd kˈA ˈɛntɹiz.
+On both, as on Linux, they are symlinks into ort's cache, so packaging copies the real files (Phase 6: all three DLLs on Windows).	ˌɔn bˈOθ, æz ˌɔn lˈɪnəks, ðA ɑɹ sˈɪmlɪŋks ˈɪntu ˈɔɹts kˈæʃ, sˌO pˈækəʤɪŋ kˈɑpiz ðə ɹˈiᵊl fˈIlz (fˈAz sˈɪks: ˈɔl θɹˈi dˌiˌɛlˈɛlz ˌɔn wˈɪndOz).
+Separately, camera sizes that aren't multiples of 8 (4000x2250) fail on the phone: scrcpy rounds them for the encoder and the camera refuses the rounded size (onConfigureFailed, stream connects but no packets ever arrive).	sˈɛpəɹətli, kˈæməɹə sˈIzᵻz ðæt ˌɑɹnt mˈʌltəpᵊlz ʌv ˈAt (fˈɔɹ θˈWzᵊnd ˈɛks twˈɛnti tˈu fˈɪfti) fˈAl ˌɔn ðə fˈOn: skɹˈIpi ɹˈWndz ðˌɛm fɔɹ ði ɪnkˈOdəɹ ænd ðə kˈæməɹə ɹəfjˈuzᵻz ðə ɹˈWndᵻd sˈIz (ˌɔnkənfˈɪɡjəɹfˈAld, stɹˈim kənˈɛkts bˌʌt nˈO pˈækəts ˈɛvəɹ əɹˈIv).
+The page opens, but after Start streaming its log shows connection: checking and then connection: failed: the UDP video is blocked.	ðə pˈAʤ ˈOpᵊnz, bˌʌt ˈæftəɹ stˈɑɹt stɹˈimɪŋ ɪts lˈɔɡ ʃˈOz kənˈɛkʃən: ʧˈɛkɪŋ ænd ðˈɛn kənˈɛkʃən: fˈAld: ðə jˌudˌipˈi vˈɪdiO ɪz blˈɑkt.
+Two low-vision testers and two teachers complete their core tasks: read a printed page aloud, and transcribe and check a handwritten script.	tˈu lˌOvˈɪʒən tˈɛstəɹz ænd tˈu tˈiʧəɹz kəmplˈit ðɛɹ kˈɔɹ tˈæsks: ɹˈid ɐ pɹˈɪntᵻd pˈAʤ əlˈWd, ænd tɹænskɹˈIb ænd ʧˈɛk ɐ hˌændɹˈɪtn skɹˈɪpt.
+Firewall prompts are documented: Windows "private networks" (from the VM), and macOS incoming connections and NSLocalNetworkUsageDescription (from Apple's documentation until a tester confirms them).	fˈIəɹwˌɔl pɹˈɑmpts ɑɹ dˈɑkjəmˌɛntᵻd: wˈɪndOz “pɹˈIvət nˈɛtwˌɜɹks” (fɹʌm ðə vˌiˈɛm), ænd mˌækˌOˈɛs ˈɪnkˌʌmɪŋ kənˈɛkʃənz ænd njˌɑlOkˌɛtɪɹkwˌʊs (fɹʌm ˈæpᵊlz dˌɑkjəməntˈAʃən ˌʌntˈɪl ɐ tˈɛstəɹ kənfˈɜɹmz ðˌɛm).
+On Linux it needs libspeechd-dev to build; CI's desktop job installs it.	ˌɔn lˈɪnəks ɪt nˈidz lˈɪbsiʧˌɛd tə bˈɪld; sˌiˈIz dˈɛsktˌɑp ʤˈɑb ɪnstˈɔlz ɪt.
+Keep signalling behind a small interface so it can be added later if users ask; teachers marking from home with the phone on mobile data are the likely case.	kˈip sˈɪɡnəlɪŋ bəhˈInd ɐ smˈɔl ˈɪntəɹfˌAs sˌO ɪt kæn bi ˈædᵻd lˈATəɹ ɪf jˈuzəɹz ˈæsk; tˈiʧəɹz mˈɑɹkɪŋ fɹʌm hˈOm wɪð ðə fˈOn ˌɔn mˈObᵊl dˈATə ɑɹ ðə lˈIkli kˈAs.
+Whisper base.en stands in for a listener.	wˈɪspəɹ bˈAsˌɛn stˈændz ˈɪn fɔɹ ɐ lˈɪsᵊnəɹ.
+That matters for reading a page aloud, where speaking and reading overlap.	ðˈæt mˈæTəɹz fɔɹ ɹˈidɪŋ ɐ pˈAʤ əlˈWd, wˌɛɹ spˈikɪŋ ænd ɹˈidɪŋ ˈOvəɹlˌæp.
+Rust generates synthetic luma frames, sized to a target number of bytes.	ɹˈʌst ʤˈɛnəɹˌAts sɪnθˈɛTɪk lˈumə fɹˈAmz, sˈIzd tə ɐ tˈɑɹɡət nˈʌmbəɹ ʌv bˈIts.
+Keeps the scrcpy-jar build.rs.	kˈips ðə skɹˌɪkiʤˈɑɹ bˈɪldnəɹz.
+- Drop the invisible separator math-core puts after a cases table.	— dɹˈɑp ði ɪnvˈɪzəbᵊl sˈɛpəɹˌATəɹ mˌæθkˈɔɹ pˌʊts ˈæftəɹ ɐ kˈAsᵻz tˈAbᵊl.
+Developer options and the Windows adb driver mean QR pairing should be promoted as the default.	dəvˈɛləpəɹ ˈɑpʃənz ænd ðə wˈɪndOz ˈædb dɹˈIvəɹ mˈin kjˌuˈɑɹ pˈɛɹɪŋ ʃˌʊd bi pɹəmˈOTᵻd æz ðə dəfˈɔlt.
+The exit criteria below are graded to match: Linux is tested on real hardware on both boxes, for function and for performance.	ði ˈɛɡzət kɹItˈɪɹiə bəlˈO ɑɹ ɡɹˈAdᵻd tə mˈæʧ: lˈɪnəks ɪz tˈɛstᵻd ˌɔn ɹˈiᵊl hˈɑɹdwˌɛɹ ˌɔn bˈOθ bˈɑksᵻz, fɔɹ fˈʌŋkʃən ænd fɔɹ pəɹfˈɔɹməns.
+The uninstaller kills adb.exe.	ði ˌʌnɪnstˈɔləɹ kˈɪlz ˈædbˌɛks.
+The engine spawns workers but has no threads of its own beyond them.	ði ˈɛnʤən spˈɔnz wˈɜɹkəɹz bˌʌt hæz nˈO θɹˈɛdz ʌv ɪts ˈOn bijˈɑnd ðˌɛm.
+The webview's own paste event handles images.	ðə wˈɛbvjˌuz ˈOn pˈAst əvˈɛnt hˈændəlz ˈɪmɪʤᵻz.
+CI: the desktop job runs the tests on Linux (WebKitWebDriver under Xvfb) and Windows (msedgedriver).	sˌiˈI: ðə dˈɛsktˌɑp ʤˈɑb ɹˈʌnz ðə tˈɛsts ˌɔn lˈɪnəks (wˌɛbkˌɪtwˈɛbdɹˈIvəɹ ˈʌndəɹ ˈɛks) ænd wˈɪndOz (mˈɛsʤdɹəɹɪvəɹ).
+Mitigate with Flatpak, documented environment workarounds and the Canvas2D fallback.	mˈɪTəɡˌAt wɪð flˈætpæk, dˈɑkjəmˌɛntᵻd ənvˈIɹənmᵊnt wˈɜɹkəɹˌWndz ænd ðə kˈænvəstədˈi fˈɔlbˌæk.
+Errors: pulldown-latex 5, math-core 5, Temml 3.	ˈɛɹəɹz: pˌʊldənlˈAtlˌATən fˈIv, mˌæθkˈɔɹ fˈIv, tˈɛml θɹˈi.
+- On freeze, the full-resolution frame is sent once.	— ˌɔn fɹˈiz, ðə fˌʊlɹˌɛzəlˈuʃən fɹˈAm ɪz sˈɛnt wˈʌns.
+The desktop pane shows each formula as MathML at the reading size.	ðə dˈɛsktˌɑp pˈAn ʃˈOz ˈiʧ fˈɔɹmjələ æz mˌæθˌɛmˈɛl æt ðə ɹˈidɪŋ sˈIz.
+egui runs from the Replay source with no phone.	ˈɛɡwi ɹˈʌnz fɹʌm ðə ɹˈiplˌA sˈɔɹs wɪð nˈO fˈOn.
+Speed: about 11 µs per expression for either Rust converter (all 71 in 0.8 ms), against about 57 µs for Temml in Node.	spˈid: əbˈWt əlˈɛvᵊn ˈɛks pɜɹ ɪkspɹˈɛʃən fɔɹ ˈiðəɹ ɹˈʌst kənvˈɜɹTəɹ (ˈɔl sˈɛvənti wˈʌn ɪn zˈɪɹO pYnt ˈAt ˈɛmz), əɡˈɛnst əbˈWt fˈɪfti sˈɛvən ˈɛks fɔɹ tˈɛml ɪn nˈOd.
+Compare it against the phone, or against the Replay source once that exists.	kəmpˈɛɹ ɪt əɡˈɛnst ðə fˈOn, ɔɹ əɡˈɛnst ðə ɹˈiplˌA sˈɔɹs wˈʌns ðˈæt ɪɡzˈɪsts.
+The custom-protocol feature (default) serves the embedded UI; without it the window loads Vite's dev server (npm run dev).	ðə kˌʌstəmpɹˈOTəkˌɔl fˈiʧəɹ (dəfˈɔlt) sˈɜɹvz ði əmbˈɛdᵻd jˌuˈI; wɪðˈWt ɪt ðə wˈɪndO lˈOdz vˈIts dˈɛv sˈɜɹvəɹ (ˈɛnpˌiˈɛm ɹˈʌn dˈɛv).
+Read all blocks (ctrl+enter) reads them one after the other and lists the readings in page order.	ɹˈid ˈɔl blˈɑks (ktɹlˈæntəɹ) ɹˈidz ðˌɛm wˈʌn ˈæftəɹ ði ˈʌðəɹ ænd lˈɪsts ðə ɹˈidɪŋz ɪn pˈAʤ ˈɔɹdəɹ.
+CLAUDE.md, README.md, NOTICE.	klˈAdɪɹmd, ɹˌidəmˈɛmd, nˈOTəs.
+openh264 hard-codes H.264 level 5.2 (GetLevelLimits(52), 36864 macroblocks) in its SPS parser: 3840x2160 and 2992x2992 fit, 4000x3000 does not (dsNoParamSets, native error 16).	ˈOpᵊnɡˌæk hˈɑɹdkˌOdz ˈAʧ tˈu sˈɪks fˈɔɹ lˈɛvᵊl fˈIv pYnt tˈu (ɡˌɛtləvˌɛləmˈɪksˌ), θˈɜɹTi sˈɪks θˈWzᵊnd ˈAt hˈʌndɹəd sˈɪksti fˈɔɹ mˈækɹOblˌɑks) ɪn ɪts ˌɛspˌiˈɛs pˈɑɹsəɹ: θˈɜɹTi ˈAt fˈɔɹTi ˈɛks twˈɛnti wˈʌn sˈɪksti ænd twˈɛnti nˈIn nˈIndi tˈu ˈɛks twˈɛnti nˈIn nˈIndi tˈu fˈɪt, fˈɔɹ θˈWzᵊnd ˈɛks θɹˈi θˈWzᵊnd dˈʌz nˌɑt (dznˈOpəɹˌæmɪts, nˈATɪv ˈɛɹəɹ sˌɪkstˈin).
+This is what squigl-math does with MiTeX.	ðˌɪs ɪz wˌʌt skwˈɪlmˌæθ dˈʌz wɪð mˈITəɹz
+- A list of function words with their usual tag, everything else a noun, brings that to 1.0%.	— ɐ lˈɪst ʌv fˈʌŋkʃən wˈɜɹdz wɪð ðɛɹ jˈuʒəwəl tˈæɡ, ˈɛvəɹiθˌɪŋ ˈɛls ɐ nˈWn, bɹˈɪŋz ðˈæt tə wˈʌn pəɹsˈɛnt.
+The camera's zoom is asked for in getUserMedia, since Chrome hides it otherwise.	ðə kˈæməɹəz zˈum ɪz ˈæskt fɔɹ ɪn ɡɛtjˈuzəɹmˈidiə, sˈɪns kɹˈOm hˈIdz ɪt ˈʌðəɹwˌIz.
+Modes: normal, grey, inverted, yellow-on-black, white-on-black, black-on-yellow, custom pair.	mˈOdz: nˈɔɹmᵊl, ɡɹˈA, ɪnvˈɜɹTᵻd, jˈɛlOˌɔnblˈæk, wˈItˌɔnblˈæk, blˈækˌɔnjˈɛlO, kˈʌstəm pˈɛɹ.
+max picks the largest usable one.	mˈæks pˈɪks ðə lˈɑɹʤᵻst jˈuzəbᵊl wˈʌn.
+Maths: spoken through MathCAT (ClearSpeak) from the MathML, not as raw LaTeX.	mˈæθs: spˈOkən θɹu mˌæθkˈæt (klˌɪɹspˈik) fɹʌm ðə mˌæθˌɛmˈɛl, nˌɑt æz ɹˈɔ lˈɑtɛk
+The KeyFocus harness tests still pass.	ðə kˌifˈOkəs hˈɑɹnəs tˈɛsts stˈɪl pˈæs.
+View: smoothing, the reading line, and the start magnification.	vjˈu: smˈuðɪŋ, ðə ɹˈidɪŋ lˈIn, ænd ðə stˈɑɹt mˌæɡnəfəkˈAʃən.
+No exposure, focus or white-balance control exists at any version.	nˈO ɪkspˈOʒəɹ, fˈOkəs ɔɹ wˌItbˈæləns kəntɹˈOl ɪɡzˈɪsts æt ˈɛni vˈɜɹʒən.
+Needs the default local-model cargo feature.	nˈidz ðə dəfˈɔlt lˈOkəlmˌɑdᵊl kˈɑɹɡO fˈiʧəɹ.
+They spend about 3 times the CPU of the WebSocket per byte.	ðˌA spˈɛnd əbˈWt θɹˈi tˈImz ðə sˌipˌijˈu ʌv ðə wˌɛbsˈɑkət pɜɹ bˈIt.
+Exit criteria: app.rs is view code only (roughly 2,000 lines or fewer).	ˈɛɡzət kɹItˈɪɹiə: əpˈuz ɪz vjˈu kˈOd ˈOnli (ɹˈʌfli tˈu θˈWzᵊnd lˈInz ɔɹ fjˈuəɹ).
+Its from 127.0.0.1, which the pairing and engine tests stream through a real session.	ˌɪts fɹʌm wˈʌn tˈu sˈɛvən zˈɪɹO zˈɪɹO wˈʌn, wˌɪʧ ðə pˈɛɹɪŋ ænd ˈɛnʤən tˈɛsts stɹˈim θɹu ɐ ɹˈiᵊl sˈɛʃən.
+- A refusal can be changed in System Settings → Privacy & Security → Local Network.	— ɐ ɹəfjˈuzᵊl kæn bi ʧˈAnʤd ɪn sˈɪstəm sˈɛTɪŋz ˈɛks pɹˈIvəsi ænd səkjˈʊɹəTi ˈɛks lˈOkəl nˈɛtwˌɜɹk.
+It shows what was asked until the phone has answered every message.	ˌɪt ʃˈOz wˌʌt wʌz ˈæskt ˌʌntˈɪl ðə fˈOn hæz ˈænsəɹd ˈɛvəɹi mˈɛsɪʤ.
+Kokoro on the CPU outside RUNTIME, alongside GLM-OCR on WebGPU in one process, made 51 reads and 72 syntheses with no crash.	kəkˈɔɹO ˌɔn ðə sˌipˌijˈu ˌWtsˈId ɹˈʌntIm, əlˌɔŋsˈId ʤˌiˌɛlˈɛmOsiˌɑɹ ˌɔn wˌɛbʤˌipˌijˈu ɪn wˈʌn pɹˈɑsˌɛs, mˌAd fˈɪfti wˈʌn ɹˈidz ænd sˈɛvənti tˈu sˈɪnθəsˌiz wɪð nˈO kɹˈæʃ.
+Greedy, so one reading per request.	ɡɹˈidi, sˌO wˈʌn ɹˈidɪŋ pɜɹ ɹəkwˈɛst.
+It now draws itself, and the test checks that it does.	ˌɪt nˈW dɹˈɔz ɪtsˈɛlf, ænd ðə tˈɛst ʧˈɛks ðæt ɪt dˈʌz.
+Opening images: Open image…, paste, drag-and-drop, and "Use phone" to go back.	ˈOpᵊnɪŋ ˈɪmɪʤᵻz: ˈOpᵊn ˈɪmɪʤ…, pˈAst, dɹˈæɡænddɹˈɑp, ænd “jˈuz fˈOn” tə ɡˌO bˈæk.
+Under llvmpipe here the same crop took 23 s on WebGPU against 2.2 s on the CPU.	ˈʌndəɹ lˈIvpˌIp hˈɪɹ ðə sˈAm kɹˈɑp tˈʊk twˈɛnti θɹˈi ˈɛs ˌɔn wˌɛbʤˌipˌijˈu əɡˈɛnst tˈu pYnt tˈu ˈɛs ˌɔn ðə sˌipˌijˈu.
+Built-in models in the desktop build (local-model, default).	bˌɪltˈɪn mˈɑdᵊlz ɪn ðə dˈɛsktˌɑp bˈɪld (lˈOkəlmˌɑdᵊl, dəfˈɔlt).
+Exit criteria: install → pair → magnify works on clean Ubuntu 24.04 and Fedora machines, and on a clean Windows 11 (the VM restored to a fresh snapshot).	ˈɛɡzət kɹItˈɪɹiə: ɪnstˈɔl ˈɛks pˈɛɹ ˈɛks mˈæɡnəfˌI wˈɜɹks ˌɔn klˈin ubˈuntu twˈɛnti fˈɔɹ pYnt zˈɪɹO fˈɔɹ ænd fədˈɔɹə məʃˈinz, ænd ˌɔn ɐ klˈin wˈɪndOz əlˈɛvᵊn (ðə vˌiˈɛm ɹəstˈɔɹd tə ɐ fɹˈɛʃ snˈæpʃˌɑt).
+Progress (8b, 2026-10-07): erasing, history and the reading view.	pɹˈɑɡɹəs (ˈAt bˈi, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO sˈɛvən: ᵻɹˈAsɪŋ, hˈɪstəɹi ænd ðə ɹˈidɪŋ vjˈu.
+They need a phone (or any camera) as a desktop magnifier: a big magnified live view, freeze, high-contrast display modes, and a simple, large UI.	ðˌA nˈid ɐ fˈOn (ɔɹ ˈɛni kˈæməɹə) æz ɐ dˈɛsktˌɑp mˈæɡnəfˌIəɹ: ɐ bˈɪɡ mˈæɡnəfˌId lˈIv vjˈu, fɹˈiz, hˌIkˈɑntɹˌæst dəsplˈA mˈOdz, ænd ɐ sˈɪmpəl, lˈɑɹʤ jˌuˈI.
+- squigl-desktop, with EngineHost (host.rs), dispatch and subscribe.	dˈi skwˌɪldəsktˈɑp, wɪð ˈɛnʤənhˌOst (hˈOstəɹz), dəspˈæʧ ænd səbskɹˈIb.
+Left for the Windows VM: running against the phone over adb.	lˈɛft fɔɹ ðə wˈɪndOz vˌiˈɛm: ɹˈʌnɪŋ əɡˈɛnst ðə fˈOn ˈOvəɹ ˈædb.
+Frames arrived out of order only with scheme when unthrottled, because two requests in flight are answered by separate threads.	fɹˈAmz əɹˈIvd ˈWt ʌv ˈɔɹdəɹ ˈOnli wɪð skˈim wˌɛn ʌnθɹˈɑTᵊld, bəkˈʌz tˈu ɹəkwˈɛsts ɪn flˈIt ɑɹ ˈænsəɹd bI sˈɛpəɹət θɹˈɛdz.
+It is the only transport that passes at 12 MB (a 4000x3000 frame), and it costs about half the CPU of the others at every size.	ˌɪt ɪz ði ˈOnli tɹˈænspˌɔɹt ðæt pˈæsᵻz æt twˈɛlv ˌɛmbˈi (ɐ fˈɔɹ θˈWzᵊnd ˈɛks θɹˈi θˈWzᵊnd fɹˈAm), ænd ɪt kˈɔsts əbˈWt hˈæf ðə sˌipˌijˈu ʌv ði ˈʌðəɹz æt ˈɛvəɹi sˈIz.
+- A first window: freeze, rotate, magnification, display mode, full screen, keyboard pan and zoom, and an aria-live notice line.	— ɐ fˈɜɹst wˈɪndO: fɹˈiz, ɹˈOtˌAt, mˌæɡnəfəkˈAʃən, dəsplˈA mˈOd, fˈʊl skɹˈin, kˈibˌɔɹd pˈæn ænd zˈum, ænd ɐn ˌɑɹiəlˈIv nˈOTəs lˈIn.
+Teachers and lecturers reading students' handwriting.	tˈiʧəɹz ænd lˈɛkʧəɹəɹz ɹˈidɪŋ stˈudᵊnts hˈændɹˌITɪŋ.
+The WebSocket at 3 MB holds 30 fps (p95 5.5 ms), but costs 3.4 cores, against 0.21 on the GPU.	ðə wˌɛbsˈɑkət æt θɹˈi ˌɛmbˈi hˈOldz θˈɜɹTi ˈɛfs (pˈi nˈIndi fˈIv fˈIv pYnt fˈIv ˈɛmz), bˌʌt kˈɔsts θɹˈi pYnt fˈɔɹ kˈɔɹz, əɡˈɛnst zˈɪɹO pYnt tˈu wˈʌn ˌɔn ðə ʤˌipˌijˈu.
+The WebGPU concurrency bug (onnxruntime#32561) is between WebGPU sessions, so a CPU-only Kokoro need not wait for a read.	ðə wˌɛbʤˌipˌijˈu kənkˈɜɹənsi bˈʌɡ (ˌɑnŋʃˌɜɹntɪmˈæksk) ɪz bətwˈin wˌɛbʤˌipˌijˈu sˈɛʃənz, sˌO ɐ sˌipˌijˈuˌOnli kəkˈɔɹO nˈid nˌɑt wˈAt fɔɹ ɐ ɹˈid.
+Squigl is tested on two machines: a Fedora box (AMD, Wayland and X11); an Ubuntu box with an Nvidia GPU.	skwˈɪɡᵊl ɪz tˈɛstᵻd ˌɔn tˈu məʃˈinz: ɐ fədˈɔɹə bˈɑks (ˌAˌɛmdˈi, wˈAlənd ænd ˈɛks əlˈɛvᵊn); ɐn ubˈuntu bˈɑks wɪð ɐn ɛnvˈɪdiə ʤˌipˌijˈu.
+It is a web-tech UI in a desktop shell, the way VS Code is, with the Rust core linked directly.	ˌɪt ɪz ɐ wˌɛbtˈɛk jˌuˈI ɪn ɐ dˈɛsktˌɑp ʃˈɛl, ðə wˈA vˈiz kˈOd ɪz, wɪð ðə ɹˈʌst kˈɔɹ lˈɪŋkt dəɹˈɛktli.
+GNOME Zoom and Windows Magnifier (in the VM) follow focus around the controls.	nˈOm zˈum ænd wˈɪndOz mˈæɡnəfˌIəɹ (ɪn ðə vˌiˈɛm) fˈɑlO fˈOkəs əɹˈWnd ðə kəntɹˈOlz.
+The erased word is gone from the reading, and the unreachable second backend's error is listed.	ði əɹˈAst wˈɜɹd ɪz ɡɔn fɹʌm ðə ɹˈidɪŋ, ænd ði ˌʌnɹˈiʧəbᵊl sˈɛkənd bˈækənds ˈɛɹəɹ ɪz lˈɪstᵻd.
+The certificate warning remains; a real certificate via a public wildcard DNS name is a possible future step.	ðə səɹtˈɪfəkət wˈɔɹnɪŋ ɹəmˈAnz; ɐ ɹˈiᵊl səɹtˈɪfəkət vˈIə ɐ pˈʌblɪk wˈIldkˌɑɹd dˌiˌɛnˈɛs nˈAm ɪz ɐ pˈɑsəbᵊl fjˈuʧəɹ stˈɛp.
+Checking the video connection means Squigl sends packets to the phone, so expect "Allow "Squigl" to find devices on local networks?" at the first pairing.	ʧˈɛkɪŋ ðə vˈɪdiO kənˈɛkʃən mˈinz skwˈɪɡᵊl sˈɛndz pˈækəts tə ðə fˈOn, sˌO ɪkspˈɛkt “əlˈW “skwˈɪɡᵊl” tə fˈInd dəvˈIsᵻz ˌɔn lˈOkəl nˈɛtwˌɜɹks?” æt ðə fˈɜɹst pˈɛɹɪŋ.
+- So the port needs no spaCy: a word list and a few rules.	— sˌO ðə pˈɔɹt nˈidz nˈO spˈAsi: ɐ wˈɜɹd lˈɪst ænd ɐ fjˈu ɹˈulz.
+Reads, crop and blocks stay in app.rs (Phase 7).	ɹˈidz, kɹˈɑp ænd blˈɑks stˈA ɪn əpˈuz (fˈAz sˈɛvən).
+(roadmap Phase 4 on; a workspace member but not a default one, since Tauri embeds the built web UI at compile time).	(ɹˈOdmæp fˈAz fˈɔɹ ˌɔn; ɐ wˈɜɹkspˌAs mˈɛmbəɹ bˌʌt nˌɑt ɐ dəfˈɔlt wˈʌn, sˈɪns tˈɔɹi əmbˈɛdz ðə bˈɪlt wˈɛb jˌuˈI æt kəmpˈIl tˈIm).
+Both are on the addresses the dialog offers (the local network, and Tailscale, ZeroTier or Nebula), never on every interface.	bˈOθ ɑɹ ˌɔn ði ədɹˈɛsᵻz ðə dˈIəlˌɔɡ ˈɔfəɹz (ðə lˈOkəl nˈɛtwˌɜɹk, ænd tˈAlskˌAl, zˈɪɹOtˌɪɹ ɔɹ nˈɛbjələ), nˈɛvəɹ ˌɔn ˈɛvəɹi ˈɪntəɹfˌAs.
+History: the session's readings, newest first, in the pane.	hˈɪstəɹi: ðə sˈɛʃənz ɹˈidɪŋz, nˈuᵻst fˈɜɹst, ɪn ðə pˈAn.
+If only Private networks was ticked, a phone on a Public network cannot connect.	ˌɪf ˈOnli pɹˈIvət nˈɛtwˌɜɹks wʌz tˈɪkt, ɐ fˈOn ˌɔn ɐ pˈʌblɪk nˈɛtwˌɜɹk kənˈɑt kənˈɛkt.
+If you have turned it on, allow the phone's network, since the video port changes per phone.	ˌɪf ju hæv tˈɜɹnd ɪt ˌɔn, əlˈW ðə fˈOnz nˈɛtwˌɜɹk, sˈɪns ðə vˈɪdiO pˈɔɹt ʧˈAnʤᵻz pɜɹ fˈOn.
+It is met when someone with that machine runs it, and does not block the phase.	ˌɪt ɪz mˈɛt wˌɛn sˈʌmwˌʌn wɪð ðˈæt məʃˈin ɹˈʌnz ɪt, ænd dˈʌz nˌɑt blˈɑk ðə fˈAz.
+Repeat the GPU-loss recovery test per OS.	ɹəpˈit ðə ʤˌipˌijˈulˌɔs ɹəkˈʌvəɹi tˈɛst pɜɹ ˌOˈɛs.
+- Write the vector arrow as U+2192, not the combining U+20D7.	— ɹˈIt ðə vˈɛktəɹ ˈɛɹO æz jˈu plˈʌs twˈɛnti wˈʌn nˈIndi tˈu, nˌɑt ðə kəmbˈInɪŋ jˈu plˈʌs twˈɛnti dˈi sˈɛvən.
+cpal 0.16 builds (ALSA headers on Linux, libasound2-dev) and finds the default output, 44.1 kHz stereo here.	spˈæl zˈɪɹO pYnt wˈʌn sˈɪks bˈɪldz (ˌAˌɛlˌɛsˈA hˈɛdəɹz ˌɔn lˈɪnəks, lˌɪbəsˈWndˌʌv) ænd fˈIndz ðə dəfˈɔlt ˈWtpˌʊt, fˈɔɹTi fˈɔɹ pYnt wˈʌn kˈAz stˈɛɹiO hˈɪɹ.
+Only the 3 broken inputs then fail.	ˈOnli ðə θɹˈi bɹˈOkən ˈɪnpˌʊts ðˈɛn fˈAl.
+Workspace rule: squigl-desktop is not in default-members.	wˈɜɹkspˌAs ɹˈul: skwˌɪldəsktˈɑp ɪz nˌɑt ɪn dəfˌɔltmˈɛmbəɹz.
+- Each frame carries a header: seq, pts, source size, region, step, format, strides.	— ˈiʧ fɹˈAm kˈɛɹiz ɐ hˈɛdəɹ: sˈɛkwˌA, tˈis, sˈɔɹs sˈIz, ɹˈiʤᵊn, stˈɛp, fˈɔɹmˌæt, stɹˈIdz.
+Still to do: - pairing from a real phone (Linux, then the Windows VM); - the firewall notes; - zoom and torch over a data channel.	stˈɪl tə dˈu: — pˈɛɹɪŋ fɹʌm ɐ ɹˈiᵊl fˈOn (lˈɪnəks, ðˈɛn ðə wˈɪndOz vˌiˈɛm); — ðə fˈIəɹwˌɔl nˈOts; — zˈum ænd tˈɔɹʧ ˈOvəɹ ɐ dˈATə ʧˈænᵊl.
+Still to do in Phase 8: see 8b.	stˈɪl tə dˈu ɪn fˈAz ˈAt: sˈi ˈAt bˈi.
+Verdict for Linux: The WebSocket.	vˈɜɹdɪkt fɔɹ lˈɪnəks: ðə wˌɛbsˈɑkət.
+Together they serve both audiences.	təɡˈɛðəɹ ðA sˈɜɹv bˈOθ ˈɔdiənsᵻz.
+With that fixed, a formula block read in 14.7 s on the VM's CPU.	wˌɪð ðˈæt fˈɪkst, ɐ fˈɔɹmjələ blˈɑk ɹˈɛd ɪn fˌɔɹtˈin pYnt sˈɛvən ˈɛs ˌɔn ðə vˌiˈɛmz sˌipˌijˈu.
+Exit criteria: Same test count, now spread across crates.	ˈɛɡzət kɹItˈɪɹiə: sˈAm tˈɛst kˈWnt, nˈW spɹˈɛd əkɹˈɔs kɹˈAts.
+The fallback is adb built from AOSP source (Apache-2.0).	ðə fˈɔlbˌæk ɪz ˈædb bˈɪlt fɹʌm ˌAˌOˌɛspˈi sˈɔɹs (əpˈæʧi tˈu zˈɪɹO).
+WebGPU is no faster here: 0.23.	wˌɛbʤˌipˌijˈu ɪz nˈO fˈæstəɹ hˈɪɹ: zˈɪɹO pYnt tˈu θɹˈi.
+Their 18 tests pass on the Ubuntu box in about 30 s.	ðˌɛɹ ˌAtˈin tˈɛsts pˈæs ˌɔn ði ubˈuntu bˈɑks ɪn əbˈWt θˈɜɹTi ˈɛs
+Not yet: - an audible cue before an uncertain word (the tts crate has no SSML or earcons); - a "printed page" prompt preset; - read-aloud in the egui window.	nˌɑt jˈɛt: — ɐn ˈɔdəbəl kjˈu bəfˈɔɹ ɐn ˌʌnsˈɜɹtn wˈɜɹd (ðə tˈɪsts kɹˈAt hæz nˈO ˌɛsˌɛsˌɛmˈɛl ɔɹ ˈɪɹkənz); — ɐ “pɹˈɪntᵻd pˈAʤ” pɹˈɑmpt pɹˌisˈɛt; — ɹˌidəlˈWd ɪn ði ˈɛɡwi wˈɪndO.
+That is the roadmap's default; nothing here argues for opening no port instead.	ðˈæt ɪz ðə ɹˈOdmæps dəfˈɔlt; nˈʌθɪŋ hˈɪɹ ˈɑɹɡjuz fɔɹ ˈOpᵊnɪŋ nˈO pˈɔɹt ɪnstˈɛd.
+When no phone connects, the dialog says so in plain language: "Phone on a different network?	wˌɛn nˈO fˈOn kənˈɛkts, ðə dˈIəlˌɔɡ sˈɛz sˌO ɪn plˈAn lˈæŋɡwɪʤ: “fˈOn ˌɔn ɐ dˈɪfəɹənt nˈɛtwˌɜɹk?
+The desktop app: - The pane's read-aloud controls and keys.	ðə dˈɛsktˌɑp ˈæp: — ðə pˈAnz ɹˌidəlˈWd kəntɹˈOlz ænd kˈiz.
+Tailscale's access controls (ACLs) must let the phone reach this computer; the default policy allows it.	tˈAlzkˌAlz ˈæksˌɛs kəntɹˈOlz (ˌAsˌiˈɛlz) mˈʌst lˈɛt ðə fˈOn ɹˈiʧ ðɪs kəmpjˈuTəɹ; ðə dəfˈɔlt pˈɑləsi əlˈWz ɪt.
+Reverse-engineered against the pinned server version (4.1; 3.x had a 12-byte codec header and no session packets) and unit-tested against hand-built fixtures.	ɹəvˌɜɹsɛnʤənˈɪɹd əɡˈɛnst ðə pˈɪnd sˈɜɹvəɹ vˈɜɹʒən (fˈɔɹ pYnt wˈʌn; θɹˈi ˈɛks hæd ɐ twˈɛlv bˈIt kˈOdˌɛk hˈɛdəɹ ænd nˈO sˈɛʃən pˈækəts) ænd jˌunəttˈɛstᵻd əɡˈɛnst hˌændbˈɪlt fˈɪksʧəɹz.
+We agreed to restructure in place: same repo, same name, cut as "Squigl 1.0" when the new UI ships.	wˌi əɡɹˈid tə ɹistɹˈʌkʧəɹ ɪn plˈAs: sˈAm ɹˈipˌO, sˈAm nˈAm, kˈʌt æz “skwˈɪɡᵊl wˈʌn” wˌɛn ðə nˈu jˌuˈI ʃˈɪps.
+Reads and detection are refused until the model is ready.	ɹˈidz ænd dətˈɛkʃən ɑɹ ɹəfjˈuzd ˌʌntˈɪl ðə mˈɑdᵊl ɪz ɹˈɛdi.
+The egui AppImage continues alongside until switchover.	ði ˈɛɡwi ˌæpˈɪmɪʤ kəntˈɪnjuz əlˌɔŋsˈId ˌʌntˈɪl swˈɪʧOvəɹ.
+It also crashes on one broken input.	ˌɪt ˈɔlsO kɹˈæʃᵻz ˌɔn wˈʌn bɹˈOkən ˈɪnpˌʊt.
+The engine now shows the capture with its erasures painted over, so the picture is what a read sees.	ði ˈɛnʤən nˈW ʃˈOz ðə kˈæpʧəɹ wɪð ɪts əɹˈAʃəɹz pˈAntᵻd ˈOvəɹ, sˌO ðə pˈɪkʧəɹ ɪz wˌʌt ɐ ɹˈid sˈiz.
+It was measured on 5,435 words of plain English (two licence texts): - With no tags, 6.1% of words come out differently.	ˌɪt wʌz mˈɛʒəɹd ˌɔn fˈIv θˈWzᵊnd fˈɔɹ hˈʌndɹəd θˈɜɹTi fˈIv wˈɜɹdz ʌv plˈAn ˈɪŋɡlɪʃ (tˈu lˈIsᵊns tˈɛksts:  wˌɪð nˈO tˈæɡz, sˈɪks pYnt wˈʌn pəɹsˈɛnt ʌv wˈɜɹdz kˈʌm ˈWt dˈɪfəɹəntli.
+For example, "homogamous" came back as "homogenous", and the reading itself was wrong there.	fˌɔɹ ɪɡzˈæmpəl, “hOmˈɑɡəməs” kˈAm bˈæk æz “həmˈɑʤənəs”, ænd ðə ɹˈidɪŋ ɪtsˈɛlf wʌz ɹˈɔŋ ðˈɛɹ.
+Exit criteria: A feature checklist against egui is complete.	ˈɛɡzət kɹItˈɪɹiə: ɐ fˈiʧəɹ ʧˈɛklˌɪst əɡˈɛnst ˈɛɡwi ɪz kəmplˈit.
+It is Apache-2.0, data included.	ˌɪt ɪz əpˈæʧi tˈu zˈɪɹO, dˈATə ɪnklˈudᵻd.
+- utterances turns a reading into sentences, with its maths in words.	dˈi ˈʌTəɹənsᵻz tˈɜɹnz ɐ ɹˈidɪŋ ˈɪntu sˈɛntᵊnsᵻz, wɪð ɪts mˈæθs ɪn wˈɜɹdz.
+- Clicking a block did nothing, because the VM's viewer delivers press and release in one frame and the drag-only preview never started a drag.	— klˈɪkɪŋ ɐ blˈɑk dˈɪd nˈʌθɪŋ, bəkˈʌz ðə vˌiˈɛmz vjˈuəɹ dəlˈɪvəɹz pɹˈɛs ænd ɹəlˈis ɪn wˈʌn fɹˈAm ænd ðə dɹˌæɡˈOnli pɹˈivjˌu nˈɛvəɹ stˈɑɹTᵻd ɐ dɹˈæɡ.
+- Batch "transcribe this folder or PDF" runs in the background with progress.	— bˈæʧ “tɹænskɹˈIb ðɪs fˈOldəɹ ɔɹ pˌidˌiˈɛf” ɹˈʌnz ɪn ðə bˈækɡɹˌWnd wɪð pɹˈɑɡɹəs.
+Turn them on in Settings → Phone pairing; doing so publishes this computer's tailnet name in public certificate logs.	tˈɜɹn ðˌɛm ˌɔn ɪn sˈɛTɪŋz ˈɛks fˈOn pˈɛɹɪŋ; dˈuɪŋ sˌO pˈʌblɪʃᵻz ðɪs kəmpjˈuTəɹz tˈAlnɪt nˈAm ɪn pˈʌblɪk səɹtˈɪfəkət lˈɔɡz.
+- Misaki's spaCy tagging can be replaced by a function-word list: 1.0% of words differ, against 6.1% with no tags.	— mˈɪsˌAkiz spˈAsi tˈæɡɪŋ kæn bi ɹəplˈAst bI ɐ fˈʌŋkʃənwˌɜɹd lˈɪst: wˈʌn pəɹsˈɛnt ʌv wˈɜɹdz dˈɪfəɹ, əɡˈɛnst sˈɪks pYnt wˈʌn pəɹsˈɛnt wɪð nˈO tˈæɡz.
+Kokoro needs Misaki's phonemes; misaki-rs is out.	kəkˈɔɹO nˈidz mˈɪsˌAkiz fˈOnˌimz; mɪsəkˈɪɹz ɪz ˈWt.
+Every action has a non-drag alternative (WCAG 2.5.7).	ˈɛvəɹi ˈækʃən hæz ɐ nˌɑndɹˈæɡ ɔltˈɜɹnəTɪv (dˌʌbᵊljusˌiˌAʤˈi tˈu fˈIv sˈɛvən).
+WebKitGTK and GPU variation across distros.	wˌɛbkˈɪtʤˌitˌikˈA ænd ʤˌipˌijˈu vˌɛɹiˈAʃən əkɹˈɔs dˈɪstɹOz.
+- Linux paths stay byte-identical, with a test for that.	— lˈɪnəks pˈæðz stˈA bˌItIdˈɛntəkᵊl, wɪð ɐ tˈɛst fɔɹ ðˈæt.
+Exit criteria: ≥25 fps magnified from a 3840×2160 source, with ≤100 ms added latency, on both Linux boxes.	ˈɛɡzət kɹItˈɪɹiə: ˈɛks ˈɛfs mˈæɡnəfˌId fɹʌm ɐ ˌæɡəɡɡˌIkˈɑɡ sˈɔɹs, wɪð ˈæksˌiz ˈɛmz ˈædᵻd lˈAtᵊnsi, ˌɔn bˈOθ lˈɪnəks bˈɑksᵻz.
+CLAUDE.md, README.md and NOTICE are updated in the same PR as the change they describe.	klˈAdɪɹmd, ɹˌidəmˈɛmd ænd nˈOTəs ɑɹ ˈʌpdˌATᵻd ɪn ðə sˈAm pˌiˈɑɹ æz ðə ʧˈAnʤ ðA dəskɹˈIb.
+Only the pixels a stroke covers change.	ˈOnli ðə pˈɪksᵊlz ɐ stɹˈOk kˈʌvəɹz ʧˈAnʤ.
+misaki-rs is MIT, but it replaced 64,566 of the 90,201 entries in Misaki's US gold dictionary with pronunciations it says it made with eSpeak.	mɪsəkˈɪɹz ɪz ˌɛmˌItˈi, bˌʌt ɪt ɹəplˈAst sˈɪksti fˈɔɹ θˈWzᵊnd fˈIv hˈʌndɹəd sˈɪksti sˈɪks ʌv ðə nˈIndi θˈWzᵊnd tˈu hˈʌndɹəd wˈʌn ˈɛntɹiz ɪn mˈɪsˌAkiz jˌuˈɛs ɡˈOld dˈɪkʃənˌɛɹi wɪð pɹənˌʌnsiˈAʃənz ɪt sˈɛz ɪt mˌAd wɪð ˈispˌik.
+Uncertainty: optionally a short audible cue before an uncertain word, so a teacher listening knows which words to check.	ˌʌnsˈɜɹtᵊnti: ˈɑpʃᵊnəli ɐ ʃˈɔɹt ˈɔdəbəl kjˈu bəfˈɔɹ ɐn ˌʌnsˈɜɹtn wˈɜɹd, sˌO ɐ tˈiʧəɹ lˈɪsənɪŋ nˈOz wˌɪʧ wˈɜɹdz tə ʧˈɛk.
+"Open brace; array of; row 1; column 1…" becomes "2 cases; case 1…".	“ˈOpᵊn bɹˈAs; əɹˈA ʌv; ɹˈO wˈʌn; kˈɑləm wˈʌn…” bəkˈʌmz “tˈu kˈAsᵻz; kˈAs wˈʌn”.
+Click a word to see its ink.	klˈɪk ɐ wˈɜɹd tə sˈi ɪts ˈɪŋk.
+A Windows 11 VM on the Fedora box (KVM, with the phone passed through over USB and the VM on the LAN) checks function: adb drivers, firewall prompts, installers, Windows Magnifier, voices.	ɐ wˈɪndOz əlˈɛvᵊn vˌiˈɛm ˌɔn ðə fədˈɔɹə bˈɑks (kˌAvˌiˈɛm, wɪð ðə fˈOn pˈæst θɹu ˈOvəɹ jˌuˌɛsbˈi ænd ðə vˌiˈɛm ˌɔn ðə lˈæn) ʧˈɛks fˈʌŋkʃən: ˈædb dɹˈIvəɹz, fˈIəɹwˌɔl pɹˈɑmpts, ɪnstˈɔləɹz, wˈɪndOz mˈæɡnəfˌIəɹ, vˈYsᵻz.
+Still to do in Phase 8: see 8d.	stˈɪl tə dˈu ɪn fˈAz ˈAt: sˈi ˈAt dˈi.
+app.rs draws the engine's state and sends commands.	əpˈuz dɹˈɔz ði ˈɛnʤənz stˈAt ænd sˈɛndz kəmˈændz.
+It's a feature, not accessibility work, and serves teachers right away.	ˌɪts ɐ fˈiʧəɹ, nˌɑt əksˌɛsəbˈɪləTi wˈɜɹk, ænd sˈɜɹvz tˈiʧəɹz ɹˈIt əwˈA.
+Tests cover the control's bookkeeping, a real session's control round trip, and the engine.	tˈɛsts kˈʌvəɹ ðə kəntɹˈOlz bˈʊkkˌipɪŋ, ɐ ɹˈiᵊl sˈɛʃənz kəntɹˈOl ɹˈWnd tɹˈɪp, ænd ði ˈɛnʤən.
+Drag draws a box, dragging inside moves it, a corner reshapes it (keeping a block's quad), and a click selects a block or clears.	dɹˈæɡ dɹˈɔz ɐ bˈɑks, dɹˈæɡɪŋ ɪnsˈId mˈuvz ɪt, ɐ kˈɔɹnəɹ ɹiʃˈAps ɪt (kˈipɪŋ ɐ blˈɑks kwˈɑd), ænd ɐ klˈɪk səlˈɛkts ɐ blˈɑk ɔɹ klˈɪɹz.
+The model predicts multi-point boxes, so on a curved or tilted page a block is a quadrilateral, not a rectangle; such a block is perspective-rectified before it is shown and read.	ðə mˈɑdᵊl pɹidˈɪkts mˌʌltipˈYnt bˈɑksᵻz, sˌO ˌɔn ɐ kˈɜɹvd ɔɹ tˈɪltᵻd pˈAʤ ɐ blˈɑk ɪz ɐ kwˌɑdɹəlˈæTəɹᵊl, nˌɑt ɐ ɹˈɛktˌæŋɡᵊl; sˈʌʧ ɐ blˈɑk ɪz pəɹspˌɛktɪvɹˈɛktəfˌId bəfˈɔɹ ɪt ɪz ʃˈOn ænd ɹˈɛd.
+The magnifier MVP needs only the camera pipeline, freeze, rotation, a viewport and display modes.	ðə mˈæɡnəfˌIəɹ ˌɛmvˌipˈi nˈidz ˈOnli ðə kˈæməɹə pˈIplˌIn, fɹˈiz, ɹOtˈAʃən, ɐ vjˈupˌɔɹt ænd dəsplˈA mˈOdz.
+- HTML+MathML, Markdown, and plain text.	— ˌAʧtˌiˌɛmˈɛl plˈʌs mˈæθ ˌɛmˈɛl, mˈɑɹkdˌWn, ænd plˈAn tˈɛkst.
+Squigl does not embed an overlay: the phone end is a browser page, and a browser cannot join one, so the phone needs the overlay's app whatever the PC does.	skwˈɪɡᵊl dˈʌz nˌɑt əmbˈɛd ɐn ˈOvəɹlˌA: ðə fˈOn ˈɛnd ɪz ɐ bɹˈWzəɹ pˈAʤ, ænd ɐ bɹˈWzəɹ kənˈɑt ʤˈYn wˈʌn, sˌO ðə fˈOn nˈidz ði ˈOvəɹlˌAz ˈæp wəTˈɛvəɹ ðə pˌisˈi dˈʌz.
+ClearSpeak's speech is good on the readings themselves.	klˌɪɹspˈiks spˈiʧ ɪz ɡˈʊd ˌɔn ðə ɹˈidɪŋz ðəmsˈɛlvz.
+Images are capped at 2048 image tokens by default for that reason.	ˈɪmɪʤᵻz ɑɹ kˈæpt æt twˈɛnti fˈɔɹTi ˈAt ˈɪmɪʤ tˈOkᵊnz bI dəfˈɔlt fɔɹ ðˈæt ɹˈizᵊn.
+Apple's licence allows macOS VMs only on Apple hardware.	ˈæpᵊlz lˈIsᵊns əlˈWz mˌækˌOˈɛs vˌiˈɛmz ˈOnli ˌɔn ˈæpᵊl hˈɑɹdwˌɛɹ.
+Student work stays on the machine with the built-in model.	stˈudᵊnt wˈɜɹk stˈAz ˌɔn ðə məʃˈin wɪð ðə bˌɪltˈɪn mˈɑdᵊl.
+- An unsigned build may be asked again after each rebuild.	— ɐn ˌʌnsˈInd bˈɪld mˈA bi ˈæskt əɡˈɛn ˈæftəɹ ˈiʧ ɹibˈɪld.
+Tailscale also has its own HTTPS certificates, which spare the phone the browser's warning.	tˈAlskˌAl ˈɔlsO hæz ɪts ˈOn ˌAʧtˌitˌipˌiˈɛs səɹtˈɪfəkəts, wˌɪʧ spˈɛɹ ðə fˈOn ðə bɹˈWzəɹz wˈɔɹnɪŋ.
+With its own playback, squigl can pause mid-word, which the system voices cannot do everywhere.	wˌɪð ɪts ˈOn plˈAbˌæk, skwˈɪɡᵊl kæn pˈɔz mˌɪdwˈɜɹd, wˌɪʧ ðə sˈɪstəm vˈYsᵻz kənˈɑt dˈu ˈɛvɹiwˌɛɹ.
+squigl-v4l2 — the Linux-only crate (empty on other targets): V4l2Sink, the the first frame's size (for WebRTC, which announces no size up front); and node is missing.	skwˈɪlvˌIvˈɛl — ðə lˈɪnəksˌOnli kɹˈAt (ˈɛmpti ˌɔn ˈʌðəɹ tˈɑɹɡəts: vˈi fˈɔɹ ˈɛltəsˈɪŋk, ðə ðə fˈɜɹst fɹˈAmz sˈIz (fɔɹ wˌɛbˌɑɹtˌisˈi, wˌɪʧ ənˈWnsᵻz nˈO sˈIz ˌʌp fɹˈʌnt); ænd nˈOd ɪz mˈɪsɪŋ.
+Side by side: the ink region and its reading, with uncertain words marked and the two readings listed separately when a second opinion disagrees.	sˈId bI sˈId: ði ˈɪŋk ɹˈiʤᵊn ænd ɪts ɹˈidɪŋ, wɪð ˌʌnsˈɜɹtn wˈɜɹdz mˈɑɹkt ænd ðə tˈu ɹˈidɪŋz lˈɪstᵻd sˈɛpəɹətli wˌɛn ɐ sˈɛkənd əpˈɪnjᵊn dˌɪsəɡɹˈiz.
+Keyboard: single-key shortcuts that can be turned off or remapped (WCAG 2.1.4).	kˈibˌɔɹd: sˈɪŋɡᵊlkˌi ʃˈɔɹtkˌʌts ðæt kæn bi tˈɜɹnd ˈɔf ɔɹ ɹᵻmˈæpt (dˌʌbᵊljusˌiˌAʤˈi tˈu wˈʌn fˈɔɹ).
+The egui UI gets no new accessibility work.	ði ˈɛɡwi jˌuˈI ɡɛts nˈO nˈu əksˌɛsəbˈɪləTi wˈɜɹk.
+It also downloaded the models and detected blocks.	ˌɪt ˈɔlsO dˈWnlˌOdᵻd ðə mˈɑdᵊlz ænd dətˈɛktᵻd blˈɑks.
+At 3 MB the custom scheme did 22 fps and IPC 15.	ˌæt θɹˈi ˌɛmbˈi ðə kˈʌstəm skˈim dˈɪd twˈɛnti tˈu ˈɛfs ænd ˌIpˌisˈi fˌɪftˈin.
+- Canvas2D draws 4.4 fps at that size.	dˈi kˈænvəstədˈi dɹˈɔz fˈɔɹ pYnt fˈɔɹ ˈɛfs æt ðˈæt sˈIz.
+CI matrix adds windows-latest and macos-14, building and testing core, engine, models and egui.	sˌiˈI mˈAtɹɪks ˈædz wˌɪndOzlˈATᵻst ænd mˌækOsˈɛɹ, bˈɪldɪŋ ænd tˈɛstɪŋ kˈɔɹ, ˈɛnʤən, mˈɑdᵊlz ænd ˈɛɡwi.
+Where a criterion needs real Windows or macOS hardware (frame rates, the GPU provider, macOS Zoom, clean-machine installs), it is marked (tester).	wˌɛɹ ɐ kɹItˈɪɹiən nˈidz ɹˈiᵊl wˈɪndOz ɔɹ mˌækˌOˈɛs hˈɑɹdwˌɛɹ (fɹˈAm ɹˈAts, ðə ʤˌipˌijˈu pɹəvˈIdəɹ, mˌækˌOˈɛs zˈum, klˌinməʃˈin ɪnstˈɔlz), ɪt ɪz mˈɑɹkt (tˈɛstəɹ).
+- It has Engine, Command, Reply, Event, the versioned slices in EngineState (the reading ones defined and empty until Phase 7), the waker and pump.	— ˌɪt hæz ˈɛnʤən, kəmˈænd, ɹəplˈI, əvˈɛnt, ðə vˈɜɹʒənd slˈIsᵻz ɪn ˈɛnʤənstˌAt (ðə ɹˈidɪŋ wˈʌnz dəfˈInd ænd ˈɛmpti ˌʌntˈɪl fˈAz sˈɛvən), ðə wˈAkəɹ ænd pˈʌmp.
+The beta marks macOS experimental until a tester has run it.	ðə bˈATə mˈɑɹks mˌækˌOˈɛs ɪkspˌɛɹəmˈɛntᵊl ˌʌntˈɪl ɐ tˈɛstəɹ hæz ɹˈʌn ɪt.
+PNG encoding moves off the UI thread into the read thread.	pˌiˌɛnʤˈi ɛŋkˈOdɪŋ mˈuvz ˈɔf ðə jˌuˈI θɹˈɛd ˈɪntu ðə ɹˈid θɹˈɛd.
+Readings only (Shift+F): the readings fill the screen; Escape brings the picture back.	ɹˈidɪŋz ˈOnli (ʃˈɪft plˈʌs ˈɛf: ðə ɹˈidɪŋz fˈɪl ðə skɹˈin; əskˈAp bɹˈɪŋz ðə pˈɪkʧəɹ bˈæk.
+On macOS they are (tester).	ˌɔn mˌækˌOˈɛs ðA ɑɹ (tˈɛstəɹ).
+Windows' separate Text size setting (TextScaleFactor) now zooms the webview.	wˈɪndOz sˈɛpəɹət tˈɛkst sˈIz sˈɛTɪŋ (tˌɛkstskˈAlfˈæktəɹ) nˈW zˈumz ðə wˈɛbvjˌu.
+It covers the config, the model cache and the pictures folder; the Linux paths are unchanged, and a test holds that.	ˌɪt kˈʌvəɹz ðə kˈɑnfˌɪɡ, ðə mˈɑdᵊl kˈæʃ ænd ðə pˈɪkʧəɹz fˈOldəɹ; ðə lˈɪnəks pˈæðz ɑɹ ˌʌnʧˈAnʤd, ænd ɐ tˈɛst hˈOldz ðˈæt.
+USB webcams and USB document cameras (nokhwa), useful for both audiences.	jˌuˌɛsbˈi wˈɛbkˌæmz ænd jˌuˌɛsbˈi dˈɑkjəmənt kˈæməɹəz (nˈOkwə), jˈusfᵊl fɔɹ bˈOθ ˈɔdiənsᵻz.
+Temml throws on x^ even with throwOnError: false.	tˈɛml θɹˈOz ˌɔn ˈɛks ˈivən wɪð θɹˈOˌɔnˈɛɹəɹ: fˈɔls.
+A phone on another network pairs through an overlay both are on (squigl embeds none: a browser cannot join one).	ɐ fˈOn ˌɔn ənˈʌðəɹ nˈɛtwˌɜɹk pˈɛɹz θɹu ɐn ˈOvəɹlˌA bˈOθ ɑɹ ˌɔn (skwˈɪɡᵊl əmbˈɛdz nˈʌn: ɐ bɹˈWzəɹ kənˈɑt ʤˈYn wˈʌn).
+Every slice is defined now, reading ones included, so the API doesn't churn later.	ˈɛvəɹi slˈIs ɪz dəfˈInd nˈW, ɹˈidɪŋ wˈʌnz ɪnklˈudᵻd, sˌO ði ˌApˌiˈI dˈʌzᵊnt ʧˈɜɹn lˈATəɹ.
+adb now reports an unauthorized or offline phone as such, rather than as "no device".	ˈædb nˈW ɹəpˈɔɹts ɐn ˌʌnˈɔθəɹˌIzd ɔɹ ˌɔflˈIn fˈOn æz sˈʌʧ, ɹˈæðəɹ ðən æz “nˈO dəvˈIs”.
+The magnifier ships first.	ðə mˈæɡnəfˌIəɹ ʃˈɪps fˈɜɹst.
+Progress (5b, 2026-10-06): overlay-aware addresses.	pɹˈɑɡɹəs (fˈIv bˈi, twˈɛnti twˈɛnti sˈɪkstˌɛnzˈɪɹO sˈɪks: ˈOvəɹlˌAəwˌɛɹ ədɹˈɛsᵻz.
+- A WebGL2 shader does YUV→RGB (matching convert.rs coefficients) and treats rotation, pan and zoom as UV transforms.	— ɐ wˈɛb ʤˌiˈɛl tˈu ʃˈAdəɹ dˈʌz jˈuvˌɑɹbˌɪb (mˈæʧɪŋ kənvˈɜɹTəɹz kˌOəfˈɪʃənts) ænd tɹˈits ɹOtˈAʃən, pˈæn ænd zˈum æz jˌuvˈi tɹˈænsfˌɔɹmz.
+The engine's math.rs splits a reading into text and maths and converts the maths with math-core, as S7 chose.	ði ˈɛnʤənz mˈæθəɹz splˈɪts ɐ ɹˈidɪŋ ˈɪntu tˈɛkst ænd mˈæθs ænd kˈɑnvˌɜɹts ðə mˈæθs wɪð mˌæθkˈɔɹ, æz ˈɛs sˈɛvən ʧˈOz.
+Without nasm on PATH, openh264-sys2 quietly builds without its assembly (~40% slower decoding).	wɪðˈWt nˈæzəm ˌɔn pˈæθ, ˌOpᵊnhmˌAsˈɪz kwˈIətli bˈɪldz wɪðˈWt ɪts əsˈɛmbli (ˈæksˌiz slˈOəɹ dᵻkˈOdɪŋ).
+It stays working, with maintenance only, until Tauri reaches parity, and is then retired.	ˌɪt stˈAz wˈɜɹkɪŋ, wɪð mˈAntᵊnəns ˈOnli, ˌʌntˈɪl tˈɔɹi ɹˈiʧᵻz pˈɛɹəTi, ænd ɪz ðˈɛn ɹətˈIəɹd.
+- It does well on misreadings: "Imfume" → ɪmfjˈum, "Ardocummed" → ˈɑɹdəkəmd, "childi" → ʧˈIldi, "sklearn" → sklˈɪɹn.	— ˌɪt dˈʌz wˈɛl ˌɔn mɪsɹˈidɪŋz: “ɪmfjˈum” ˈɛks ˈɛmfʤˌʌm, “ˈɑɹdəkəmd” ˈɛks ˈɛmdˌikˈɛm, “ʧˈIldi”  , “sklˈɪɹn” ˈɛks sklˈæŋ.
+Port 8443 unless taken (Firefox keys its exception on host and port).	pˈɔɹt ˈATi fˈɔɹ fˈɔɹTi θɹˈi ənlˈɛs tˈAkən (fˈIəɹfˌɑks kˈiz ɪts ɪksˈɛpʃən ˌɔn hˈOst ænd pˈɔɹt).
+Appearance: the UI themes (dark, light, high-contrast yellow on black, high-contrast white on black), set in a new [desktop] config section.	əpˈɪɹəns: ðə jˌuˈI θˈimz (dˈɑɹk, lˈIt, hˌIkˈɑntɹˌæst jˈɛlO ˌɔn blˈæk, hˌIkˈɑntɹˌæst wˈIt ˌɔn blˈæk), sˈɛt ɪn ɐ nˈu ɑdˈɛsktˌɑp) kˈɑnfˌɪɡ sˈɛkʃən.
+Also results, history and the read queue.	ˈɔlsO ɹəzˈʌlts, hˈɪstəɹi ænd ðə ɹˈid kjˈu.
+Each cell shows cores used, then p95 latency.	ˈiʧ sˈɛl ʃˈOz kˈɔɹz jˈuzd, ðˈɛn pˈi nˈIndi fˈIv lˈAtᵊnsi.
+Greedy decoding through ONNX Runtime matches PyTorch on all 12 test words, at about 10 ms a word.	ɡɹˈidi dᵻkˈOdɪŋ θɹu ˌOˌɛnˌɛnˈɛks ɹˈʌntIm mˈæʧᵻz pˈITəɹk ˌɔn ˈɔl twˈɛlv tˈɛst wˈɜɹdz, æt əbˈWt tˈɛn ˈɛmz ɐ wˈɜɹd.
+SHA256SUMS.txt covers everything.	shˌæɡæpsəmstst kˈʌvəɹz ˈɛvəɹiθˌɪŋ.
+Typst (cargo tree -p squigl-engine must show none: the built-in models and the typesetter implement its traits from outside, so a second front end can sit on it).	tˈɪpst (kˈɑɹɡO tɹˈi )pˈi skwˈɪlənʤˌIn mˈʌst ʃˈO nˈʌn: ðə bˌɪltˈɪn mˈɑdᵊlz ænd ðə tˈIpsˌɛTəɹ ˈɪmpləmˌɛnt ɪts tɹˈAts fɹʌm ˌWtsˈId, sˌO ɐ sˈɛkənd fɹˈʌnt ˈɛnd kæn sˈɪt ˌɔn ɪt).
+Windows and macOS are (tester).	wˈɪndOz ænd mˌækˌOˈɛs ɑɹ (tˈɛstəɹ).
+- A signed app keeps the answer.	— ɐ sˈInd ˈæp kˈips ði ˈænsəɹ.
+ResizeObserver alone does not size the canvas: WebKitGTK skips it for a window that is not being drawn.	ɹisˌIzəbzˈɜɹvəɹ əlˈOn dˈʌz nˌɑt sˈIz ðə kˈænvəs: wˌɛbkˈɪtʤˌitˌikˈA skˈɪps ɪt fɔɹ ɐ wˈɪndO ðæt ɪz nˌɑt bˈiɪŋ dɹˈɔn.
+It costs $3.50, or £12 for two, about 40% off.	ˌɪt kˈɔsts θɹˈi dˈɑləɹz ænd fˈɪfti sˈɛnts, ɔɹ twˈɛlv pˈWndz fɔɹ tˈu, əbˈWt fˈɔɹTi pəɹsˈɛnt ˈɔf.
+In 1984 there were 1,234 of them; by 2005, 3 million.	ɪn nˌIntˈin ˈATi fˈɔɹ ðɛɹ wɜɹ wˈʌn θˈWzᵊnd tˈu hˈʌndɹəd θˈɜɹTi fˈɔɹ ʌv ðˌɛm; bI tˈu θˈWzᵊnd fˈIv, θɹˈi mˈɪljᵊn.
+The 21st time, she read the 3rd chapter at 7:30.	ðə twˈɛnti fˈɜɹst tˈIm, ʃi ɹˈɛd ðə θˈɜɹd ʧˈæptəɹ æt ˈæksˌiz.
+I used to live there, but now I use a laptop.	ˌI jˈust tə lˈɪv ðˈɛɹ, bˌʌt nˈW ˌI jˈuz ɐ lˈæptˌɑp.
+Don't you think they're right? It's the cat's toy.	dˈOnt ju θˈɪŋk ðɛɹ ɹˈIt? ˌɪts ðə kˈæts tˈY.
+Read the record, then record what you read.	ɹˈid ðə ɹˈɛkəɹd, ðˈɛn ɹəkˈɔɹd wˌʌt ju ɹˈɛd.
+That book is better than that one, and I know that.	ðˈæt bˈʊk ɪz bˈɛTəɹ ðən ðˈæt wˈʌn, ænd ˌI nˈO ðˈæt.
+The U.S.A. and the UK signed it on 4 July.	ðə jˌuˌɛsˈA ænd ðə jˌukˈA sˈInd ɪt ˌɔn fˈɔɹ ʤəlˈI.
+These have to be dated fresco or a mural ...	ðˌiz hæv tə bi dˈATᵻd fɹˈɛskO ɔɹ ɐ mjˈʊɹᵊl ...
+Decision True.	dəsˈɪʒᵊn tɹˈu.
+L Recursively splits data in order to clarify point	ˈɛl ɹəkˈɜɹsəvli splˈɪts dˈATə ɪn ˈɔɹdəɹ tə klˈɛɹəfˌI pˈYnt
+The more hetero- genous the set, the higher the entropy.	ðə mˈɔɹ hˈɛTəɹO ʤˈinəs ðə sˈɛt, ðə hˈIəɹ ði ˈɛntɹəpi.
+Inhibition of entropy ...	ˌɪnəbˈɪʃən ʌv ˈɛntɹəpi ...
+The more homogamous a sex, the lower the entropy.	ðə mˈɔɹ hOmˈɑɡəməs ɐ sˈɛks, ðə lˈOəɹ ði ˈɛntɹəpi.
+The entropy is cap e is equal to; negative the sum from i is equal to 1, to k of; p sub i; the log base 2, of p sub i BASE	ði ˈɛntɹəpi ɪz kˈæp ˈi ɪz ˈikwᵊl tu; nˈɛɡəTɪv ðə sˈʌm fɹʌm ˈI ɪz ˈikwᵊl tə wˈʌn, tə kˈA ʌv; pˈi sˈʌb ˈI; ðə lˈɔɡ bˈAs tˈu, ʌv pˈi sˈʌb ˈI bˈAs
+Entropy is greater if k is greater than 2	ˈɛntɹəpi ɪz ɡɹˈATəɹ ɪf kˈA ɪz ɡɹˈATəɹ ðən tˈu
+open brace; the fraction with numerator; partial derivative cap l; and denominator partial derivative g hat; is equal to; 1 half; the fraction with numerator; partial derivative; and denominator partial derivative g hat; times; open bracket; y prime, y, minus, 2 y prime, g hat; plus, g hat, prime; g hat; close bracket; times; vertical line; the fraction with numerator; partial derivative y; and denominator partial derivative x; is equal to; the fraction with numerator; partial derivative y; and denominator partial derivative x; close bracket prime	ˈOpᵊn bɹˈAs; ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; pˈɑɹʃᵊl dəɹˈɪvəTɪv kˈæp ˈɛl; ænd dənˈɑmənˌATəɹ pˈɑɹʃᵊl dəɹˈɪvəTɪv ʤˈi hˈæt; ɪz ˈikwᵊl tu; wˈʌn hˈæf; ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; pˈɑɹʃᵊl dəɹˈɪvəTɪv; ænd dənˈɑmənˌATəɹ pˈɑɹʃᵊl dəɹˈɪvəTɪv ʤˈi hˈæt; tˈImz; ˈOpᵊn bɹˈækət; wˈI pɹˈIm, wˈI, mˈInəs, tˈu wˈI pɹˈIm, ʤˈi hˈæt; plˈʌs, ʤˈi hˈæt, pɹˈIm; ʤˈi hˈæt; klˈOs bɹˈækət; tˈImz; vˈɜɹTəkᵊl lˈIn; ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; pˈɑɹʃᵊl dəɹˈɪvəTɪv wˈI; ænd dənˈɑmənˌATəɹ pˈɑɹʃᵊl dəɹˈɪvəTɪv ˈɛks; ɪz ˈikwᵊl tu; ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; pˈɑɹʃᵊl dəɹˈɪvəTɪv wˈI; ænd dənˈɑmənˌATəɹ pˈɑɹʃᵊl dəɹˈɪvəTɪv ˈɛks; klˈOs bɹˈækət pɹˈIm
+3) I.e., the gd step is:	θɹˈi) ˌIˈi, ðə ʤˈid stˈɛp ɪz:
+w sub i e; is equal to; w sub i, plus cap m, sign; times, open paren, w x plus b, close paren; times x	dˈʌbᵊlju sˈʌb ˈI ˈi; ɪz ˈikwᵊl tu; dˈʌbᵊlju sˈʌb ˈI, plˈʌs kˈæp ˈɛm, sˈIn; tˈImz, ˈOpᵊn pˈɛɹɛn, dˈʌbᵊlju ˈɛks plˈʌs bˈi, klˈOs pˈɛɹɛn; tˈImz ˈɛks
+IG= E (parallel node) the sum over i of; cap e of open paren childi close paren I.e.	ˈiɡˌæk ˈi (pˈɛɹəlˌɛl nˈOd) ðə sˈʌm ˈOvəɹ ˈI ʌv; kˈæp ˈi ʌv ˈOpᵊn pˈɛɹɛn ʧˈIldi klˈOz pˈɛɹɛn ˌIˈi
+we split data in a were their minimum uncertainty	wi splˈɪt dˈATə ɪn ɐ wɜɹ ðɛɹ mˈɪnəməm ˌʌnsˈɜɹtᵊnti
+But it is difficult to calculate the joint prob.	bˌʌt ɪt ɪz dˈɪfəkəlt tə kˈælkjəlˌAt ðə ʤˈYnt pɹˈɑb.
+over all features...	ˈOvəɹ ˈɔl fˈiʧəɹz...
+Assume that	əsˈum ðæt
+cap p; open paren; x, vertical line y sub i, close paren; is equal to; cap p; open paren; x sub 1, x sub 2, x sub 3, dot dot dot x sub k; given y sub i; close paren	kˈæp pˈi; ˈOpᵊn pˈɛɹɛn; ˈɛks, vˈɜɹTəkᵊl lˈIn wˈI sˈʌb ˈI, klˈOs pˈɛɹɛn; ɪz ˈikwᵊl tu; kˈæp pˈi; ˈOpᵊn pˈɛɹɛn; ˈɛks sˈʌb wˈʌn, ˈɛks sˈʌb tˈu, ˈɛks sˈʌb θɹˈi, dˈɑt dˈɑt dˈɑt ˈɛks sˈʌb kˈA; ɡˈɪvən wˈI sˈʌb ˈI; klˈOs pˈɛɹɛn
+is equal to; cap p; open paren, x sub 1, given y sub i; close paren; times cap p; open paren; x sub 2; vertical line y sub i, close paren; dot dot dot cap p; open paren, x sub k, divides y sub i; close paren	ɪz ˈikwᵊl tu; kˈæp pˈi; ˈOpᵊn pˈɛɹɛn, ˈɛks sˈʌb wˈʌn, ɡˈɪvən wˈI sˈʌb ˈI; klˈOs pˈɛɹɛn; tˈImz kˈæp pˈi; ˈOpᵊn pˈɛɹɛn; ˈɛks sˈʌb tˈu; vˈɜɹTəkᵊl lˈIn wˈI sˈʌb ˈI, klˈOs pˈɛɹɛn; dˈɑt dˈɑt dˈɑt kˈæp pˈi; ˈOpᵊn pˈɛɹɛn, ˈɛks sˈʌb kˈA, dəvˈIdz wˈI sˈʌb ˈI; klˈOs pˈɛɹɛn
+the features are conditionally independent	ðə fˈiʧəɹz ɑɹ kəndˈɪʃᵊnəli ˌɪndəpˈɛndənt
+(Ardocummed by some law function)	(ˈɑɹdəkəmd bI sˌʌm lˈɔ fˈʌŋkʃən)
+Learning = tuning parameter to improve a hypothesis.	lˈɜɹnɪŋ ˈɛks tˈunɪŋ pəɹˈæməTəɹ tʊ ɪmpɹˈuv ɐ hIpˈɑθəsɪs.
+Imfume = Making a prediction	ɪmfjˈum ˈɛks mˈAkɪŋ ɐ pɹidˈɪkʃən
+Since MAE only baker into account the verbal distance, shifting a line up or down does not change the MAE...	sˈɪns ˌɛmˌAˈi ˈOnli bˈAkəɹ ˈɪntu əkˈWnt ðə vˈɜɹbᵊl dˈɪstᵊns, ʃˈɪftɪŋ ɐ lˈIn ˌʌp ɔɹ dˌWn dˈʌz nˌɑt ʧˈAnʤ ði ˌɛmˌAˈi...
+b is not identified ?	bˈi ɪz nˌɑt IdˈɛntəfˌId ?
+Their ML bug question is nice ...	ðˌɛɹ ˌɛmˈɛl bˈʌɡ kwˈɛsʧᵊn ɪz nˈIs ...
+Pick a cell way 60 yr.	pˈɪk ɐ sˈɛl wˈA sˈɪksti jˈɪɹ.
+8 date	ˈAt dˈAt
+Naire Bayer:	nˈɛɹ bˈAəɹ:
+Bayes Theorem.	bˈAz θˈiəɹəm.
+3 lines; line 1; cap p open paren cap eigh divides cap b close paren is equal to; the fraction with numerator; cap p open paren cap eigh intersection cap b close paren; and denominator cap p open paren cap b close paren; line 2; cap p open paren cap eigh intersection cap b close paren is equal to cap p open paren cap eigh divides cap b close paren cap p open paren cap b close paren; line 3	θɹˈi lˈInz; lˈIn wˈʌn; kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp ˈA dəvˈIdz kˈæp bˈi klˈOs pˈɛɹɛn ɪz ˈikwᵊl tu; ðə fɹˈækʃən wɪð nˈuməɹˌATəɹ; kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp ˈA ˌɪntəɹsˈɛkʃən kˈæp bˈi klˈOs pˈɛɹɛn; ænd dənˈɑmənˌATəɹ kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp bˈi klˈOs pˈɛɹɛn; lˈIn tˈu; kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp ˈA ˌɪntəɹsˈɛkʃən kˈæp bˈi klˈOs pˈɛɹɛn ɪz ˈikwᵊl tə kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp ˈA dəvˈIdz kˈæp bˈi klˈOs pˈɛɹɛn kˈæp pˈi ˈOpᵊn pˈɛɹɛn kˈæp bˈi klˈOs pˈɛɹɛn; lˈIn θɹˈi
+The perception algorithm is based on:	ðə pəɹsˈɛpʃən ˈælɡəɹˌɪðəm ɪz bˈAst ˌɔn:
+1) Only updating for cases when y hat, sub i; plus y sub i	wˈʌn) ˈOnli ˈʌpdˌATɪŋ fɔɹ kˈAsᵻz wˌɛn wˈI hˈæt, sˈʌb ˈI; plˈʌs wˈI sˈʌb ˈI
+2) An absolute value loss function,	tˈu) ɐn ˈæbsəlˌut vˈælju lˈɔs fˈʌŋkʃən,
+l is equal to, the absolute value of w x plus b	ˈɛl ɪz ˈikwᵊl tu, ði ˈæbsəlˌut vˈælju ʌv dˈʌbᵊlju ˈɛks plˈʌs bˈi
+from sklearn import linear_model	fɹʌm sklˈɪɹn ˈɪmpˌɔɹt lˈɪniəɹmˌɑdᵊl
+model = linear_model.LinearRegression()	mˈɑdᵊl ˈɛks lˈɪniəɹmˌɑdᵊl.lˌɪniəɹɹəɡɹˈɛʃən()
+model.fit(X, y)	mˈɑdᵊlfˌɪts, wˈI)
+Supervised Learning We have labelled training data and we predict the labels of the new data.	sˈupəɹvˌIzd lˈɜɹnɪŋ wˌi hæv lˈAbəld tɹˈAnɪŋ dˈATə ænd wi pɹidˈɪkt ðə lˈAbəlz ʌv ðə nˈu dˈATə.
+Weight are according to proportion of children member.	wˈAt ɑɹ əkˈɔɹdɪŋ tə pɹəpˈɔɹʃən ʌv ʧˈɪldɹᵊn mˈɛmbəɹ.

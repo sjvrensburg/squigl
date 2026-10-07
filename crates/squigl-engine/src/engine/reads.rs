@@ -1173,6 +1173,11 @@ mod tests {
         ended: u64,
         stops: usize,
         configured: Option<(Option<String>, f32)>,
+        /// A voice that holds mid-word, and has a model to download.
+        own_model: bool,
+        paused: bool,
+        prepared: Vec<String>,
+        model_asked: bool,
     }
 
     /// A voice that says nothing: it notes what it was given, and an utterance ends
@@ -1223,6 +1228,35 @@ mod tests {
         }
         fn maths(&self, _: &str) -> Option<String> {
             Some("some maths".into())
+        }
+        fn prepare(&mut self, text: &str) {
+            self.0.lock().unwrap().prepared.push(text.into());
+        }
+        fn pause(&mut self) -> bool {
+            let mut log = self.0.lock().unwrap();
+            log.paused = log.own_model;
+            log.own_model
+        }
+        fn resume(&mut self) -> bool {
+            let mut log = self.0.lock().unwrap();
+            log.paused = false;
+            log.own_model
+        }
+        fn model(&self) -> Option<(String, crate::model::ModelPhase)> {
+            let log = self.0.lock().unwrap();
+            log.own_model.then(|| {
+                let phase = if log.model_asked {
+                    crate::model::ModelPhase::Ready {
+                        device: "CPU".into(),
+                    }
+                } else {
+                    crate::model::ModelPhase::NotInstalled { size: 1 }
+                };
+                ("Voice".to_string(), phase)
+            })
+        }
+        fn prepare_model(&self) {
+            self.0.lock().unwrap().model_asked = true;
         }
     }
 
@@ -1825,5 +1859,41 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, Event::Notice(n) if n.text.contains("not available"))));
+    }
+
+    #[test]
+    fn a_voice_that_can_holds_mid_word_makes_the_next_sentence_ahead_and_lists_its_model() {
+        let reader = Reader::new("first").answers(&[Ok("One here. Two there.")]);
+        let voice = FakeVoice::default();
+        voice.0.lock().unwrap().own_model = true;
+        let mut engine = engine_with_voice("ownvoice", &[reader], None, Some(voice.clone()));
+        let models = &engine.state().models.value.models;
+        assert!(models.iter().any(|m| m.name == "Voice"
+            && m.kind == super::super::ModelKind::Voice
+            && m.phase.is_idle()));
+        engine
+            .handle(Command::PrepareModel {
+                name: "Voice".into(),
+            })
+            .unwrap();
+        assert!(voice.0.lock().unwrap().model_asked);
+        engine.handle(Command::Read).unwrap();
+        pump_until(&mut engine, |e, _| e.results().len() == 1);
+        engine.handle(Command::Speak { result: None }).unwrap();
+        assert_eq!(voice.said(), ["One here."]);
+        assert_eq!(
+            voice.0.lock().unwrap().prepared,
+            ["Two there."],
+            "made ahead"
+        );
+        engine.handle(Command::PauseSpeaking).unwrap();
+        assert!(voice.0.lock().unwrap().paused, "held, not stopped");
+        assert_eq!(voice.0.lock().unwrap().stops, 0);
+        engine.handle(Command::ResumeSpeaking).unwrap();
+        assert!(!voice.0.lock().unwrap().paused);
+        assert_eq!(voice.said(), ["One here."], "not said again");
+        voice.finish();
+        engine.pump(Instant::now());
+        assert_eq!(voice.said(), ["One here.", "Two there."]);
     }
 }

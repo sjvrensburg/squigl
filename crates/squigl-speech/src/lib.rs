@@ -1,231 +1,213 @@
-//! Reading aloud for squigl: [`SystemVoice`] is the engine's
-//! [`squigl_engine::speech::Voice`] on the system's speech through the `tts`
-//! crate (speech-dispatcher, WinRT, AVSpeechSynthesizer), with maths said in words
-//! by MathCAT (ClearSpeak). Both live on a thread of their own: MathCAT keeps its
-//! state per thread, and the end of an utterance is noticed there (from the
-//! speech system's callback where it has one, else by asking) and passed on as a
-//! call of the engine's waker.
+//! Reading aloud for squigl: [`Voices`] is the engine's [`Voice`], speaking with
+//! Kokoro (squigl's own neural voice, downloaded when the person agrees; the
+//! `kokoro` feature) or the system's speech ([`SystemVoice`]), and saying maths in
+//! words by MathCAT ([`Maths`]) for either.
 
-use anyhow::{anyhow, Context, Result};
-use libmathcat::interface as mathcat;
+#[cfg(feature = "kokoro")]
+mod kokoro;
+mod maths;
+mod system;
+
+#[cfg(feature = "kokoro")]
+pub use kokoro::KokoroVoice;
+pub use maths::Maths;
+pub use system::{system_rate, SystemVoice};
+
+use anyhow::{bail, Result};
 use squigl_engine::engine::Waker;
+use squigl_engine::model::ModelPhase;
 use squigl_engine::speech::{Voice, VoiceInfo};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-/// How often an utterance is checked on while one is being said.
-const POLL: Duration = Duration::from_millis(100);
-/// An utterance the speech system never reports as started (an empty one, say)
-/// counts as over after this long.
-const NEVER_STARTED: Duration = Duration::from_secs(3);
-
-enum Msg {
-    Say(u64, String),
-    Stop,
-    /// The speech system said an utterance ended.
-    Ended,
-    Configure(Option<String>, f32, Sender<Result<()>>),
-    Maths(String, Sender<Option<String>>),
+/// Which voice said the newest utterance.
+#[derive(Clone, Copy, PartialEq)]
+enum Speaking {
+    System,
+    #[cfg(feature = "kokoro")]
+    Kokoro,
 }
 
-/// The system's speech, run on its own thread.
-pub struct SystemVoice {
-    tx: Sender<Msg>,
-    ended: Arc<AtomicU64>,
-    voices: Vec<VoiceInfo>,
+/// The voices squigl has, as one: Kokoro once it is ready and chosen (or when no
+/// voice is chosen -- it is the better one), the system's otherwise.
+pub struct Voices {
+    system: Option<SystemVoice>,
+    #[cfg(feature = "kokoro")]
+    kokoro: Option<KokoroVoice>,
+    maths: Option<Maths>,
+    /// `[speech].voice`.
+    choice: Option<String>,
+    speaking: Speaking,
 }
 
-impl SystemVoice {
-    /// Starts the speech thread; an error when the system has no speech (no
-    /// speech-dispatcher running, say).
-    pub fn start(wake: Waker) -> Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let ended = Arc::new(AtomicU64::new(0));
-        let (ended2, tx2) = (Arc::clone(&ended), tx.clone());
-        std::thread::Builder::new()
-            .name("speech".into())
-            .spawn(move || run(rx, tx2, ended2, wake, ready_tx))?;
-        let voices = ready_rx
-            .recv()
-            .map_err(|_| anyhow!("the speech thread ended"))??;
-        Ok(Self { tx, ended, voices })
+impl Voices {
+    /// The system's speech and MathCAT, and Kokoro when given its model.
+    pub fn start(
+        wake: Waker,
+        #[cfg(feature = "kokoro")] kokoro: Option<
+            std::sync::Arc<squigl_models::kokoro::KokoroService>,
+        >,
+    ) -> Result<Self> {
+        log::debug!("starting the system's speech");
+        let system = SystemVoice::start(wake.clone())
+            .inspect_err(|e| log::warn!("no system speech: {e:#}"))
+            .ok();
+        log::debug!("system speech: {}", system.is_some());
+        #[cfg(feature = "kokoro")]
+        let kokoro = kokoro.and_then(|k| {
+            KokoroVoice::start(k, wake.clone())
+                .inspect_err(|e| log::warn!("no Kokoro voice: {e:#}"))
+                .ok()
+        });
+        #[cfg(feature = "kokoro")]
+        let none = system.is_none() && kokoro.is_none();
+        #[cfg(not(feature = "kokoro"))]
+        let none = system.is_none();
+        if none {
+            bail!("no way to speak on this system");
+        }
+        log::debug!("starting MathCAT");
+        let maths = Maths::start()
+            .inspect_err(|e| log::warn!("maths will be read as its source: MathCAT: {e:#}"))
+            .ok();
+        Ok(Self {
+            system,
+            #[cfg(feature = "kokoro")]
+            kokoro,
+            maths,
+            choice: None,
+            speaking: Speaking::System,
+        })
     }
 
-    fn send(&self, msg: Msg) {
-        // The thread ends only when this is dropped.
-        let _ = self.tx.send(msg);
+    /// The voice to speak with now.
+    fn pick(&self) -> Speaking {
+        #[cfg(feature = "kokoro")]
+        {
+            let chosen = self
+                .choice
+                .as_deref()
+                .is_none_or(|c| c.starts_with("kokoro:"));
+            if chosen && self.kokoro.as_ref().is_some_and(KokoroVoice::ready)
+                || self.system.is_none()
+            {
+                return Speaking::Kokoro;
+            }
+        }
+        Speaking::System
+    }
+
+    fn voice(&mut self, which: Speaking) -> Option<&mut dyn Voice> {
+        match which {
+            Speaking::System => self.system.as_mut().map(|v| v as &mut dyn Voice),
+            #[cfg(feature = "kokoro")]
+            Speaking::Kokoro => self.kokoro.as_mut().map(|v| v as &mut dyn Voice),
+        }
+    }
+
+    fn each(&mut self, mut f: impl FnMut(&mut dyn Voice)) {
+        if let Some(v) = &mut self.system {
+            f(v);
+        }
+        #[cfg(feature = "kokoro")]
+        if let Some(v) = &mut self.kokoro {
+            f(v);
+        }
     }
 }
 
-impl Voice for SystemVoice {
+impl Voice for Voices {
     fn say(&mut self, id: u64, text: &str) -> Result<()> {
-        self.send(Msg::Say(id, text.into()));
-        Ok(())
+        let which = self.pick();
+        // The other one stops: one voice at a time.
+        if which != self.speaking {
+            if let Some(v) = self.voice(self.speaking) {
+                v.stop();
+            }
+        }
+        self.speaking = which;
+        match self.voice(which) {
+            Some(v) => v.say(id, text),
+            None => bail!("no voice"),
+        }
     }
 
     fn stop(&mut self) {
-        self.send(Msg::Stop);
+        self.each(|v| v.stop());
     }
 
     fn ended(&self) -> u64 {
-        self.ended.load(Ordering::Acquire)
+        // Utterance ids only grow, and one voice speaks at a time.
+        let ended = self.system.as_ref().map_or(0, |v| v.ended());
+        #[cfg(feature = "kokoro")]
+        let ended = ended.max(self.kokoro.as_ref().map_or(0, |v| v.ended()));
+        ended
     }
 
     fn voices(&self) -> Vec<VoiceInfo> {
-        self.voices.clone()
+        let mut all = Vec::new();
+        #[cfg(feature = "kokoro")]
+        if self.kokoro.is_some() {
+            all.extend(KokoroVoice::voice_list());
+        }
+        if let Some(v) = &self.system {
+            all.extend(v.voices());
+        }
+        all
     }
 
     fn configure(&mut self, voice: Option<&str>, rate: f32) -> Result<()> {
-        let (reply, answer) = mpsc::channel();
-        self.send(Msg::Configure(voice.map(String::from), rate, reply));
-        answer
-            .recv()
-            .map_err(|_| anyhow!("the speech thread ended"))?
+        self.choice = voice.map(String::from);
+        let system_voice = voice.filter(|v| !v.starts_with("kokoro:"));
+        let mut result = Ok(());
+        if let Some(v) = &mut self.system {
+            result = v.configure(system_voice, rate);
+        }
+        #[cfg(feature = "kokoro")]
+        if let Some(v) = &mut self.kokoro {
+            v.configure(voice, rate)?;
+        }
+        result
     }
 
     fn maths(&self, mathml: &str) -> Option<String> {
-        let (reply, answer) = mpsc::channel();
-        self.send(Msg::Maths(mathml.into(), reply));
-        answer.recv().ok().flatten()
+        self.maths.as_ref()?.say(mathml)
     }
-}
 
-/// `rate` (a multiple of normal speed, 0.5 to 2) on the speech system's own scale:
-/// normal at 1, its slowest at 0.5 and its fastest at 2, straight lines between.
-pub fn system_rate(rate: f32, min: f32, normal: f32, max: f32) -> f32 {
-    let rate = rate.clamp(0.5, 2.0);
-    if rate >= 1.0 {
-        normal + (max - normal) * (rate - 1.0)
-    } else {
-        normal - (normal - min) * (1.0 - rate) * 2.0
+    fn prepare(&mut self, text: &str) {
+        let which = self.pick();
+        if let Some(v) = self.voice(which) {
+            v.prepare(text);
+        }
     }
-}
 
-fn voice_info(v: &tts::Voice) -> VoiceInfo {
-    VoiceInfo {
-        id: v.id(),
-        name: v.name(),
-        language: Some(v.language().to_string()).filter(|l| !l.is_empty()),
+    fn pause(&mut self) -> bool {
+        let which = self.speaking;
+        self.voice(which).is_some_and(|v| v.pause())
     }
-}
 
-fn start_mathcat() -> Result<()> {
-    // The rules are zipped into the binary; the directory is only a name then.
-    mathcat::set_rules_dir("Rules").map_err(|e| anyhow!("{e}"))?;
-    mathcat::set_preference("Language", "en").map_err(|e| anyhow!("{e}"))?;
-    mathcat::set_preference("SpeechStyle", "ClearSpeak").map_err(|e| anyhow!("{e}"))?;
-    Ok(())
-}
-
-fn maths_in_words(mathml: &str) -> Option<String> {
-    mathcat::set_mathml(mathml).ok()?;
-    let words = mathcat::get_spoken_text().ok()?;
-    Some(words).filter(|w| !w.trim().is_empty())
-}
-
-fn run(
-    rx: Receiver<Msg>,
-    tx: Sender<Msg>,
-    ended: Arc<AtomicU64>,
-    wake: Waker,
-    ready: Sender<Result<Vec<VoiceInfo>>>,
-) {
-    let mut tts = match tts::Tts::default().context("starting the system's speech") {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
-    let voices: Vec<tts::Voice> = tts.voices().unwrap_or_default();
-    let maths_ok = match start_mathcat() {
-        Ok(()) => true,
-        Err(e) => {
-            log::warn!("maths will be read as its source: MathCAT: {e:#}");
-            false
-        }
-    };
-    // Where the system calls back at an utterance's end, it is a nudge to look.
-    let callbacks = tts.supported_features().utterance_callbacks;
-    if callbacks {
-        let nudge = tx.clone();
-        let _ = tts.on_utterance_end(Some(Box::new(move |_| {
-            let _ = nudge.send(Msg::Ended);
-        })));
+    fn resume(&mut self) -> bool {
+        let which = self.speaking;
+        self.voice(which).is_some_and(|v| v.resume())
     }
-    drop(tx);
-    let _ = ready.send(Ok(voices.iter().map(voice_info).collect()));
 
-    // The utterance being said: its id, when it was started, whether it has been
-    // seen speaking.
-    let mut current: Option<(u64, Instant, bool)> = None;
-    let finish = |current: &mut Option<(u64, Instant, bool)>| {
-        if let Some((id, ..)) = current.take() {
-            ended.store(id, Ordering::Release);
-            wake();
+    fn model(&self) -> Option<(String, ModelPhase)> {
+        #[cfg(feature = "kokoro")]
+        if let Some(v) = &self.kokoro {
+            return v.model();
         }
-    };
-    loop {
-        let msg = if current.is_some() {
-            match rx.recv_timeout(POLL) {
-                Ok(m) => Some(m),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-        } else {
-            match rx.recv() {
-                Ok(m) => Some(m),
-                Err(_) => break,
-            }
-        };
-        match msg {
-            Some(Msg::Say(id, text)) => {
-                // The one before is cut off: it is over.
-                finish(&mut current);
-                match tts.speak(text, true) {
-                    Ok(_) => current = Some((id, Instant::now(), false)),
-                    Err(e) => {
-                        log::warn!("could not speak: {e}");
-                        ended.store(id, Ordering::Release);
-                        wake();
-                    }
-                }
-            }
-            Some(Msg::Stop) => {
-                let _ = tts.stop();
-                finish(&mut current);
-            }
-            Some(Msg::Configure(voice, rate, reply)) => {
-                let result = (|| -> Result<()> {
-                    let r = system_rate(rate, tts.min_rate(), tts.normal_rate(), tts.max_rate());
-                    tts.set_rate(r).context("setting the rate")?;
-                    if let Some(id) = voice {
-                        let v = voices
-                            .iter()
-                            .find(|v| v.id() == id)
-                            .with_context(|| format!("no voice called {id:?}"))?;
-                        tts.set_voice(v).context("choosing the voice")?;
-                    }
-                    Ok(())
-                })();
-                let _ = reply.send(result);
-            }
-            Some(Msg::Maths(mathml, reply)) => {
-                let _ = reply.send(maths_ok.then(|| maths_in_words(&mathml)).flatten());
-            }
-            Some(Msg::Ended) | None => {}
+        None
+    }
+
+    fn prepare_model(&self) {
+        #[cfg(feature = "kokoro")]
+        if let Some(v) = &self.kokoro {
+            v.prepare_model();
         }
-        // Whatever woke the loop, see whether the utterance is still going.
-        if let Some((_, started, seen)) = &mut current {
-            let speaking = tts.is_speaking().unwrap_or(false);
-            if speaking {
-                *seen = true;
-            } else if *seen || started.elapsed() > NEVER_STARTED {
-                finish(&mut current);
-            }
+    }
+
+    fn cancel_model(&self) {
+        #[cfg(feature = "kokoro")]
+        if let Some(v) = &self.kokoro {
+            v.cancel_model();
         }
     }
 }
@@ -233,59 +215,81 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
 
+    /// Every voice starts (no sound): the system's, and Kokoro's output.
     #[test]
-    fn the_rate_is_on_the_systems_scale() {
-        // speech-dispatcher: -100..100, normal 0.
-        assert_eq!(system_rate(1.0, -100.0, 0.0, 100.0), 0.0);
-        assert_eq!(system_rate(2.0, -100.0, 0.0, 100.0), 100.0);
-        assert_eq!(system_rate(0.5, -100.0, 0.0, 100.0), -100.0);
-        assert_eq!(system_rate(1.5, -100.0, 0.0, 100.0), 50.0);
-        // WinRT: 0.5..6, normal 1; out of range is held to it.
-        assert_eq!(system_rate(9.0, 0.5, 1.0, 6.0), 6.0);
-        assert_eq!(system_rate(0.75, 0.5, 1.0, 6.0), 0.75);
-    }
-
-    #[test]
-    fn mathcat_says_maths_in_words() {
-        start_mathcat().unwrap();
-        let mathml = squigl_engine::math::to_mathml("\\frac{1}{2} + \\vec{v}", false).unwrap();
-        let words = maths_in_words(&squigl_engine::math::speakable(&mathml)).unwrap();
-        assert!(
-            words.contains("half") && words.contains("vector v"),
-            "{words}"
+    #[ignore = "needs the system's speech and a sound output"]
+    fn the_voices_start() {
+        let t = std::time::Instant::now();
+        #[cfg(feature = "kokoro")]
+        let service = Some(Arc::new(squigl_models::kokoro::KokoroService::new(
+            &squigl_engine::model::ModelContext {
+                eager: false,
+                notify: Arc::new(|| {}),
+            },
+        )));
+        let voice = Voices::start(
+            Arc::new(|| {}),
+            #[cfg(feature = "kokoro")]
+            service,
+        )
+        .unwrap();
+        println!(
+            "started in {:?}: {} voices, model {:?}",
+            t.elapsed(),
+            voice.voices().len(),
+            voice.model()
         );
+        assert!(voice.system.is_some());
+        #[cfg(feature = "kokoro")]
+        assert!(voice.kokoro.is_some());
     }
 
-    /// The system's speech starts and lists its voices (no sound).
-    #[test]
-    #[ignore = "needs the system's speech (speech-dispatcher running, on Linux)"]
-    fn the_system_voice_starts() {
-        let voice = SystemVoice::start(Arc::new(|| {})).unwrap();
-        assert!(!voice.voices().is_empty());
-    }
-
-    /// Says a sentence and some maths, for a person to listen to:
-    /// `cargo test -p squigl-speech --release -- --ignored --nocapture listen`.
+    /// Says a sentence and some maths, for a person to listen to, with the system
+    /// voice (or Kokoro, with the `kokoro` feature and its model in
+    /// `$SQUIGL_MODEL_DIR/kokoro`):
+    /// `cargo test -p squigl-speech --release [--features kokoro] -- --ignored --nocapture listen`.
     #[test]
     #[ignore = "makes a sound"]
     fn listen() {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let tx = std::sync::Mutex::new(tx);
-        let mut voice = SystemVoice::start(Arc::new(move || {
+        let wake: Waker = Arc::new(move || {
             let _ = tx.lock().unwrap().send(());
-        }))
+        });
+        #[cfg(feature = "kokoro")]
+        let service = {
+            let ctx = squigl_engine::model::ModelContext {
+                eager: true,
+                notify: Arc::new(|| {}),
+            };
+            let k = Arc::new(squigl_models::kokoro::KokoroService::new(&ctx));
+            while !k.ready() && !matches!(k.phase(), ModelPhase::Failed { .. }) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Some(k)
+        };
+        let mut voice = Voices::start(
+            wake,
+            #[cfg(feature = "kokoro")]
+            service,
+        )
         .unwrap();
         voice.configure(None, 1.0).unwrap();
         let text = squigl_engine::speech::utterances(
-            "The entropy is $E=-\\sum_{i=1}^{k} p_{i} \\log_{2} p_{i}$ in bits.",
+            "The entropy is $E=-\\sum_{i=1}^{k} p_{i} \\log_{2} p_{i}$ in bits. Recursively splits data in order to clarify the point.",
             |m| voice.maths(m),
         );
         for (i, u) in text.iter().enumerate() {
             println!("saying: {}", u.text);
             voice.say(i as u64 + 1, &u.text).unwrap();
+            if let Some(next) = text.get(i + 1) {
+                voice.prepare(&next.text);
+            }
             while voice.ended() < i as u64 + 1 {
-                rx.recv_timeout(Duration::from_secs(30))
+                rx.recv_timeout(Duration::from_secs(60))
                     .expect("the utterance ends");
             }
         }

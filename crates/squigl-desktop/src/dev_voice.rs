@@ -1,9 +1,12 @@
 //! `--dev-fake-voice`: a voice that says nothing, taking a moment over each
 //! utterance, and keeps what it was given for `dev_spoken` -- reading aloud end to
-//! end with no speech system (CI has none on Linux) and nothing to hear.
+//! end with no speech system (CI has none on Linux) and nothing to hear. Like
+//! Kokoro it has a model to download, which "downloads" at once when asked.
 
 use squigl_engine::engine::Waker;
+use squigl_engine::model::ModelPhase;
 use squigl_engine::speech::{Voice, VoiceInfo};
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,6 +24,7 @@ pub struct FakeVoice {
     /// The newest utterance: one cut off by another does not end the newer.
     newest: Arc<AtomicU64>,
     wake: Waker,
+    downloaded: AtomicBool,
 }
 
 impl FakeVoice {
@@ -30,6 +34,7 @@ impl FakeVoice {
             ended: Arc::default(),
             newest: Arc::default(),
             wake,
+            downloaded: AtomicBool::new(false),
         }
     }
 }
@@ -77,5 +82,21 @@ impl Voice for FakeVoice {
 
     fn maths(&self, _: &str) -> Option<String> {
         Some("some maths".into())
+    }
+
+    fn model(&self) -> Option<(String, ModelPhase)> {
+        let phase = if self.downloaded.load(Ordering::Acquire) {
+            ModelPhase::Ready {
+                device: "CPU".into(),
+            }
+        } else {
+            ModelPhase::NotInstalled { size: 174_958_875 }
+        };
+        Some(("Test voice".into(), phase))
+    }
+
+    fn prepare_model(&self) {
+        self.downloaded.store(true, Ordering::Release);
+        (self.wake)();
     }
 }

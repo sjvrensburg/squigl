@@ -17,6 +17,7 @@
     type Event,
     type ReadingSlice,
     type SpeechSlice,
+    type VoiceInfo,
     type StreamSlice,
     type Stroke,
   } from "./lib/engine";
@@ -63,6 +64,7 @@
   let blocks = $state<BlocksSlice | null>(null);
   let reading = $state<ReadingSlice | null>(null);
   let speech = $state<SpeechSlice | null>(null);
+  let voices = $state.raw<VoiceInfo[]>([]);
   let models = $state<ModelStatus[]>([]);
   // This list's results, as the engine appends them (it says when it empties it).
   let results = $state<ReadResult[]>([]);
@@ -213,6 +215,9 @@
         break;
       case "speech":
         speech = event.data.value;
+        break;
+      case "voices":
+        voices = event.data.value.voices;
         break;
       case "models":
         models = (event.data.value as { models: ModelStatus[] }).models;
@@ -834,7 +839,7 @@
 </main>
 
 {#if config}
-  <Settings {config} {speech} bind:open={settingsOpen} onnotice={say} />
+  <Settings {config} {speech} {voices} bind:open={settingsOpen} onnotice={say} />
 {/if}
 <Pair bind:open={pairOpen} {stream} tailscaleHttps={config?.desktop.tailscale_https ?? false} />
 

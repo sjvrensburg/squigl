@@ -2,6 +2,7 @@
 //! detector, both on ONNX Runtime. [`models`] finds or downloads their files.
 
 mod glmocr;
+pub mod kokoro;
 pub mod layout;
 mod lifecycle;
 pub mod models;

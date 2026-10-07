@@ -357,6 +357,8 @@ pub struct ReadingSlice {
 pub enum ModelKind {
     Transcriber,
     Detector,
+    /// A voice that reads aloud.
+    Voice,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -383,6 +385,14 @@ pub struct EngineState {
     pub models: Versioned<ModelsSlice>,
     pub config: Versioned<Config>,
     pub speech: Versioned<SpeechSlice>,
+    /// The voices to choose from: set once, as the voice is made.
+    pub voices: Versioned<VoicesSlice>,
+}
+
+/// The voices reading aloud can use (`[speech].voice` holds an id).
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+pub struct VoicesSlice {
+    pub voices: Vec<crate::speech::VoiceInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -421,6 +431,7 @@ pub enum Event {
     Models(Versioned<ModelsSlice>),
     Config(Versioned<Config>),
     Speech(Versioned<SpeechSlice>),
+    Voices(Versioned<VoicesSlice>),
     /// A new live frame, by number: fetch it with [`Engine::render_planes`].
     Frame {
         seq: u64,
@@ -466,6 +477,7 @@ struct Sent {
     models: u64,
     config: u64,
     speech: u64,
+    voices: u64,
 }
 
 impl Engine {
@@ -514,6 +526,7 @@ impl Engine {
                 models: Versioned::new(ModelsSlice::default()),
                 config: Versioned::new(config.clone()),
                 speech: Versioned::new(SpeechSlice::default()),
+                voices: Versioned::new(VoicesSlice::default()),
             },
             seen_status: None,
             seen_frame: 0,
@@ -525,6 +538,8 @@ impl Engine {
         };
         engine.build(&config, true);
         engine.configure_voice();
+        let voices = engine.voices();
+        engine.state.voices.update(VoicesSlice { voices });
         engine.refresh(now);
         engine
     }
@@ -707,11 +722,15 @@ impl Engine {
                 reply
             }
             Command::PrepareModel { name } => {
-                self.model(&name)?.prepare();
+                if !self.voice_model_command(&name, true) {
+                    self.model(&name)?.prepare();
+                }
                 Reply::Done
             }
             Command::CancelModelDownload { name } => {
-                self.model(&name)?.cancel();
+                if !self.voice_model_command(&name, false) {
+                    self.model(&name)?.cancel();
+                }
                 Reply::Done
             }
             Command::SetSelection { selection } => self.set_selection(selection),
@@ -883,6 +902,13 @@ impl Engine {
                 });
             }
         }
+        if let Some((name, phase)) = self.voice_model() {
+            models.push(ModelStatus {
+                name,
+                kind: ModelKind::Voice,
+                phase,
+            });
+        }
         self.state.models.update(ModelsSlice { models });
 
         let (blocks, reading) = self.reads_slices();
@@ -924,6 +950,9 @@ impl Engine {
         }
         if moved(&s.speech, &mut sent.speech) {
             events.push(Event::Speech(s.speech.clone()));
+        }
+        if moved(&s.voices, &mut sent.voices) {
+            events.push(Event::Voices(s.voices.clone()));
         }
         let frames = self.worker.shared.frames();
         if frames > self.seen_frame {
@@ -1111,6 +1140,7 @@ mod tests {
                 Event::Models(_) => "models",
                 Event::Config(_) => "config",
                 Event::Speech(_) => "speech",
+                Event::Voices(_) => "voices",
                 Event::Frame { .. } => "frame",
                 Event::ResultAppended(_) => "result",
                 Event::ResultsCleared => "cleared",
@@ -1126,7 +1156,7 @@ mod tests {
         let (mut engine, counts) = start(SourceSpec::Image(path.clone()), Config::default(), None);
         let first = engine.pump(Instant::now());
         for kind in [
-            "stream", "capture", "blocks", "reading", "models", "config", "speech",
+            "stream", "capture", "blocks", "reading", "models", "config", "speech", "voices",
         ] {
             assert!(
                 kinds(&first).contains(&kind),

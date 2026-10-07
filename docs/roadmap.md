@@ -551,6 +551,24 @@ crates/
   - read-aloud in the egui window.
 - **Tester:** how each OS's voice sounds (`cargo test -p squigl-speech --release -- --ignored --nocapture listen`), and the system voice on Windows and macOS.
 
+**Progress (8e, 2026-10-07): Kokoro, squigl's own voice (after spike S8).**
+
+- **`squigl-misaki`** ports Misaki's English G2P to Rust.
+  - A part-of-speech guesser stands in for spaCy.
+  - The BART fallback runs in plain Rust.
+  - It agrees with Python Misaki on 98.6% of words over 347 sentences, and exactly on the fallback's words.
+- **`squigl-models`' Kokoro** (fp16, as chosen by ear) comes with five American voices; `af_heart` is the default. It downloads on consent with Misaki's dictionaries and fallback, about 175 MB, and runs on the CPU.
+- **`squigl-speech`:**
+  - A router uses Kokoro once it is ready, and the system voice otherwise.
+  - MathCAT runs on its own thread for both voices.
+  - Kokoro's playback goes through cpal, so it pauses mid-word and the next sentence is made while one plays.
+- **The engine:**
+  - `Voice` gains `prepare`, `pause`/`resume` and a model to download (`ModelKind::Voice`).
+  - The voices are a slice of their own, sent once.
+- **The desktop pane** offers "a natural voice" for download. Settings lists the Kokoro voices first.
+- **A bug fixed on the way:** a new subscriber never got the speech slice, so the read-aloud controls only appeared once something was said. The snapshot now takes the state apart whole.
+- **Tester:** listen to Kokoro in the app on each OS, and check its speed on a modest laptop.
+
 **Exit criteria:**
 
 - A feature checklist against egui is complete.

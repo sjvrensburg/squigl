@@ -93,6 +93,21 @@ Lucide (https://github.com/lucide-icons/lucide)
   Copyright Lucide Icons and Contributors. ISC License. The desktop app's toolbar
   icons (@lucide/svelte), bundled into the UI.
 
+Kokoro-82M (https://huggingface.co/hexgrad/Kokoro-82M)
+  Copyright hexgrad. Apache License 2.0. The desktop app's own reading-aloud voice:
+  onnx-community's ONNX export (fp16) and five voices, downloaded on first use
+  when the person agrees (SHA-256 verified against crates/squigl-models/src/models.rs);
+  its phoneme vocabulary is copied into crates/squigl-models/src/kokoro.rs.
+
+Misaki (https://github.com/hexgrad/misaki)
+  Copyright hexgrad. Apache License 2.0. crates/squigl-misaki is a port of its
+  English G2P (misaki/en.py at fba1236), the code Kokoro was trained with; its
+  US dictionaries (us_gold.json, us_silver.json) are downloaded with Kokoro.
+
+graphemes_to_phonemes_en_us (https://huggingface.co/PeterReid/graphemes_to_phonemes_en_us)
+  Copyright Peter Reid. Apache License 2.0. Misaki's fallback for words in neither
+  dictionary, downloaded with Kokoro and run in crates/squigl-misaki/src/fallback.rs.
+
 MathCAT (https://github.com/NSoiffer/MathCAT)
   Copyright Neil Soiffer. MIT License. Says a reading's maths in words when the
   desktop app reads aloud (crates/squigl-speech, the `mathcat` crate); its speech

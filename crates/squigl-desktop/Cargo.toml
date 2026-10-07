@@ -21,9 +21,10 @@ ffmpeg = ["squigl-core/ffmpeg"]
 # The built-in models, as in the egui window (GLM-OCR for reading, PP-DocLayoutV3 for
 # blocks; ONNX Runtime, downloaded prebuilt at build time). The models themselves
 # download only when the person agrees (Command::PrepareModel).
-local-model = ["dep:squigl-models"]
+local-model = ["dep:squigl-models", "squigl-speech?/kokoro"]
 # Reading aloud: the system's speech (on Linux, speech-dispatcher: building needs
-# libspeechd-dev) and MathCAT for maths.
+# libspeechd-dev), MathCAT for maths, and -- with local-model -- Kokoro, played
+# through cpal (on Linux, libasound2-dev).
 speech = ["dep:squigl-speech"]
 
 [build-dependencies]
