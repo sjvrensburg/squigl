@@ -10,6 +10,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod detach;
 mod dev_voice;
 mod frame;
 mod guidance;
@@ -67,6 +68,9 @@ struct Args {
     /// Development aid: read aloud with a voice that says nothing.
     #[arg(long, hide = true)]
     dev_fake_voice: bool,
+    /// Development aid: pop this pane into its own window at startup.
+    #[arg(long, hide = true, value_parser = ["preview", "zoom", "reading"])]
+    dev_detach: Option<String>,
 }
 
 fn engine_deps(fake_voice: Option<dev_voice::DevSpoken>) -> EngineDeps {
@@ -238,9 +242,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    let dev_detach = args.dev_detach.clone();
     let wake_for_engine = Arc::clone(&wake_flag);
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(gpui_kit::assets::AllAssets) // full Lucide catalog: the default bundle lacks our toolbar icons
         .run(move |cx| {
             gpui_kit::init(cx);
             let pairing = Arc::clone(&pairing);
@@ -262,6 +267,13 @@ fn main() -> anyhow::Result<()> {
                     let mut view = AppView::new(engine, pairing, wake_flag, window, cx);
                     if rotation != squigl_core::convert::Rotation::None {
                         view.cmd(squigl_engine::engine::Command::SetRotation { rotation }, cx);
+                    }
+                    if let Some(pane) = &dev_detach {
+                        view.detach_pending = Some(match pane.as_str() {
+                            "zoom" => "zoom",
+                            "reading" => "reading",
+                            _ => "preview",
+                        });
                     }
                     if config.magnifier.magnification != 1.0 {
                         view.set_start_magnification(config.magnifier.magnification);

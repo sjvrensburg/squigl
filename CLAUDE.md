@@ -323,8 +323,10 @@ widgets: toolbar with Lucide icons (freeze, rotation, display modes, magnifier
 zoom, log-scale camera zoom and torch), picture gestures (draw/move/corner, click
 a block, erase brush, alt-drag pan, gliding wheel zoom), connection guidance,
 Read settings and pairing; its layout follows the egui window's three panes
-(Preview, Zoom, Reading in a right-hand column, each maximisable with its header
-button; panes are not detachable, unlike egui). The Zoom pane (`zoom.rs`) shows
+(Preview, Zoom, Reading in a right-hand column, each maximisable or detachable
+into its own window -- `detach.rs`: a mirror view fed snapshots by the main
+window each pump, sending commands and shortcut actions back the same way;
+closing it returns the pane). The Zoom pane (`zoom.rs`) shows
 the selection as a read sees it -- erased, rectified, enhanced, at native pixels
 up to a 1920px edge via `render_selection` -- with the `[enhance]` knobs live over
 it (mode/channel/strength/points/gamma, previewed through `PreviewConfig`),
@@ -335,7 +337,7 @@ unsure tokens tinted as egui tints them) with styled text -- wavering/hesitant
 underlines and the sentence being read aloud boxed -- until the typeset image
 lands or when it fails. Hidden flags mirror the desktop's that apply:
 `--dev-fake-phone`, `--dev-fake-voice`, `--dev-backend`, `--dev-config`,
-`--dev-pairing-bind`. `cargo test -p squigl-gpui` covers the frame conversion
+`--dev-pairing-bind`, `--dev-detach zoom|reading|preview`. `cargo test -p squigl-gpui` covers the frame conversion
 against `squigl_core::convert`, the erase coverStrokes port, the camera-zoom
 slider maths and the reading-highlight splitting.
 

@@ -168,8 +168,13 @@ impl AppView {
                 .items_center()
                 .child(div().text_lg().flex_1().child("Reading"))
                 .child(
-                    btn("reading-max", "Maximise").on_click(cx.listener(|view, _, _, cx| {
+                    btn("reading-max", "Max").on_click(cx.listener(|view, _, _, cx| {
                         view.toggle_maximise("reading", cx);
+                    })),
+                )
+                .child(
+                    btn("reading-detach", "Pop out").on_click(cx.listener(|view, _, _, cx| {
+                        view.detach_pane("reading", cx);
                     })),
                 ),
         );
@@ -212,9 +217,10 @@ impl AppView {
             let mut row = div()
                 .flex()
                 .flex_row()
+                .flex_wrap()
                 .gap_1()
                 .items_center()
-                .child(div().child(format!("{}: {}", model.name, phase)));
+                .child(div().text_sm().child(format!("{}: {}", model.name, phase)));
             if ready {
                 // Nothing to do.
             } else if matches!(
@@ -381,7 +387,19 @@ impl AppView {
         }
         // Results (newest first unless a page's blocks in order).
         let text_px = self.config_clone().ui.reading_size * 1.5;
+        let width_slot = std::sync::Arc::clone(&self.reading_width);
         let mut list = div()
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, _, _| {
+                        *width_slot.lock().unwrap() = Some(bounds.size.width.as_f32());
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .id("results-list")
             .flex()
             .flex_col()

@@ -167,14 +167,38 @@ impl Render for AppView {
             }
             _ => {
                 if !self.reading_only {
-                    main = main.child(self.picture(&stream, &capture, &blocks, &config, cx));
+                    if self.pane_detached("preview") {
+                        main = main.child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .bg(rgb(0x000000))
+                                .child("Preview is in its own window. Close it to bring it back."),
+                        );
+                    } else {
+                        main = main.child(self.picture(&stream, &capture, &blocks, &config, cx));
+                    }
                     if self.zoom_open || self.reading_open {
                         let mut col = div().flex().flex_col().h_full();
                         if self.zoom_open {
-                            col = col.child(self.zoom_pane(false, cx));
+                            if self.pane_detached("zoom") {
+                                col = col.child(div().w(px(400.0)).p_2().text_sm().child(
+                                    "Zoom is in its own window. Close it to bring it back.",
+                                ));
+                            } else {
+                                col = col.child(self.zoom_pane(false, cx));
+                            }
                         }
                         if self.reading_open {
-                            col = col.child(self.reading_pane(false, cx));
+                            if self.pane_detached("reading") {
+                                col = col.child(div().w(px(400.0)).p_2().text_sm().child(
+                                    "Reading is in its own window. Close it to bring it back.",
+                                ));
+                            } else {
+                                col = col.child(self.reading_pane(false, cx));
+                            }
                         }
                         main = main.child(col);
                     }
@@ -568,6 +592,21 @@ impl AppView {
                     .child(chip),
             );
         }
+        if let Some(at) = self.freeze_flash {
+            let t = (at.elapsed().as_secs_f32() / 0.28).min(1.0);
+            area = area.child(
+                div()
+                    .absolute()
+                    .size_full()
+                    .bg(rgb(0xffffff))
+                    .opacity(0.35 * (1.0 - t)),
+            );
+        }
+        area = area.child(div().absolute().right(px(8.0)).bottom(px(8.0)).child(
+            btn("pop-preview", "Pop out").on_click(cx.listener(|view, _, _, cx| {
+                view.detach_pane("preview", cx);
+            })),
+        ));
         if config.magnifier.reading_line {
             area = area.child(
                 div()

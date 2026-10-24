@@ -61,17 +61,22 @@ impl AppView {
             }
             _ => "Drag a box on the picture to zoom to a region.".to_string(),
         };
+        pane = pane.child(div().text_sm().child(info));
         pane = pane.child(
             div()
                 .flex()
                 .flex_row()
                 .gap_1()
                 .items_center()
-                .child(div().text_lg().child("Zoom"))
-                .child(div().flex_1().text_sm().child(info))
+                .child(div().text_lg().flex_1().child("Zoom"))
                 .child(
-                    btn("zoom-max", "Maximise").on_click(cx.listener(|view, _, _, cx| {
+                    btn("zoom-max", "Max").on_click(cx.listener(|view, _, _, cx| {
                         view.toggle_maximise("zoom", cx);
+                    })),
+                )
+                .child(
+                    btn("zoom-detach", "Pop out").on_click(cx.listener(|view, _, _, cx| {
+                        view.detach_pane("zoom", cx);
                     })),
                 )
                 .child(

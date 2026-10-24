@@ -111,6 +111,12 @@ pub struct AppView {
     pub maximised: Option<&'static str>,
     /// Eased magnification/centre target (wheel and key zooms glide).
     pub view_target: Option<(f32, [f32; 2])>,
+    pub detached_preview: Arc<crate::detach::DetachedShared>,
+    pub detached_zoom: Arc<crate::detach::DetachedShared>,
+    pub detached_reading: Arc<crate::detach::DetachedShared>,
+    pub freeze_flash: Option<Instant>,
+    pub detach_pending: Option<&'static str>,
+    pub reading_width: Arc<Mutex<Option<f32>>>,
     /// Typeset readings (squigl-math), rendered off-thread per reading.
     pub typesetter: Option<Arc<dyn squigl_engine::typeset::Typesetter>>,
     pub typeset_cache: std::collections::HashMap<String, TypesetEntry>,
@@ -193,6 +199,12 @@ impl AppView {
             zoom_native: None,
             maximised: None,
             view_target: None,
+            detached_preview: crate::detach::DetachedShared::new("preview"),
+            detached_zoom: crate::detach::DetachedShared::new("zoom"),
+            detached_reading: crate::detach::DetachedShared::new("reading"),
+            freeze_flash: None,
+            detach_pending: None,
+            reading_width: Arc::new(Mutex::new(None)),
             typesetter: None,
             typeset_cache: std::collections::HashMap::new(),
             typeset_rx: None,
@@ -227,6 +239,36 @@ impl AppView {
     /// pairing result or corner drag. Redraws only on change.
     pub fn pump_tick(&mut self, flagged: bool, cx: &mut Context<Self>) {
         let mut changed = false;
+        if let Some(kind) = self.detach_pending.take() {
+            self.detach_pane(kind, cx);
+            changed = true;
+        }
+        // Freeze flash: keep redrawing while it fades (~280 ms).
+        if let Some(at) = self.freeze_flash {
+            if at.elapsed() < Duration::from_millis(280) {
+                changed = true;
+            } else {
+                self.freeze_flash = None;
+                changed = true;
+            }
+        }
+        // Detached windows: run what they asked for, publish snapshots.
+        for shared in [
+            Arc::clone(&self.detached_preview),
+            Arc::clone(&self.detached_zoom),
+            Arc::clone(&self.detached_reading),
+        ] {
+            for command in std::mem::take(&mut *shared.commands.lock().unwrap()) {
+                self.cmd(command, cx);
+            }
+            for action in std::mem::take(&mut *shared.actions.lock().unwrap()) {
+                self.detached_action(&action, cx);
+            }
+            if shared.is_open() {
+                *shared.config.lock().unwrap() = Some(self.engine.config().clone());
+            }
+        }
+        self.publish_detached();
         if let Some(rx) = &self.pair_rx {
             if let Ok(result) = rx.try_recv() {
                 self.pair_rx = None;
@@ -506,11 +548,15 @@ impl AppView {
     }
 
     pub fn toggle_freeze(&mut self, cx: &mut Context<Self>) {
+        let freezing = !self.frozen();
+        if freezing {
+            self.freeze_flash = Some(Instant::now());
+        }
         self.cmd(
-            if self.frozen() {
-                Command::Live
-            } else {
+            if freezing {
                 Command::Freeze
+            } else {
+                Command::Live
             },
             cx,
         );
@@ -1047,7 +1093,7 @@ impl ResultDetail {
 }
 
 /// The key an engine event used, in the desktop's `KeyboardEvent.key` terms.
-fn key_name(event: &KeyDownEvent) -> String {
+pub fn key_name(event: &KeyDownEvent) -> String {
     let ks = &event.keystroke;
     // GPUI on Linux names the arrows "left"/"right"/"up"/"down" (its XKB
     // mapping), not the web's "ArrowLeft" the shortcut table uses.
@@ -1084,7 +1130,7 @@ fn key_name(event: &KeyDownEvent) -> String {
     key
 }
 
-fn action_for(event: &KeyDownEvent, config: &Config) -> Option<String> {
+pub fn action_for(event: &KeyDownEvent, config: &Config) -> Option<String> {
     // A modified key is not a plain shortcut (Ctrl+F must not toggle full
     // screen); Ctrl+S is the one deliberate exception, handled below. The
     // desktop returns early on ctrl/alt/meta the same way.
@@ -1706,7 +1752,11 @@ impl AppView {
             (fg & 0xff) as u8,
         ];
         let size_pt = config.ui.reading_size;
-        let width_pt = 360.0;
+        let width_pt = self
+            .reading_width
+            .lock()
+            .unwrap()
+            .map_or(360.0, |w: f32| (w - 28.0).clamp(180.0, 1400.0));
         let scale = self.scale_factor.max(1.0);
         let key = format!(
             "{}:{}:{}:{:?}:{}",
@@ -1750,6 +1800,156 @@ impl AppView {
                 });
                 None
             }
+        }
+    }
+}
+
+impl AppView {
+    /// Opens (or focuses the state of) a pane's own window.
+    pub fn detach_pane(&mut self, kind: &'static str, cx: &mut Context<Self>) {
+        let shared = match kind {
+            "zoom" => Arc::clone(&self.detached_zoom),
+            "reading" => Arc::clone(&self.detached_reading),
+            _ => Arc::clone(&self.detached_preview),
+        };
+        if shared.is_open() {
+            return;
+        }
+        if self.maximised == Some(kind) {
+            self.maximised = None;
+        }
+        *shared.config.lock().unwrap() = Some(self.engine.config().clone());
+        let for_view = Arc::clone(&shared);
+        let title = shared.title;
+        let opened = gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                titlebar: Some(gpui_kit::TitlebarOptions {
+                    title: Some(title.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            cx,
+            move |window, cx| {
+                let shared = Arc::clone(&for_view);
+                cx.new(|cx| crate::detach::DetachedView::new(shared, window, cx))
+            },
+        );
+        match opened {
+            Ok(_) => log::info!("detached the {kind} pane into its own window"),
+            Err(e) => {
+                log::error!("could not open the {kind} window: {e}");
+                self.notice = format!("Could not open the {kind} window: {e}");
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn pane_detached(&self, kind: &str) -> bool {
+        match kind {
+            "zoom" => self.detached_zoom.is_open(),
+            "reading" => self.detached_reading.is_open(),
+            _ => self.detached_preview.is_open(),
+        }
+    }
+
+    fn publish_detached(&mut self) {
+        if self.detached_preview.is_open() {
+            *self.detached_preview.image.lock().unwrap() = self.image.clone();
+        }
+        if self.detached_zoom.is_open() {
+            *self.detached_zoom.image.lock().unwrap() = self.zoom_image.clone();
+        }
+        if self.detached_reading.is_open() {
+            let mut lines = Vec::new();
+            let in_order = self.engine_reading().in_page_order;
+            let mut indices: Vec<usize> = (0..self.results.len()).collect();
+            if !in_order {
+                indices.reverse();
+            }
+            for index in indices {
+                let Some(detail) = self.result_detail(index) else {
+                    continue;
+                };
+                let mut head = detail.label.clone().unwrap_or_default();
+                if let Some(backend) = &detail.backend {
+                    if !head.is_empty() {
+                        head.push_str(" - ");
+                    }
+                    head.push_str(&format!("{backend} - {:.1}s", detail.elapsed_secs));
+                }
+                if !head.is_empty() {
+                    lines.push(crate::detach::ReadingLine::Text(head));
+                }
+                for r_idx in 0..detail.readings.len() {
+                    if let Some((img, scale, w, h)) = self.typeset_image(index, r_idx) {
+                        lines.push(crate::detach::ReadingLine::Image(img, scale, w, h));
+                    } else {
+                        lines.push(crate::detach::ReadingLine::Text(
+                            detail.readings[r_idx].0.clone(),
+                        ));
+                    }
+                }
+                if let Some(error) = &detail.error {
+                    lines.push(crate::detach::ReadingLine::Text(error.clone()));
+                }
+            }
+            if !self.history.is_empty() {
+                lines.push(crate::detach::ReadingLine::Text("History".to_string()));
+                for entry in self.history_entries() {
+                    lines.push(crate::detach::ReadingLine::Text(entry));
+                }
+            }
+            *self.detached_reading.lines.lock().unwrap() = lines;
+        }
+    }
+
+    /// A shortcut fired in a detached window: everything window-free, run
+    /// against the main window's engine and view state.
+    pub fn detached_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        match action {
+            "freeze" => self.toggle_freeze(cx),
+            "rotate-cw" => self.rotate(true, cx),
+            "rotate-ccw" => self.rotate(false, cx),
+            "zoom-in" => self.zoom_view(1.0, cx),
+            "zoom-out" => self.zoom_view(-1.0, cx),
+            "pan-left" => self.pan(-0.2, 0.0, cx),
+            "pan-right" => self.pan(0.2, 0.0, cx),
+            "pan-up" => self.pan(0.0, -0.2, cx),
+            "pan-down" => self.pan(0.0, 0.2, cx),
+            "next-mode" => self.cycle_mode(cx),
+            "camera-zoom-in" => self.cmd(Command::StepZoom { steps: 4 }, cx),
+            "camera-zoom-out" => self.cmd(Command::StepZoom { steps: -4 }, cx),
+            "torch" => {
+                let on = self.stream_torch();
+                self.cmd(Command::SetTorch { on: !on }, cx);
+            }
+            "read" => self.cmd(Command::Read, cx),
+            "read-all" => self.cmd(Command::ReadAll, cx),
+            "second-opinion" => self.cmd(Command::SecondOpinion, cx),
+            "block-mode" => {
+                let on = self.engine_blocks().enabled;
+                self.cmd(Command::SetBlockMode { on: !on }, cx);
+            }
+            "next-block" => self.cmd(Command::StepBlock { delta: 1 }, cx),
+            "previous-block" => self.cmd(Command::StepBlock { delta: -1 }, cx),
+            "clear-selection" => self.cmd(Command::SetSelection { selection: None }, cx),
+            "erase-box" => self.erase_box(cx),
+            "undo-erase" => self.undo_erase(cx),
+            "speak" => self.cmd(Command::Speak { result: None }, cx),
+            "read-aloud" => self.cmd(Command::ReadAloud, cx),
+            "pause-speech" => {
+                if self.engine_speech().paused {
+                    self.cmd(Command::ResumeSpeaking, cx);
+                } else {
+                    self.cmd(Command::PauseSpeaking, cx);
+                }
+            }
+            "stop-speech" => self.cmd(Command::StopSpeaking, cx),
+            "next-spoken" => self.cmd(Command::SkipSpeech { delta: 1 }, cx),
+            "previous-spoken" => self.cmd(Command::SkipSpeech { delta: -1 }, cx),
+            "save" => self.save(cx),
+            _ => {}
         }
     }
 }
