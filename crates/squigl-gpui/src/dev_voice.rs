@@ -41,6 +41,7 @@ impl FakeVoice {
 
 impl Voice for FakeVoice {
     fn say(&mut self, id: u64, text: &str) -> anyhow::Result<()> {
+        log::info!("dev fake voice: {text}");
         self.spoken.0.lock().unwrap().push(text.into());
         self.newest.store(id, Ordering::Release);
         let (ended, newest, wake) = (

@@ -13,7 +13,7 @@ name = "squigl-gpui"
 path = "src/main.rs"
 
 [features]
-default = ["local-model"]
+default = ["local-model", "speech"]
 ffmpeg = ["squigl-core/ffmpeg"]
 local-model = ["dep:squigl-models", "squigl-speech?/kokoro"]
 speech = ["dep:squigl-speech"]

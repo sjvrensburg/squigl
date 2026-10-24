@@ -1,31 +1,136 @@
 //! Drawing the window: toolbar, GPU picture with its overlay, reading pane,
 //! settings, pairing and connection guidance. State comes from the engine's
-//! slices (cloned out of `engine.state()` per render, as the egui window did);
-//! actions go back as engine commands.
+//! slices (cloned once per render); actions go back as engine commands.
 
-use crate::app::{mode_label, role_colour, theme_colours, zoom_bounds, AppView};
+use crate::app::{mode_label, role_colour, theme_colours, zoom_bounds, AppView, SliderKind};
 use crate::guidance::guidance;
 use gpui_kit::component::button::Button;
-use gpui_kit::component::slider::Slider;
 use gpui_kit::*;
-use squigl_engine::engine::Command;
 use squigl_engine::engine::StreamStatus;
+use squigl_engine::engine::{BlocksSlice, CaptureSlice, StreamSlice};
 use squigl_engine::geometry::Crop;
-use squigl_engine::layout::Role;
 use squigl_engine::stream::SourceSpec;
 
 fn btn(id: &'static str, label: impl Into<SharedString>) -> Button {
     Button::new(id).label(label).compact()
 }
 
+/// A custom slider: a track whose bounds are tracked by a canvas, so the
+/// value is always the engine's (a dragged thumb and an external change
+/// agree), unlike gpui-base's SliderState in this gpui version.
+pub fn slider(
+    view: &mut AppView,
+    kind: SliderKind,
+    fraction: f32,
+    width: Option<f32>,
+    cx: &mut Context<AppView>,
+) -> impl IntoElement {
+    let bounds_slot = view.slider_bounds_handle();
+    let name = kind.name();
+    let mut track = div()
+        .relative()
+        .h(px(22.0))
+        .flex()
+        .items_center()
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |view, event: &MouseDownEvent, _, cx| {
+                view.active_slider = Some(kind);
+                if let Some(f) = view.slider_fraction(kind, event.position) {
+                    view.slider_apply(kind, f, false, cx);
+                }
+            }),
+        )
+        .on_mouse_move(cx.listener(move |view, event: &MouseMoveEvent, _, cx| {
+            if view.active_slider == Some(kind) && event.pressed_button == Some(MouseButton::Left) {
+                if let Some(f) = view.slider_fraction(kind, event.position) {
+                    view.slider_apply(kind, f, false, cx);
+                }
+            }
+        }))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |view, event: &MouseUpEvent, _, cx| {
+                if view.active_slider == Some(kind) {
+                    view.active_slider = None;
+                    if let Some(f) = view.slider_fraction(kind, event.position) {
+                        view.slider_apply(kind, f, true, cx);
+                    }
+                }
+            }),
+        );
+    if let Some(w) = width {
+        track = track.w(px(w));
+    } else {
+        track = track.w_full();
+    }
+    track = track.child(
+        canvas(
+            move |bounds, _, _| {
+                bounds_slot.lock().unwrap().insert(
+                    name,
+                    (
+                        bounds.origin.x.as_f32(),
+                        bounds.origin.y.as_f32(),
+                        bounds.size.width.as_f32(),
+                        bounds.size.height.as_f32(),
+                    ),
+                );
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_full(),
+    );
+    track
+        .child(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .right(px(0.0))
+                .top(px(10.0))
+                .h(px(3.0))
+                .bg(rgb(0x55555e)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(0.0))
+                .top(px(10.0))
+                .h(px(3.0))
+                .w(relative(fraction.clamp(0.0, 1.0)))
+                .bg(rgb(0xffc400)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(relative(fraction.clamp(0.0, 1.0)))
+                .top(px(4.0))
+                .w(px(14.0))
+                .h(px(14.0))
+                .rounded_full()
+                .bg(rgb(0xe8e8e8))
+                .border(px(1.0))
+                .border_color(rgb(0x333338)),
+        )
+}
+
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.scale_factor = window.scale_factor();
-        let _ = window;
+        // Release the replaced frame's atlas tiles (each RenderImage mints a
+        // new one; without this they accumulate for the app's life).
+        if self.shown_image.as_ref().map(|i| i.id) != self.image.as_ref().map(|i| i.id) {
+            if let Some(old) = self.shown_image.take() {
+                let _ = window.drop_image(old);
+            }
+            self.shown_image = self.image.clone();
+        }
         let config = self.engine.config().clone();
         let (bg, fg, _edge) = theme_colours(config.desktop.theme);
         let stream = self.engine.state().stream.value.clone();
         let capture = self.engine.state().capture.value.clone();
+        let blocks = self.engine.state().blocks.value.clone();
         let frozen = capture.frozen.is_some();
 
         let mut root = div()
@@ -44,10 +149,10 @@ impl Render for AppView {
         }
         let mut main = div().flex().flex_row().flex_1().min_h(px(0.0));
         if !self.reading_only {
-            main = main.child(self.picture(cx));
+            main = main.child(self.picture(&capture, &blocks, &config, cx));
         }
         if self.reading_open || self.reading_only {
-            main = main.child(self.reading_pane(cx));
+            main = main.child(self.reading_pane(self.reading_only, cx));
         }
         root = root.child(main);
         root = root.child(self.status_bar(&stream, frozen));
@@ -72,13 +177,9 @@ impl Render for AppView {
 }
 
 impl AppView {
-    // Sliders keep their own state (gpui-base's SliderState); they are
-    // seeded from the config when the view is made and report Change/Release
-    // back as Preview/SetConfig, so no programmatic sync is needed here.
-
     fn toolbar(
         &mut self,
-        stream: &squigl_engine::engine::StreamSlice,
+        stream: &StreamSlice,
         config: &squigl_engine::config::Config,
         frozen: bool,
         cx: &mut Context<Self>,
@@ -127,8 +228,10 @@ impl AppView {
                 view.zoom_view(1.0, cx);
             })),
         );
-        if zoom_bounds(stream.zoom_range, stream.source.clone()).is_some() {
-            bar = bar.child(div().w(px(140.0)).child(Slider::new(&self.zoom_slider)));
+        if let Some(bounds) = zoom_bounds(stream.zoom_range, stream.source.clone()) {
+            let fraction = ((stream.zoom.ln() - bounds.0.ln()) / (bounds.1.ln() - bounds.0.ln()))
+                .clamp(0.0, 1.0);
+            bar = bar.child(slider(self, SliderKind::Zoom, fraction, Some(140.0), cx));
             bar = bar.child(div().child(format!("Camera {:.2}x", stream.zoom)));
         }
         if stream.capabilities.torch {
@@ -143,7 +246,7 @@ impl AppView {
                 )
                 .on_click(cx.listener(|view, _, _, cx| {
                     let on = view.stream_torch();
-                    view.cmd(Command::SetTorch { on: !on }, cx);
+                    view.cmd(squigl_engine::engine::Command::SetTorch { on: !on }, cx);
                 })),
             );
         }
@@ -161,7 +264,7 @@ impl AppView {
             bar = bar.child(
                 btn("phone", "Use phone").on_click(cx.listener(|view, _, _, cx| {
                     view.cmd(
-                        Command::UseSource {
+                        squigl_engine::engine::Command::UseSource {
                             source: SourceSpec::Phone,
                         },
                         cx,
@@ -197,11 +300,45 @@ impl AppView {
         bar
     }
 
-    fn picture(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn quad_outline(
+        &self,
+        corners: [[f32; 2]; 4],
+        colour: u32,
+        width: f32,
+        dashed: bool,
+    ) -> impl IntoElement {
+        let pts: Vec<(f32, f32)> = corners.iter().map(|c| self.to_canvas(*c)).collect();
+        canvas(
+            move |_, _, _| pts.clone(),
+            move |bounds, pts, window, _| {
+                let origin = bounds.origin;
+                let mut builder = PathBuilder::stroke(px(width));
+                if dashed {
+                    builder = builder.dash_array(&[px(6.0), px(4.0)]);
+                }
+                for i in 0..4 {
+                    let a = pts[i];
+                    let b = pts[(i + 1) % 4];
+                    builder.move_to(point(px(a.0) + origin.x, px(a.1) + origin.y));
+                    builder.line_to(point(px(b.0) + origin.x, px(b.1) + origin.y));
+                }
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, rgb(colour));
+                }
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    fn picture(
+        &mut self,
+        capture: &CaptureSlice,
+        blocks: &BlocksSlice,
+        config: &squigl_engine::config::Config,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let canvas_slot = self.canvas_slot();
-        let capture = self.engine.state().capture.value.clone();
-        let blocks = self.engine.state().blocks.value.clone();
-        let config = self.engine.config().clone();
         let mut area = div()
             .relative()
             .flex_1()
@@ -211,17 +348,16 @@ impl AppView {
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseDownEvent, _, cx| view.mouse_down(event, cx)),
             )
-            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
-                view.mouse_move(event, cx);
-            }))
+            .on_mouse_move(
+                cx.listener(|view, event: &MouseMoveEvent, _, cx| view.mouse_move(event, cx)),
+            )
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| view.mouse_up(event, cx)),
             )
-            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
-                view.scroll_wheel(event, cx);
-            }));
-        // Bounds bookkeeping (position + size) for pointer/viewport mapping.
+            .on_scroll_wheel(
+                cx.listener(|view, event: &ScrollWheelEvent, _, cx| view.scroll_wheel(event, cx)),
+            );
         area = area.child(
             canvas(
                 move |bounds, _, _| {
@@ -259,37 +395,53 @@ impl AppView {
                     .child("Waiting for the picture..."),
             );
         }
-        // Detected blocks, numbered in reading order, outlined by kind.
+        // Detected blocks: their quads, numbered, kind by colour and dash.
         if blocks.enabled {
             for (i, block) in blocks.blocks.iter().enumerate() {
                 let colour = role_colour(block.role());
-                let (x0, y0) = self.to_canvas([block.rect.x as f32, block.rect.y as f32]);
-                let (x1, y1) = self.to_canvas([
-                    (block.rect.x + block.rect.w) as f32,
-                    (block.rect.y + block.rect.h) as f32,
-                ]);
-                let selected = blocks.selected == Some(i);
+                let corners = block
+                    .quad
+                    .unwrap_or_else(|| squigl_engine::layout::rect_quad(block.rect));
+                // Kind by dash as well as colour (the desktop's encoding):
+                // text solid, formula dashed, figure dotted-ish, other thin.
+                let (width, dashed) = match block.role() {
+                    squigl_engine::layout::Role::Text => {
+                        (if blocks.selected == Some(i) { 3.0 } else { 2.0 }, false)
+                    }
+                    squigl_engine::layout::Role::Formula => (2.0, true),
+                    squigl_engine::layout::Role::Figure => (2.0, true),
+                    squigl_engine::layout::Role::Other => (1.0, false),
+                };
+                area = area.child(self.quad_outline(corners, colour, width, dashed));
+                let (lx, ly) = self.to_canvas(corners[0]);
                 area = area.child(
                     div()
                         .absolute()
-                        .left(px(x0))
-                        .top(px(y0))
-                        .w(px((x1 - x0).max(2.0)))
-                        .h(px((y1 - y0).max(2.0)))
-                        .border(px(if selected { 3.0 } else { 2.0 }))
-                        .border_color(rgb(colour))
-                        .child(
-                            div()
-                                .text_xs()
-                                .bg(rgb(colour))
-                                .text_color(rgb(0x000000))
-                                .child(format!("{}", i + 1)),
-                        ),
+                        .left(px(lx))
+                        .top(px(ly - 16.0))
+                        .text_xs()
+                        .bg(rgb(colour))
+                        .text_color(rgb(0x000000))
+                        .child(format!("{}", i + 1)),
                 );
             }
         }
-        // Selection box + corner handles (the quad when it is not a rectangle).
-        if let Some(selection) = capture.selection {
+        // The block being read aloud.
+        if let Some(spoken) = self.spoken_selection() {
+            let corners = spoken
+                .quad
+                .unwrap_or_else(|| squigl_engine::layout::rect_quad(spoken.rect));
+            area = area.child(self.quad_outline(corners, 0xffffff, 3.0, false));
+        }
+        // Selection (or the in-progress drag's box), with corner handles.
+        let shown_selection = match self.drag_box() {
+            Some(b) => Some(squigl_engine::geometry::Selection {
+                rect: b,
+                quad: None,
+            }),
+            None => capture.selection,
+        };
+        if let Some(selection) = shown_selection {
             let corners: [[f32; 2]; 4] = selection.quad.unwrap_or_else(|| {
                 let r: Crop = selection.rect;
                 [
@@ -299,26 +451,9 @@ impl AppView {
                     [r.x as f32, (r.y + r.h) as f32],
                 ]
             });
-            let pts: Vec<(f32, f32)> = corners.iter().map(|c| self.to_canvas(*c)).collect();
-            let (minx, miny) = (
-                pts.iter().map(|p| p.0).fold(f32::MAX, f32::min),
-                pts.iter().map(|p| p.1).fold(f32::MAX, f32::min),
-            );
-            let (maxx, maxy) = (
-                pts.iter().map(|p| p.0).fold(f32::MIN, f32::max),
-                pts.iter().map(|p| p.1).fold(f32::MIN, f32::max),
-            );
-            area = area.child(
-                div()
-                    .absolute()
-                    .left(px(minx))
-                    .top(px(miny))
-                    .w(px((maxx - minx).max(2.0)))
-                    .h(px((maxy - miny).max(2.0)))
-                    .border(px(2.0))
-                    .border_color(rgb(0xffc400)),
-            );
-            for (x, y) in pts {
+            area = area.child(self.quad_outline(corners, 0xffc400, 2.0, false));
+            for corner in corners {
+                let (x, y) = self.to_canvas(corner);
                 area = area.child(
                     div()
                         .absolute()
@@ -327,6 +462,22 @@ impl AppView {
                         .w(px(10.0))
                         .h(px(10.0))
                         .bg(rgb(0xffc400)),
+                );
+            }
+        }
+        // The erase stroke being painted.
+        if self.drag_is_erase() {
+            for pt in self.erase_points_view() {
+                let (x, y) = self.to_canvas(pt);
+                area = area.child(
+                    div()
+                        .absolute()
+                        .left(px(x - 3.0))
+                        .top(px(y - 3.0))
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(rgb(0xff5a5a)),
                 );
             }
         }
@@ -341,15 +492,10 @@ impl AppView {
                     .bg(rgb(0xffc400)),
             );
         }
-        let _ = Role::Other;
         area
     }
 
-    fn status_bar(
-        &mut self,
-        stream: &squigl_engine::engine::StreamSlice,
-        frozen: bool,
-    ) -> impl IntoElement {
+    fn status_bar(&mut self, stream: &StreamSlice, frozen: bool) -> impl IntoElement {
         let status = match &stream.status {
             StreamStatus::Connecting => match stream.source {
                 SourceSpec::Phone => "Connecting to the phone...".to_string(),
@@ -410,7 +556,7 @@ impl AppView {
                 .child(
                     btn("try-now", "Try now").on_click(cx.listener(|view, _, _, cx| {
                         view.hide_guidance(cx);
-                        view.cmd(Command::Reconnect, cx);
+                        view.cmd(squigl_engine::engine::Command::Reconnect, cx);
                     })),
                 )
                 .child(

@@ -21,7 +21,7 @@ ADB. Everything from the socket down is implemented here.
 cargo build --release                 # fetches scrcpy-server.jar on first build (needs network)
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
 cargo build --release -p squigl-egui --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
-cargo test                             # unit tests (the default members: all but squigl-desktop and squigl-speech, which need system headers/web UI built first) (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
+cargo test                             # unit tests (the default members: all but squigl-desktop, squigl-speech and squigl-gpui, which need system headers/web UI built first) (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
 cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
 cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --all-targets [--features ffmpeg]
@@ -81,7 +81,7 @@ ubuntu-24.04 (the prebuilt ONNX Runtime needs glibc 2.38), packages them with th
 dereferenced `libwebgpu_dawn.so`, docs and `contrib/`, builds the models archive with
 `squigl --fetch-model` (so it carries the in-binary checksums), and publishes a
 GitHub release with `SHA256SUMS.txt`, plus the AppImage from
-`contrib/appimage/build.sh` (appimagetool 1.9.1, sha256-pinned; AppDir = the two
+`contrib/appimage/build.sh` (the GPUI binary is not in releases yet; it is built by CI's `gpui` job only) (appimagetool 1.9.1, sha256-pinned; AppDir = the two
 binaries + `libwebgpu_dawn.so` in `usr/bin`, the `.desktop` and SVG icon from
 `contrib/appimage/`; models are looked for in `models/` next to the AppImage via
 `$APPIMAGE`). Cut one with
@@ -307,13 +307,13 @@ reads best (no variation selectors, the vector arrow as U+2192, no separator aft
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
 Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
 
-`crates/squigl-gpui` is the GPUI desktop app (branch `feature/gpui-kit`): a native,
+`crates/squigl-gpui` is the GPUI desktop app: a native,
 GPU-composited (Vulkan on Linux) window over the same `squigl-engine`, built on
 `gpui-kit` 0.7 (`gpui-kit's` GPUI + styled components; one dependency, no webview, no
 IPC channel, no frame WebSocket, no npm build). Linux only, and not a default member
 (GPUI needs Vulkan/Wayland/xkbcommon development packages: `libxkbcommon-x11-devel`,
 `wayland-devel`, `vulkan-loader-devel`, `fontconfig-devel` on Fedora; the `speech`
-feature adds `libspeechd-devel`). The engine lives on the window thread as in egui;
+feature (on by default, as in the desktop app) adds `libspeechd-devel` and `alsa-lib-devel`). The engine lives on the window thread as in egui;
 its waker sets a flag a 50 Hz pump collects, and the pump redraws only on change.
 Frames take the engine's decimated `render_planes` path (`frame.rs`: YUV to RGB with
 `convert`'s coefficients plus the display LUT, rotated before upload because GPUI

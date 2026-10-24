@@ -5,13 +5,14 @@
 
 use crate::app::{mode_label, AppView};
 use gpui_kit::component::button::Button;
+use gpui_kit::component::Disableable;
 use gpui_kit::*;
 use squigl_engine::engine::Command;
 use squigl_engine::geometry::{Crop, Selection};
 use squigl_engine::layout::rect_quad;
 use std::sync::Arc;
 
-fn btn(id: &'static str, label: impl Into<SharedString>) -> Button {
+fn btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id).label(label).compact()
 }
 
@@ -79,13 +80,10 @@ impl AppView {
                 cx.notify();
             }
             Some(crate::app::DragKind::Corner(i)) => {
-                self.cmd(
-                    Command::MoveCorner {
-                        corner: i,
-                        to: (pt[0] as usize, pt[1] as usize),
-                    },
-                    cx,
-                );
+                // Queued, not sent per move event: the pump applies the
+                // newest at 50 Hz instead of a full command per pixel.
+                self.pending_corner = Some((i, (pt[0] as usize, pt[1] as usize)));
+                cx.notify();
             }
             Some(crate::app::DragKind::Pan) => {
                 self.update_pan(event.position);
@@ -95,14 +93,12 @@ impl AppView {
         }
     }
 
-    pub fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
-        let Some(pt) = self.to_view_f(event.position) else {
-            self.clear_drag();
-            return;
-        };
-        let p = (pt[0] as usize, pt[1] as usize);
+    pub fn mouse_up(&mut self, _event: &MouseUpEvent, cx: &mut Context<Self>) {
+        // Outside the picture there is no fresh point; the gesture still
+        // commits from its last known point instead of vanishing.
         match self.take_drag() {
-            Some(crate::app::FinishedDrag::Draw { from }) => {
+            Some(crate::app::FinishedDrag::Draw { from, to }) => {
+                let p = to;
                 if let Some(b) = self
                     .view_size()
                     .and_then(|v| Crop::from_corners(from, p).clamped(v.0, v.1))
@@ -147,19 +143,24 @@ impl AppView {
 
     // -- panels ------------------------------------------------------------
 
-    pub fn reading_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn reading_pane(&mut self, fill: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let reading = self.engine_reading();
         let blocks = self.engine_blocks();
         let models = self.engine_models();
         let speech = self.engine_speech();
+        let (pane_bg, _, _) = crate::app::theme_colours(self.config_clone().desktop.theme);
         let mut pane = div()
-            .w(px(400.0))
             .h_full()
             .flex()
             .flex_col()
             .gap_2()
             .p_2()
-            .bg(rgb(0x222228));
+            .bg(rgb(pane_bg));
+        if fill {
+            pane = pane.flex_1();
+        } else {
+            pane = pane.w(px(400.0));
+        }
         pane = pane.child(div().text_lg().child("Reading"));
         // Backend + models.
         if reading.backends.is_empty() {
@@ -368,60 +369,110 @@ impl AppView {
             }
         }
         // Results (newest first unless a page's blocks in order).
-        let results = self.results_list();
-        let ordered: Vec<(usize, String, bool)> = results;
+        let text_px = self.config_clone().ui.reading_size * 1.5;
         let mut list = div()
+            .id("results-list")
             .flex()
             .flex_col()
             .gap_2()
             .flex_1()
-            .id("results-list")
             .overflow_y_scroll()
             .track_scroll(&self.results_scroll_handle());
-        let in_order = reading.in_page_order;
-        let mut items: Vec<(usize, String, bool)> = ordered;
-        if !in_order {
+        let mut items: Vec<usize> = (0..self.results_len()).collect();
+        if !reading.in_page_order {
             items.reverse();
         }
-        for (index, text, failed) in items {
+        for index in items {
+            let Some(detail) = self.result_detail(index) else {
+                continue;
+            };
             let mut card = div().flex().flex_col().gap_1().p_2().bg(rgb(0x2c2c34));
-            if let Some(label) = self.result_label(index) {
-                card = card.child(div().text_sm().child(label));
+            if let Some(label) = &detail.label {
+                card = card.child(div().text_sm().child(label.clone()));
             }
-            card = card.child(div().child(text));
-            if failed {
+            if let Some(backend) = &detail.backend {
+                card = card.child(
+                    div()
+                        .text_sm()
+                        .child(format!("{backend} - {:.1}s", detail.elapsed_secs)),
+                );
+            }
+            for (text, count, truncated) in &detail.readings {
+                let shown = if *count > 1 {
+                    format!("{text}  (x{count})")
+                } else {
+                    text.clone()
+                };
+                card = card.child(div().text_size(px(text_px)).child(shown));
+                if *truncated {
+                    card = card.child(div().text_sm().child("Cut short at the token limit."));
+                }
+            }
+            if detail.silent > 0 {
+                card = card.child(div().text_sm().child(format!(
+                    "{} of {} samples came back empty",
+                    detail.silent, detail.samples
+                )));
+            }
+            if let Some(error) = &detail.error {
+                card = card.child(div().child(error.clone()));
                 card = card.child(div().text_sm().child("Could not read this one."));
             }
-            let spoken = self.speaking_result();
-            if spoken == Some(index) {
+            if self.speaking_result() == Some(index) {
                 card = card.child(div().text_sm().child("Being read aloud"));
             }
-            let text_copy = self.result_text(index).unwrap_or_default();
+            let text_copy = detail.copy_text();
             card = card.child(
                 div()
                     .flex()
                     .flex_row()
                     .gap_1()
                     .child(
-                        btn("copy-result", "Copy").on_click(cx.listener(move |_, _, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(text_copy.clone()));
-                        })),
+                        btn(format!("copy-result-{index}"), "Copy").on_click(cx.listener(
+                            move |_, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text_copy.clone()));
+                            },
+                        )),
                     )
-                    .child(btn("speak-result", "Read aloud").on_click(cx.listener(
-                        move |view, _, _, cx| {
-                            view.cmd(
-                                Command::Speak {
-                                    result: Some(index),
-                                },
-                                cx,
-                            );
-                        },
-                    ))),
+                    .child(
+                        btn(format!("speak-result-{index}"), "Read aloud")
+                            .disabled(!speech.available)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.cmd(
+                                    Command::Speak {
+                                        result: Some(index),
+                                    },
+                                    cx,
+                                );
+                            })),
+                    ),
             );
             list = list.child(card);
         }
         pane = pane.child(list);
         // History + housekeeping.
+        if !self.history_entries().is_empty() {
+            pane = pane.child(div().text_base().child("History"));
+            for (hi, entry) in self.history_entries().iter().enumerate() {
+                let text = entry.clone();
+                pane =
+                    pane.child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .items_center()
+                            .child(div().flex_1().child(text.clone()))
+                            .child(btn(format!("copy-history-{hi}"), "Copy").on_click(
+                                cx.listener(move |_, _, _, cx| {
+                                    // Copy without the time/what prefix's trailing text is
+                                    // kept simple: copy the whole line.
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                                }),
+                            )),
+                    );
+            }
+        }
         let mut foot = div().flex().flex_row().flex_wrap().gap_1();
         foot = foot.child(btn("clear", "Clear readings").on_click(cx.listener(
             |view, _, _, cx| {
@@ -434,6 +485,12 @@ impl AppView {
                 view.cmd(Command::SaveHistory { dir }, cx);
             },
         )));
+        foot = foot.child(
+            btn("copy-all", "Copy all").on_click(cx.listener(|view, _, _, cx| {
+                let all = view.all_results_text();
+                cx.write_to_clipboard(ClipboardItem::new_string(all));
+            })),
+        );
         foot = foot.child(div().child(format!("{} in history", self.history_len())));
         pane = pane.child(foot);
         let _ = Selection {
@@ -450,6 +507,7 @@ impl AppView {
 
     pub fn settings_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let config = self.config_clone();
+        let (panel_bg, _, _) = crate::app::theme_colours(self.config_clone().desktop.theme);
         let mut panel = div()
             .absolute()
             .right(px(8.0))
@@ -459,7 +517,7 @@ impl AppView {
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(rgb(0x24242c))
+            .bg(rgb(panel_bg))
             .border(px(1.0))
             .border_color(rgb(0x888888));
         panel = panel.child(div().text_lg().child("Settings"));
@@ -475,34 +533,53 @@ impl AppView {
                         .on_click(cx.listener(|view, _, _, cx| view.cycle_mode(cx))),
                 ),
         );
-        panel = panel.child(
-            div()
-                .child("Contrast")
-                .child(crate::app::slider_slot_contrast(self)),
-        );
-        panel = panel.child(
-            div()
-                .child("Brightness")
-                .child(crate::app::slider_slot_brightness(self)),
-        );
+        let frac = |kind: crate::app::SliderKind, v: f32| {
+            let (lo, hi) = kind.range();
+            (v - lo) / (hi - lo)
+        };
+        panel = panel.child(div().child("Contrast").child(crate::render::slider(
+            self,
+            crate::app::SliderKind::Contrast,
+            frac(crate::app::SliderKind::Contrast, config.display.contrast),
+            None,
+            cx,
+        )));
+        panel = panel.child(div().child("Brightness").child(crate::render::slider(
+            self,
+            crate::app::SliderKind::Brightness,
+            frac(
+                crate::app::SliderKind::Brightness,
+                config.display.brightness,
+            ),
+            None,
+            cx,
+        )));
         panel = panel.child(
             div()
                 .child("Mid-tones (gamma)")
-                .child(crate::app::slider_slot_gamma(self)),
+                .child(crate::render::slider(
+                    self,
+                    crate::app::SliderKind::Gamma,
+                    frac(crate::app::SliderKind::Gamma, config.display.gamma),
+                    None,
+                    cx,
+                )),
         );
+        let two_colour = config.display.mode.colours(&config.display).is_some();
         let threshold = config.display.threshold;
-        panel = panel.child(
-            div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .items_center()
-                .child(div().child(match threshold {
-                    Some(t) => format!("Two-colour cut-off at {:.0}%", t * 100.0),
-                    None => "Two-colour cut-off: off".to_string(),
-                }))
-                .child(
-                    btn("threshold", "Toggle").on_click(cx.listener(|view, _, _, cx| {
+        let mut trow = div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center()
+            .child(div().child(match threshold {
+                Some(t) => format!("Two-colour cut-off at {:.0}%", t * 100.0),
+                None => "Two-colour cut-off: off".to_string(),
+            }))
+            .child(
+                btn("threshold", "Toggle")
+                    .disabled(!two_colour)
+                    .on_click(cx.listener(|view, _, _, cx| {
                         let mut c = view.config_clone();
                         c.display.threshold = if c.display.threshold.is_some() {
                             None
@@ -516,8 +593,44 @@ impl AppView {
                             cx,
                         );
                     })),
-                ),
-        );
+            );
+        if threshold.is_some() {
+            trow =
+                trow.child(btn("threshold-minus", "-").disabled(!two_colour).on_click(
+                    cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        if let Some(t) = c.display.threshold {
+                            c.display.threshold = Some((t - 0.05).clamp(0.05, 0.95));
+                        }
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    }),
+                ))
+                .child(
+                    btn("threshold-plus", "+")
+                        .disabled(!two_colour)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            let mut c = view.config_clone();
+                            if let Some(t) = c.display.threshold {
+                                c.display.threshold = Some((t + 0.05).clamp(0.05, 0.95));
+                            }
+                            view.cmd(
+                                Command::SetConfig {
+                                    config: Box::new(c),
+                                },
+                                cx,
+                            );
+                        })),
+                );
+        }
+        if !two_colour {
+            trow = trow.child(div().text_sm().child("(two-colour modes only)"));
+        }
+        panel = panel.child(trow);
         panel = panel.child(
             div()
                 .flex()
@@ -662,7 +775,178 @@ impl AppView {
                     })),
                 ),
         );
-        panel = panel.child(div().child("Ink and paper colours for 'My own colours' are in the settings file (gui.toml, [display] ink/paper); every other setting here is saved there too."));
+        const PALETTE: [(&str, [u8; 3]); 5] = [
+            ("black", [0, 0, 0]),
+            ("white", [255, 255, 255]),
+            ("yellow", [255, 255, 0]),
+            ("red", [200, 30, 30]),
+            ("blue", [30, 60, 200]),
+        ];
+        let ink_name = PALETTE
+            .iter()
+            .find(|(_, c)| *c == config.display.ink)
+            .map_or("custom", |(n, _)| *n);
+        let paper_name = PALETTE
+            .iter()
+            .find(|(_, c)| *c == config.display.paper)
+            .map_or("custom", |(n, _)| *n);
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().child(format!("My colours ink: {ink_name}")))
+                .child(
+                    btn("ink-next", "Next").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        let at = PALETTE
+                            .iter()
+                            .position(|(_, col)| *col == c.display.ink)
+                            .map_or(0, |i| (i + 1) % PALETTE.len());
+                        c.display.ink = PALETTE[at].1;
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().child(format!("My colours paper: {paper_name}")))
+                .child(
+                    btn("paper-next", "Next").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        let at = PALETTE
+                            .iter()
+                            .position(|(_, col)| *col == c.display.paper)
+                            .map_or(0, |i| (i + 1) % PALETTE.len());
+                        c.display.paper = PALETTE[at].1;
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().child(format!(
+                    "Pair over Tailscale HTTPS: {}",
+                    config.desktop.tailscale_https
+                )))
+                .child(
+                    btn("tailscale", "Toggle").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        c.desktop.tailscale_https = !c.desktop.tailscale_https;
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().child(format!("Voice speed: {:.1}x", config.speech.rate)))
+                .child(
+                    btn("rate-minus", "-").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        c.speech.rate = (c.speech.rate - 0.1).clamp(0.5, 2.0);
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                )
+                .child(
+                    btn("rate-plus", "+").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        c.speech.rate = (c.speech.rate + 0.1).clamp(0.5, 2.0);
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        panel = panel.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().child(format!(
+                    "Read each new reading aloud: {}",
+                    config.speech.speak_new
+                )))
+                .child(
+                    btn("speak-new", "Toggle").on_click(cx.listener(|view, _, _, cx| {
+                        let mut c = view.config_clone();
+                        c.speech.speak_new = !c.speech.speak_new;
+                        view.cmd(
+                            Command::SetConfig {
+                                config: Box::new(c),
+                            },
+                            cx,
+                        );
+                    })),
+                ),
+        );
+        // Shortcut rebinding: pick an action, then press the new key.
+        panel = panel.child(
+            div()
+                .text_base()
+                .child(if let Some(a) = &self.rebind_pending() {
+                    format!("Press a key for {a} (Esc cancels)")
+                } else {
+                    "Shortcuts".to_string()
+                }),
+        );
+        for (action, _) in crate::app::ACTIONS {
+            let key = crate::app::action_key(&config, action);
+            let a = action.to_string();
+            panel = panel.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .items_center()
+                    .child(div().flex_1().child(format!("{action}: {key}")))
+                    .child(
+                        btn(format!("rebind-{action}"), "Rebind").on_click(cx.listener(
+                            move |view, _, _, cx| {
+                                view.start_rebind(a.clone(), cx);
+                            },
+                        )),
+                    ),
+            );
+        }
+        panel = panel
+            .child(div().child("Every setting here is saved to the settings file (gui.toml)."));
         panel = panel.child(
             btn("close-settings", "Close")
                 .on_click(cx.listener(|view, _, _, cx| view.toggle_settings(cx))),

@@ -12,6 +12,8 @@ use std::sync::{Arc, Mutex};
 
 pub struct Pairing {
     server: Mutex<Option<PairingServer>>,
+    /// The `tailscale_https` the running server was started with, if any.
+    tailscale: Mutex<Option<bool>>,
     bind: Vec<IpAddr>,
     decoder: Backend,
     cert_dir: PathBuf,
@@ -31,6 +33,7 @@ impl Pairing {
     pub fn new(bind: Vec<IpAddr>, decoder: Backend, cert_dir: PathBuf) -> Self {
         Self {
             server: Mutex::new(None),
+            tailscale: Mutex::new(None),
             bind,
             decoder,
             cert_dir,
@@ -43,15 +46,28 @@ impl Pairing {
         Arc::clone(&self.sessions)
     }
 
-    /// A paired phone waiting to be shown, if any.
-    pub fn take_session(&self) -> Option<WebrtcSource> {
-        self.sessions.lock().unwrap().pop()
+    /// The newest paired phone waiting to be shown, if any: an older one
+    /// queued ahead of it is dropped (the desktop shows the latest pairing).
+    pub fn take_newest(&self) -> Option<WebrtcSource> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let newest = sessions.pop();
+        sessions.clear();
+        newest
     }
 
     /// Starts the server (or keeps the running one) and says how to reach it.
     pub fn start(&self, tailscale_https: bool) -> Result<Vec<Offer>, String> {
         let mut server = self.server.lock().unwrap();
+        // A changed setting restarts the server with it in force.
+        if *self.tailscale.lock().unwrap() == Some(tailscale_https) && server.is_some() {
+            // Already running as asked; fall through to the offers.
+        } else if server.is_some() {
+            if let Some(old) = server.take() {
+                old.stop();
+            }
+        }
         if server.is_none() {
+            *self.tailscale.lock().unwrap() = Some(tailscale_https);
             let options = PairingOptions {
                 addresses: if self.bind.is_empty() {
                     squigl_pairing::addresses()
@@ -86,6 +102,7 @@ impl Pairing {
     }
 
     pub fn stop(&self) {
+        *self.tailscale.lock().unwrap() = None;
         if let Some(server) = self.server.lock().unwrap().take() {
             server.stop();
             log::info!("pairing closed");
