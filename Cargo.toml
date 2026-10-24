@@ -12,10 +12,13 @@ members = [
     "crates/squigl-cli",
     "crates/squigl-egui",
     "crates/squigl-desktop",
+    "crates/squigl-gpui",
 ]
 # squigl-desktop is left out of a plain `cargo build`/`cargo test`: Tauri embeds its
 # web UI at compile time, which needs `npm run build` in crates/squigl-desktop/ui
 # first (and WebKitGTK headers on Linux). Build it with `-p squigl-desktop`.
+# squigl-gpui is likewise opt-in: GPUI needs Vulkan/Wayland/xkbcommon headers.
+# Build it with `-p squigl-gpui`.
 default-members = [
     "crates/squigl-core",
     "crates/squigl-v4l2",

@@ -21,13 +21,14 @@ ADB. Everything from the socket down is implemented here.
 cargo build --release                 # fetches scrcpy-server.jar on first build (needs network)
 cargo build --release --features ffmpeg   # + system libavcodec decoder (needs full FFmpeg headers)
 cargo build --release -p squigl-egui --no-default-features   # GUI without the built-in ONNX models (no ort download) or Typst
-cargo test                             # unit tests (the default members: all but squigl-desktop) (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
+cargo test                             # unit tests (the default members: all but squigl-desktop and squigl-speech, which need system headers/web UI built first) (protocol parser, camera listing, pixel conversion, GUI crop geometry, quad rectification)
 cargo test -p squigl-core protocol::tests::parses_codec_meta   # single test
 cargo test -p squigl-models --release glmocr_handwriting -- --ignored --nocapture   # GLM-OCR vs recorded readings; run after an ort bump
 cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
 cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 and libspeechd-dev headers on Linux)
+cargo build --release -p squigl-gpui [--features speech]     # the GPUI app, Linux only (needs libxkbcommon-x11-devel, wayland-devel, vulkan-loader-devel, fontconfig-devel; speech adds libspeechd-devel)
 cargo test -p squigl-speech --features kokoro [--release -- --ignored --nocapture listen]   # reading aloud; `listen` says a sentence and its maths (Kokoro if in $SQUIGL_MODEL_DIR/kokoro)
 SQUIGL_MODEL_DIR=... cargo test -p squigl-misaki --release -- --include-ignored   # the Misaki port against Python Misaki's readings (needs the Kokoro download's misaki*/ files)
 cargo build --release -p squigl-core --example synth_recording && node --test crates/squigl-desktop/e2e/app.test.mjs
@@ -305,6 +306,31 @@ reads best (no variation selectors, the vector arrow as U+2192, no separator aft
 `cases`); `paths.rs`: the config, cache and pictures directories per OS via the
 `directories` crate (the `~/.config/squigl`, `~/.cache/squigl` paths below are the
 Linux ones, unchanged -- `linux_paths_are_unchanged` holds that).
+
+`crates/squigl-gpui` is the GPUI desktop app (branch `feature/gpui-kit`): a native,
+GPU-composited (Vulkan on Linux) window over the same `squigl-engine`, built on
+`gpui-kit` 0.7 (`gpui-kit's` GPUI + styled components; one dependency, no webview, no
+IPC channel, no frame WebSocket, no npm build). Linux only, and not a default member
+(GPUI needs Vulkan/Wayland/xkbcommon development packages: `libxkbcommon-x11-devel`,
+`wayland-devel`, `vulkan-loader-devel`, `fontconfig-devel` on Fedora; the `speech`
+feature adds `libspeechd-devel`). The engine lives on the window thread as in egui;
+its waker sets a flag a 50 Hz pump collects, and the pump redraws only on change.
+Frames take the engine's decimated `render_planes` path (`frame.rs`: YUV to RGB with
+`convert`'s coefficients plus the display LUT, rotated before upload because GPUI
+images have no per-draw rotation) into a `RenderImage`; GPUI does scaling, placement
+and compositing on the GPU. Everything else is the Tauri window's behaviour in native
+widgets: toolbar (freeze, rotation, display modes, magnifier zoom, log-scale camera
+zoom and torch), picture gestures (draw/move/corner, click a block, erase brush,
+alt-drag pan, wheel zoom), connection guidance, the Reading pane (backends and model
+preparation, blocks, reads, erasures, results with copy/read-aloud, history, speech
+controls), Settings (display sliders previewing through `PreviewConfig`, theme,
+reading size, shortcuts toggle) and phone pairing (QR as an SVG image, address with
+copy). Two known gaps against Tauri: readings show maths as its source text (no
+MathML typesetting; GPUI has none built in) and controls are text buttons rather
+than Lucide icons. Hidden flags mirror the desktop's that apply:
+`--dev-fake-phone`, `--dev-fake-voice`, `--dev-backend`, `--dev-config`,
+`--dev-pairing-bind`. `cargo test -p squigl-gpui` covers the frame conversion against
+`squigl_core::convert` and the camera-zoom slider maths.
 
 `crates/squigl-desktop` is the Tauri 2 app that will replace the egui window
 (roadmap Phase 4 on; a workspace member but not a default one, since Tauri embeds the

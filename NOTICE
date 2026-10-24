@@ -89,6 +89,12 @@ Svelte (https://github.com/sveltejs/svelte)
   other npm dependencies are listed with their licenses in
   crates/squigl-desktop/ui/package-lock.json.
 
+GPUI and gpui-kit (https://github.com/zed-industries/zed,
+https://github.com/longbridge/gpui-kit)
+  Copyright Zed Industries and the gpui-kit contributors. Apache License 2.0.
+  The GPUI desktop app's window and widgets (crates/squigl-gpui); GPUI draws
+  with Vulkan on Linux. gpui-kit's bundled icon set is Lucide (below).
+
 Lucide (https://github.com/lucide-icons/lucide)
   Copyright Lucide Icons and Contributors. ISC License. The desktop app's toolbar
   icons (@lucide/svelte), bundled into the UI.
