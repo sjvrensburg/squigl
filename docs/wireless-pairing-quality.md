@@ -378,6 +378,16 @@ mechanism with a number: with no `maxBitrate`, `contentHint` or
 `degradationPreference` from squigl, the browser's video-call defaults
 decide, and they decide low.
 
+> **Correction (later the same day):** §8.4's conclusion was wrong. The
+> zero-frame results came from the test rig's own accumulated state —
+> dozens of tabs with live camera tracks and dead peer connections across
+> two browsers, remembered permission denials, and browsers competing for
+> one camera. With Firefox reset to a fresh profile, the same phone streams
+> VP9 at 1080×1920, ~4.5 fps, ~5.4 Mbit/s, legibly (§9 addendum). The phone
+> was never broken; the measurements below describe a contaminated rig, and
+> only the narrower claim survives: in that state, no browser produced
+> frames, and neither side said why — which is what the §9 diagnostics fixed.
+
 ### 8.4 Firefox + H.264 (squigl's actual configuration): no video at all
 
 Same self-test with `setCodecPreferences(h264)` exactly as `capture.html`
@@ -434,8 +444,11 @@ scenario as test-verified but not re-verified on a phone.
 
 ### 8.7 Revised ranking for this device
 
-1. H.264-only negotiation (§8.4): total failure where browser H.264 encode
-   is broken; silent on both sides.
+1. Codec fragility (§8.4, as corrected above): a single negotiated codec is
+   a single point of failure — encoder trouble in the browser, for whatever
+   reason, meant no video and no explanation on either side. (Addressed
+   after this report by the VP9/VP8 work: with a clean browser the phone
+   streams VP9 legibly.)
 2. Browser-default encoder budget (§8.3): ~0.76 Mbit/s at 2 MP when it does
    encode — the "poor image" users would see on a working browser.
 3. CLI sink size-change death (§8.6): fixed here.
@@ -481,18 +494,20 @@ rustdoc (`-D warnings`) for the touched libraries green. A workspace-wide
 clippy run was blocked by a crates.io 500 on an unrelated crate download,
 not by code.
 
-Addendum (Chrome retest, same day): Chromium (main-branch build, left
-installed on the phone alongside Firefox) paired with the fixed server and
-behaved identically to Firefox — camera 1920x1080@60 reported, connection
-up, `watchEncoder` error on the page, "connected but sent no video" on the
-server, stall at 10 s. Two independent browser engines failing the same way
-moves the H.264-encode failure from "Firefox/Gecko quirk" to "this
-device/ROM's WebRTC encoder path": the OS encoder itself is fine
-(`screenrecord` produces valid 720x1560 H.264), so the breakage is in how
-both WebRTC stacks configure it on this Lineage build. A real Google Chrome
-from the Play Store (absent here) uses the same WebRTC encoder glue as
-Chromium, so expectations for it on this handset should be low; on stock
-devices that glue is exactly what works. Squigl-side, nothing further can
-be squeezed from this handset — the remaining lever for such devices is
-codec fallback (VP8/VP9 decode), a product decision the report's §5 did not
-originally contemplate.
+Addendum (Chrome retest, same day): Chromium paired with the fixed server
+and behaved identically to Firefox — camera 1920x1080@60 reported,
+connection up, `watchEncoder` error on the page, "connected but sent no
+video" on the server, stall at 10 s. At the time this was read as a
+device/ROM encoder failure; the correction at §8.4 applies here too — the
+rig's accumulated browser state is the sufficient explanation, and the
+device-level conclusion is retracted. (`screenrecord` producing valid
+H.264 only ever showed the OS encoder works, which was never in doubt
+once the ADB path was re-checked.)
+
+Second addendum (VP9 verification, same day): after implementing the
+VP9/VP8 codec support and resetting Firefox to a fresh profile, the phone
+paired and streamed **VP9 at 1080×1920, ~4.5 fps (software encode on this
+SoC), ~5.4 Mbit/s**, frames legible against the ADB baseline. The
+second-codec work therefore resolves the wireless path on this handset,
+and the page-side codec retry left open in §9 is unnecessary here: VP9,
+the first preference, already works.

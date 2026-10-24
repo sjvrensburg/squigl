@@ -77,6 +77,37 @@ pub struct YuvFrame {
     pub v: Vec<u8>,
 }
 
+/// A codec a WebRTC browser may send. The scrcpy path is always
+/// [`RtcCodec::H264`]; a paired phone negotiates (see
+/// [`crate::webrtc_source`]). VP8/VP9 need the FFmpeg decoder — openh264 is
+/// H.264-only — so they are only negotiated when that backend is in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RtcCodec {
+    H264,
+    Vp8,
+    Vp9,
+}
+
+impl RtcCodec {
+    pub fn name(self) -> &'static str {
+        match self {
+            RtcCodec::H264 => "H.264",
+            RtcCodec::Vp8 => "VP8",
+            RtcCodec::Vp9 => "VP9",
+        }
+    }
+
+    /// Whether `backend` (as compiled) can decode this codec.
+    pub fn supported(self, backend: Backend) -> bool {
+        match self {
+            RtcCodec::H264 => true,
+            // "ffmpeg" is Backend::Ffmpeg's name, which only exists (and is
+            // only selectable) when the feature is compiled in.
+            RtcCodec::Vp8 | RtcCodec::Vp9 => backend.name() == "ffmpeg",
+        }
+    }
+}
+
 pub enum Decoder {
     Openh264(H264Decoder),
     #[cfg(feature = "ffmpeg")]
@@ -95,7 +126,38 @@ impl Decoder {
                 Ok(Decoder::Openh264(inner))
             }
             #[cfg(feature = "ffmpeg")]
-            Backend::Ffmpeg => Ok(Decoder::Ffmpeg(ffmpeg_backend::FfmpegDecoder::new()?)),
+            Backend::Ffmpeg => Ok(Decoder::Ffmpeg(ffmpeg_backend::FfmpegDecoder::new(
+                ffmpeg_next::codec::Id::H264,
+            )?)),
+        }
+    }
+
+    /// A decoder for one WebRTC codec. H.264 honours `backend`; VP8/VP9 are
+    /// FFmpeg-only (see [`RtcCodec::supported`]) and ignore it beyond that
+    /// check.
+    pub fn rtc(codec: RtcCodec, backend: Backend) -> Result<Self> {
+        match codec {
+            RtcCodec::H264 => Self::with_backend(backend),
+            RtcCodec::Vp8 | RtcCodec::Vp9 => {
+                if !codec.supported(backend) {
+                    return Err(Error::Decode(format!(
+                        "{} needs the FFmpeg decoder (build with --features ffmpeg)",
+                        codec.name()
+                    )));
+                }
+                #[cfg(feature = "ffmpeg")]
+                {
+                    let id = match codec {
+                        RtcCodec::Vp8 => ffmpeg_next::codec::Id::VP8,
+                        _ => ffmpeg_next::codec::Id::VP9,
+                    };
+                    Ok(Decoder::Ffmpeg(ffmpeg_backend::FfmpegDecoder::new(id)?))
+                }
+                #[cfg(not(feature = "ffmpeg"))]
+                {
+                    unreachable!("supported() is false without the ffmpeg feature")
+                }
+            }
         }
     }
 
@@ -166,15 +228,17 @@ mod ffmpeg_backend {
         decoder: decoder::Video,
         frame: Video,
         scratch: Video,
-        /// SPS/PPS config packet held back until the next packet, see `decode`.
+        codec: Id,
+        /// SPS/PPS config packet held back until the next packet (H.264 only),
+        /// see `decode`.
         pending_config: Option<Vec<u8>>,
     }
 
     impl FfmpegDecoder {
-        pub fn new() -> Result<Self> {
+        pub fn new(codec_id: Id) -> Result<Self> {
             ffmpeg::init().map_err(|e| Error::Decode(format!("ffmpeg init: {e}")))?;
-            let codec = decoder::find(Id::H264)
-                .ok_or_else(|| Error::Decode("libavcodec has no h264 decoder".into()))?;
+            let codec = decoder::find(codec_id)
+                .ok_or_else(|| Error::Decode(format!("libavcodec has no {codec_id:?} decoder")))?;
             let mut ctx = ffmpeg::codec::Context::new_with_codec(codec);
             // Annex-B input arrives as complete access units; low-delay output so we
             // don't buffer frames behind the decoder's reorder window.
@@ -182,11 +246,12 @@ mod ffmpeg_backend {
             let decoder = ctx
                 .decoder()
                 .video()
-                .map_err(|e| Error::Decode(format!("opening h264 decoder: {e}")))?;
+                .map_err(|e| Error::Decode(format!("opening {codec_id:?} decoder: {e}")))?;
             Ok(Self {
                 decoder,
                 frame: Video::empty(),
                 scratch: Video::empty(),
+                codec: codec_id,
                 pending_config: None,
             })
         }
@@ -195,7 +260,7 @@ mod ffmpeg_backend {
             // libavcodec reports "Invalid data" for a packet holding only SPS/PPS
             // (it still records them, but that's a noisy error to surface). Like
             // scrcpy's own client, prepend such a config packet to the next packet.
-            if is_config_only(packet) {
+            if self.codec == Id::H264 && is_config_only(packet) {
                 self.pending_config = Some(packet.to_vec());
                 return Ok(None);
             }
@@ -281,6 +346,55 @@ mod tests {
         assert!(!is_config_only(&idr));
         assert!(!is_config_only(&both));
         assert!(!is_config_only(&[]));
+    }
+
+    /// VP8/VP9 (the WebRTC fallback codecs) must decode through `Decoder::rtc`:
+    /// encode one synthetic frame with libvpx (via FFmpeg) and decode it back.
+    /// Skips when the system FFmpeg lacks the libvpx encoders.
+    #[cfg(feature = "ffmpeg")]
+    #[test]
+    fn vp8_and_vp9_frames_decode() {
+        use super::{Backend, Decoder, RtcCodec};
+        use ffmpeg_next as ffmpeg;
+        ffmpeg::init().unwrap();
+        for (codec, encoder_name) in [(RtcCodec::Vp9, "libvpx-vp9"), (RtcCodec::Vp8, "libvpx")] {
+            let Some(enc_codec) = ffmpeg::codec::encoder::find_by_name(encoder_name) else {
+                continue;
+            };
+            let mut video_enc = ffmpeg::codec::Context::new_with_codec(enc_codec)
+                .encoder()
+                .video()
+                .unwrap();
+            video_enc.set_width(64);
+            video_enc.set_height(48);
+            video_enc.set_format(ffmpeg::format::Pixel::YUV420P);
+            video_enc.set_time_base(ffmpeg::Rational(1, 30));
+            let mut encoder = video_enc.open().unwrap();
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 64, 48);
+            for plane in 0..3 {
+                frame.data_mut(plane).fill(128);
+            }
+            encoder.send_frame(&frame).unwrap();
+            // libvpx buffers; flush so the single frame comes out.
+            let mut packet = ffmpeg::codec::packet::Packet::empty();
+            if encoder.receive_packet(&mut packet).is_err() {
+                encoder.send_eof().unwrap();
+                encoder.receive_packet(&mut packet).unwrap();
+            }
+            let bytes = packet.data().unwrap().to_vec();
+
+            let mut decoder = Decoder::rtc(codec, Backend::Ffmpeg).unwrap();
+            let decoded = decoder
+                .decode(&bytes)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{} produced no frame", codec.name()));
+            assert_eq!(
+                (decoded.width, decoded.height),
+                (64, 48),
+                "{}",
+                codec.name()
+            );
+        }
     }
 
     #[test]

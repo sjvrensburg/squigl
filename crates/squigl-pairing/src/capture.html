@@ -51,17 +51,22 @@ async function start() {
     const transceiver = pc.addTransceiver(track, { direction: 'sendonly' });
     controls(pc, track);
 
-    // squigl only understands H.264 -- steer the browser's encoder to it (it defaults
-    // to VP8/VP9 otherwise) rather than letting negotiation fail on a codec mismatch.
-    // packetization-mode 1 first: it is what the far end's depacketiser is best at.
+    // squigl decodes VP9, VP8 and H.264; order the offer that way (the browser
+    // sends the first codec squigl's answer keeps). VP9 gives the most legible
+    // text per bit, VP8 is the fallback weak phones encode happily, and H.264
+    // covers the rest. Filtering to these also stops the browser defaulting to
+    // something squigl cannot decode at all. packetization-mode 1 first within
+    // H.264: it is what the far end's depacketiser is best at.
     if (transceiver.setCodecPreferences && typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities) {
       const caps = RTCRtpSender.getCapabilities('video');
-      const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+      const byMime = (mime) => caps.codecs.filter((c) => c.mimeType.toLowerCase() === mime);
+      const h264 = byMime('video/h264');
       h264.sort((a, b) => mode1(b) - mode1(a));
-      if (h264.length > 0) {
-        transceiver.setCodecPreferences(h264);
+      const usable = [...byMime('video/vp9'), ...byMime('video/vp8'), ...h264];
+      if (usable.length > 0) {
+        transceiver.setCodecPreferences(usable);
       } else {
-        log('warning: this browser has no H.264 encoder; streaming will likely fail');
+        log('warning: this browser has no VP9, VP8 or H.264 encoder; streaming will likely fail');
       }
     }
 
@@ -163,7 +168,7 @@ async function watchEncoder(pc) {
       }
       if (encoded === 0) {
         log('error: the camera is on but this browser is producing no video. ' +
-            'Its H.264 encoder appears not to work on this phone; try Chrome.');
+            'Its video encoder appears not to work on this phone; try another browser.');
         return;
       }
       log(`encoder: ${encoded} frames, ${(sent / 125000).toFixed(1)} Mbit sent so far`);
