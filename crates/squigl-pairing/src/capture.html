@@ -43,19 +43,42 @@ async function start() {
 
     const pc = new RTCPeerConnection();
     const [track] = stream.getVideoTracks();
+    // A page of handwriting wants detail, not motion: tell the encoder to keep
+    // edges sharp and (below) to hold resolution and spend bits on it.
+    track.contentHint = 'detail';
+    const settings = track.getSettings ? track.getSettings() : {};
+    log(`camera: ${settings.width}x${settings.height} at ${settings.frameRate} fps`);
     const transceiver = pc.addTransceiver(track, { direction: 'sendonly' });
     controls(pc, track);
 
     // squigl only understands H.264 -- steer the browser's encoder to it (it defaults
     // to VP8/VP9 otherwise) rather than letting negotiation fail on a codec mismatch.
+    // packetization-mode 1 first: it is what the far end's depacketiser is best at.
     if (transceiver.setCodecPreferences && typeof RTCRtpSender !== 'undefined' && RTCRtpSender.getCapabilities) {
       const caps = RTCRtpSender.getCapabilities('video');
       const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+      h264.sort((a, b) => mode1(b) - mode1(a));
       if (h264.length > 0) {
         transceiver.setCodecPreferences(h264);
       } else {
         log('warning: this browser has no H.264 encoder; streaming will likely fail');
       }
+    }
+
+    // Without this the encoder runs on video-call defaults (a megabit or so for a
+    // whole page, resolution traded away under load). Ask for the ADB path's class
+    // of budget instead, cap the frame rate (a still page gains nothing past it),
+    // and hold resolution when the encoder is squeezed.
+    try {
+      const sender = transceiver.sender;
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+      params.encodings[0].maxBitrate = 20000000;
+      params.encodings[0].maxFramerate = 15;
+      params.degradationPreference = 'maintain-resolution';
+      await sender.setParameters(params);
+    } catch (e) {
+      log('warning: could not set encoder parameters: ' + e.message);
     }
 
     log('creating offer...');
@@ -79,6 +102,7 @@ async function start() {
 
     pc.oniceconnectionstatechange = () => log('connection: ' + pc.iceConnectionState);
     log('streaming -- this feeds squigl directly, this preview is just local confirmation.');
+    watchEncoder(pc);
   } catch (e) {
     log('error: ' + e.message);
   }
@@ -112,6 +136,42 @@ function controls(pc, track) {
     }
     report();
   };
+}
+
+function mode1(codec) {
+  return (codec.sdpFmtpLine || '').includes('packetization-mode=1') ? 1 : 0;
+}
+
+// Some browsers negotiate H.264 happily and then never encode a frame with it
+// (a broken hardware-encoder path looks exactly like a network stall from the
+// other end). Say so on this page, where the person can act on it.
+async function watchEncoder(pc) {
+  const [sender] = pc.getSenders();
+  if (!sender || !sender.getStats) return;
+  for (const wait of [8000, 20000]) {
+    await new Promise((r) => setTimeout(r, wait));
+    if (pc.connectionState !== 'connected' && pc.iceConnectionState !== 'connected') return;
+    try {
+      const stats = await sender.getStats();
+      let encoded = 0;
+      let sent = 0;
+      for (const s of stats.values()) {
+        if (s.type === 'outbound-rtp') {
+          encoded += s.framesEncoded || 0;
+          sent += s.bytesSent || 0;
+        }
+      }
+      if (encoded === 0) {
+        log('error: the camera is on but this browser is producing no video. ' +
+            'Its H.264 encoder appears not to work on this phone; try Chrome.');
+        return;
+      }
+      log(`encoder: ${encoded} frames, ${(sent / 125000).toFixed(1)} Mbit sent so far`);
+      return;
+    } catch (e) {
+      return;
+    }
+  }
 }
 
 function waitForIceGathering(pc) {

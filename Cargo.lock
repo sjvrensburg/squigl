@@ -8258,6 +8258,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "str0m",
  "thiserror 2.0.20",
  "ureq 2.12.1",

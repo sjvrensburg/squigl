@@ -35,11 +35,26 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use str0m::change::{SdpAnswer, SdpOffer};
 use str0m::channel::ChannelId;
+use str0m::media::{KeyframeRequestKind, MediaKind, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig};
 
 /// Max UDP datagram str0m expects to handle (matches its own internal ceiling).
 const RECV_BUF: usize = 2000;
+
+/// Kernel receive buffer for the media socket. The default (a few hundred KB on
+/// Linux) overflows when a keyframe bursts in while this thread is decoding or
+/// handing a frame to the sink, dropping packets from exactly the frames that
+/// can least afford it; UDP has no back-pressure to save them.
+const RECV_BUFFER_BYTES: usize = 4 * 1024 * 1024;
+
+/// How far str0m holds video packets back for reordering before releasing a
+/// frame with a gap. Its default (30) is smaller than the packet count of a
+/// high-resolution keyframe, so jitter alone can split keyframes.
+const REORDER_PACKETS: usize = 300;
+
+/// The least interval between keyframe requests (PLIs) to the phone.
+const PLI_INTERVAL: Duration = Duration::from_secs(1);
 
 /// The label of the data channel camera controls travel on.
 pub const CONTROL_CHANNEL: &str = "squigl-control";
@@ -169,11 +184,90 @@ impl WebrtcControl {
     }
 }
 
+/// Rate-limits keyframe requests: a burst of undecodable frames wants one PLI,
+/// not one per frame.
+#[derive(Default)]
+struct PliGate {
+    last: Option<Instant>,
+}
+
+impl PliGate {
+    fn allow(&mut self, now: Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|t| now.duration_since(t) < PLI_INTERVAL)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
+
+/// Periodic debug-level throughput report, mirroring the ADB path's, so a
+/// wireless session can be told apart at a glance (nothing arriving, media
+/// arriving but not decoding, or healthy).
+#[derive(Default)]
+struct WebrtcStats {
+    started: Option<Instant>,
+    packets: u64,
+    bytes: u64,
+    frames: u64,
+    failures: u64,
+    gaps: u64,
+}
+
+impl WebrtcStats {
+    const INTERVAL: Duration = Duration::from_secs(5);
+
+    fn packet(&mut self, len: usize, contiguous: bool) {
+        self.packets += 1;
+        self.bytes += len as u64;
+        if !contiguous {
+            self.gaps += 1;
+        }
+        self.maybe_report();
+    }
+
+    fn maybe_report(&mut self) {
+        let now = Instant::now();
+        let Some(started) = self.started else {
+            self.started = Some(now);
+            return;
+        };
+        let elapsed = now.duration_since(started);
+        if elapsed < Self::INTERVAL {
+            return;
+        }
+        let secs = elapsed.as_secs_f64();
+        log::debug!(
+            "webrtc stream: {} media packets ({:.1} Mbit/s), {} frames decoded ({:.1} fps), \
+             {} decode failures, {} non-contiguous",
+            self.packets,
+            self.bytes as f64 * 8.0 / 1e6 / secs,
+            self.frames,
+            self.frames as f64 / secs,
+            self.failures,
+            self.gaps
+        );
+        *self = Self::default();
+        self.started = Some(now);
+    }
+}
+
 pub struct WebrtcSource {
     rtc: Rtc,
     socket: UdpSocket,
     decoder: Decoder,
     connected: bool,
+    /// Any media data has arrived (as opposed to merely connecting, the
+    /// distinction between a network problem and a browser that encodes
+    /// nothing).
+    saw_media: bool,
+    stats: WebrtcStats,
+    /// The video media's id, once announced, for keyframe requests.
+    video_mid: Option<Mid>,
+    pli_gate: PliGate,
     last_activity: Instant,
     /// When the offer was accepted, used to bound how long we'll wait for ICE/DTLS to
     /// reach [`Event::Connected`] before giving up -- unlike the ADB path, nothing else
@@ -202,9 +296,13 @@ impl WebrtcSource {
         let mut rtc = RtcConfig::new()
             .clear_codecs()
             .enable_h264(true)
+            .set_reordering_size_video(REORDER_PACKETS)
             .build(Instant::now());
 
         let socket = UdpSocket::bind((bind_addr, 0))?;
+        if let Err(e) = socket2::SockRef::from(&socket).set_recv_buffer_size(RECV_BUFFER_BYTES) {
+            log::debug!("could not enlarge the media socket's receive buffer: {e}");
+        }
         let local_addr = socket.local_addr()?;
         let candidate = Candidate::host(local_addr, "udp")
             .map_err(|e| Error::Protocol(format!("building ICE candidate: {e}")))?;
@@ -223,6 +321,10 @@ impl WebrtcSource {
                 socket,
                 decoder,
                 connected: false,
+                saw_media: false,
+                stats: WebrtcStats::default(),
+                video_mid: None,
+                pli_gate: PliGate::default(),
                 last_activity: Instant::now(),
                 accept_time: Instant::now(),
                 control: WebrtcControl::default(),
@@ -292,13 +394,32 @@ impl WebrtcSource {
                 )) if self.connected => {
                     return Ok(None);
                 }
+                Output::Event(Event::MediaAdded(added)) => {
+                    if added.kind == MediaKind::Video {
+                        self.video_mid = Some(added.mid);
+                    }
+                    continue;
+                }
                 Output::Event(Event::MediaData(data)) => {
                     self.last_activity = Instant::now();
+                    self.saw_media = true;
+                    self.stats.packet(data.data.len(), data.contiguous);
+                    // A gap before a non-keyframe means the decoder's reference
+                    // chain is broken; ask for a fresh keyframe rather than
+                    // waiting for the encoder's next periodic one.
+                    if !data.contiguous && !data.is_keyframe() {
+                        self.request_keyframe();
+                    }
                     match self.decoder.decode(&data.data) {
-                        Ok(Some(frame)) => return Ok(Some(frame)),
+                        Ok(Some(frame)) => {
+                            self.stats.frames += 1;
+                            return Ok(Some(frame));
+                        }
                         Ok(None) => continue,
                         Err(e) => {
+                            self.stats.failures += 1;
                             log::debug!("skipping undecodable WebRTC frame ({e})");
+                            self.request_keyframe();
                             continue;
                         }
                     }
@@ -354,14 +475,45 @@ impl WebrtcSource {
                         .handle_input(Input::Timeout(Instant::now()))
                         .map_err(str0m_err)?;
                     if self.connected && self.last_activity.elapsed() > STALL_TIMEOUT {
+                        if !self.saw_media {
+                            log::warn!(
+                                "the phone connected but sent no video at all; its browser \
+                                 may be unable to encode H.264 (the capture page says so too)"
+                            );
+                        }
                         return Err(Error::StreamStalled(STALL_TIMEOUT));
                     }
                     if !self.connected && self.accept_time.elapsed() > STALL_TIMEOUT {
+                        log::warn!(
+                            "the phone never finished connecting (ICE/DTLS); a firewall \
+                             blocking UDP, or the phone on another network, are the usual causes"
+                        );
                         return Err(Error::StreamStalled(STALL_TIMEOUT));
                     }
                 }
                 Err(e) => return Err(Error::Io(e)),
             }
+        }
+    }
+}
+
+impl WebrtcSource {
+    /// Asks the phone for a fresh keyframe (PLI), rate-limited: after packet
+    /// loss the decoder cannot recover from P-frames alone, and the browser's
+    /// own keyframe interval can be seconds away.
+    fn request_keyframe(&mut self) {
+        let Some(mid) = self.video_mid else {
+            return;
+        };
+        if !self.pli_gate.allow(Instant::now()) {
+            return;
+        }
+        match self.rtc.direct_api().stream_rx_by_mid(mid, None) {
+            Some(rx) => {
+                rx.request_keyframe(KeyframeRequestKind::Pli);
+                log::debug!("requested a keyframe from the phone (PLI)");
+            }
+            None => log::debug!("no receive stream to request a keyframe from"),
         }
     }
 }
@@ -404,6 +556,21 @@ mod tests {
         control.reported(r#"{"zoom_range":[1,8],"zoom":7.5,"torch":true}"#);
         assert_eq!((control.zoom(), control.torch()), (Some(7.5), Some(true)));
         assert_eq!(control.camera().unwrap().zoom_range, Some((1.0, 8.0)));
+    }
+
+    #[test]
+    fn the_pli_gate_allows_one_request_per_interval() {
+        let mut gate = PliGate::default();
+        let t0 = Instant::now();
+        assert!(gate.allow(t0), "the first request goes out");
+        assert!(
+            !gate.allow(t0 + Duration::from_millis(100)),
+            "a burst coalesces"
+        );
+        assert!(
+            gate.allow(t0 + PLI_INTERVAL + Duration::from_millis(1)),
+            "and the next interval allows another"
+        );
     }
 
     #[test]
