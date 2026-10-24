@@ -13,10 +13,12 @@ name = "squigl-gpui"
 path = "src/main.rs"
 
 [features]
-default = ["local-model", "speech"]
+default = ["local-model", "speech", "math"]
 ffmpeg = ["squigl-core/ffmpeg"]
 local-model = ["dep:squigl-models", "squigl-speech?/kokoro"]
 speech = ["dep:squigl-speech"]
+# Readings typeset with Typst, as in the egui window.
+math = ["dep:squigl-math"]
 
 [dependencies]
 squigl-core = { path = "../squigl-core" }
@@ -24,6 +26,7 @@ squigl-engine = { path = "../squigl-engine" }
 squigl-pairing = { path = "../squigl-pairing", features = ["testing"] }
 squigl-models = { path = "../squigl-models", optional = true }
 squigl-speech = { path = "../squigl-speech", optional = true }
+squigl-math = { path = "../squigl-math", optional = true }
 anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true

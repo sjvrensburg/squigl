@@ -4,6 +4,7 @@
 
 use crate::app::{mode_label, role_colour, theme_colours, zoom_bounds, AppView, SliderKind};
 use crate::guidance::guidance;
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
 use gpui_kit::*;
 use squigl_engine::engine::StreamStatus;
@@ -126,6 +127,15 @@ impl Render for AppView {
             }
             self.shown_image = self.image.clone();
         }
+        if self.zoom_shown_image.as_ref().map(|i| i.id) != self.zoom_image.as_ref().map(|i| i.id) {
+            if let Some(old) = self.zoom_shown_image.take() {
+                let _ = window.drop_image(old);
+            }
+            self.zoom_shown_image = self.zoom_image.clone();
+        }
+        for old in std::mem::take(&mut self.dropped_images) {
+            let _ = window.drop_image(old);
+        }
         let config = self.engine.config().clone();
         let (bg, fg, _edge) = theme_colours(config.desktop.theme);
         let stream = self.engine.state().stream.value.clone();
@@ -148,11 +158,30 @@ impl Render for AppView {
             root = root.child(self.toolbar(&stream, &config, frozen, cx));
         }
         let mut main = div().flex().flex_row().flex_1().min_h(px(0.0));
-        if !self.reading_only {
-            main = main.child(self.picture(&capture, &blocks, &config, cx));
-        }
-        if self.reading_open || self.reading_only {
-            main = main.child(self.reading_pane(self.reading_only, cx));
+        match self.maximised {
+            Some("zoom") => {
+                main = main.child(self.zoom_pane(true, cx));
+            }
+            Some("reading") => {
+                main = main.child(self.reading_pane(true, cx));
+            }
+            _ => {
+                if !self.reading_only {
+                    main = main.child(self.picture(&stream, &capture, &blocks, &config, cx));
+                    if self.zoom_open || self.reading_open {
+                        let mut col = div().flex().flex_col().h_full();
+                        if self.zoom_open {
+                            col = col.child(self.zoom_pane(false, cx));
+                        }
+                        if self.reading_open {
+                            col = col.child(self.reading_pane(false, cx));
+                        }
+                        main = main.child(col);
+                    }
+                } else {
+                    main = main.child(self.reading_pane(true, cx));
+                }
+            }
         }
         root = root.child(main);
         root = root.child(self.status_bar(&stream, frozen));
@@ -200,33 +229,48 @@ impl AppView {
                     "Freeze (Space)"
                 },
             )
+            .icon(if frozen {
+                IconName::Play
+            } else {
+                IconName::Pause
+            })
             .on_click(cx.listener(|view, _, _, cx| view.toggle_freeze(cx))),
         );
-        bar = bar.child(btn("rot-ccw", "Rotate left (R)").on_click(cx.listener(
-            |view, _, _, cx| {
-                view.rotate(false, cx);
-            },
-        )));
-        bar = bar.child(btn("rot-cw", "Rotate right (r)").on_click(cx.listener(
-            |view, _, _, cx| {
-                view.rotate(true, cx);
-            },
-        )));
         bar = bar.child(
-            btn("mode", mode_label(config.display.mode)).on_click(cx.listener(|view, _, _, cx| {
-                view.cycle_mode(cx);
-            })),
+            btn("rot-ccw", "Rotate left (R)")
+                .icon(IconName::RotateCcw)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.rotate(false, cx);
+                })),
         );
         bar = bar.child(
-            btn("zoom-out", "Zoom -").on_click(cx.listener(|view, _, _, cx| {
-                view.zoom_view(-1.0, cx);
-            })),
+            btn("rot-cw", "Rotate right (r)")
+                .icon(IconName::RotateCw)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.rotate(true, cx);
+                })),
+        );
+        bar = bar.child(
+            btn("mode", mode_label(config.display.mode))
+                .icon(IconName::Palette)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.cycle_mode(cx);
+                })),
+        );
+        bar = bar.child(
+            btn("zoom-out", "Zoom -")
+                .icon(IconName::ZoomOut)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.zoom_view(-1.0, cx);
+                })),
         );
         bar = bar.child(div().child(format!("{:.0}%", self.magnification * 100.0)));
         bar = bar.child(
-            btn("zoom-in", "Zoom +").on_click(cx.listener(|view, _, _, cx| {
-                view.zoom_view(1.0, cx);
-            })),
+            btn("zoom-in", "Zoom +")
+                .icon(IconName::ZoomIn)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.zoom_view(1.0, cx);
+                })),
         );
         if let Some(bounds) = zoom_bounds(stream.zoom_range, stream.source.clone()) {
             let fraction = ((stream.zoom.ln() - bounds.0.ln()) / (bounds.1.ln() - bounds.0.ln()))
@@ -244,17 +288,20 @@ impl AppView {
                         "Torch (t)"
                     },
                 )
+                .icon(IconName::Flashlight)
                 .on_click(cx.listener(|view, _, _, cx| {
                     let on = view.stream_torch();
                     view.cmd(squigl_engine::engine::Command::SetTorch { on: !on }, cx);
                 })),
             );
         }
-        bar = bar.child(btn("open", "Open image...").on_click(cx.listener(
-            |view, _, window, cx| {
-                view.open_image_dialog(window, cx);
-            },
-        )));
+        bar = bar.child(
+            btn("open", "Open image...")
+                .icon(IconName::FolderOpen)
+                .on_click(cx.listener(|view, _, window, cx| {
+                    view.open_image_dialog(window, cx);
+                })),
+        );
         bar = bar.child(btn("replay", "Play recording...").on_click(cx.listener(
             |view, _, _, cx| {
                 view.open_replay_dialog(cx);
@@ -262,40 +309,59 @@ impl AppView {
         )));
         if !matches!(stream.source, SourceSpec::Phone) {
             bar = bar.child(
-                btn("phone", "Use phone").on_click(cx.listener(|view, _, _, cx| {
-                    view.cmd(
-                        squigl_engine::engine::Command::UseSource {
-                            source: SourceSpec::Phone,
-                        },
-                        cx,
-                    );
-                })),
+                btn("phone", "Use phone")
+                    .icon(IconName::Smartphone)
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.cmd(
+                            squigl_engine::engine::Command::UseSource {
+                                source: SourceSpec::Phone,
+                            },
+                            cx,
+                        );
+                    })),
             );
         }
         bar = bar.child(
-            btn("pair", "Pair phone").on_click(cx.listener(|view, _, _, cx| {
-                view.toggle_pair(cx);
-            })),
+            btn("pair", "Pair phone")
+                .icon(IconName::QrCode)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.toggle_pair(cx);
+                })),
         );
         bar = bar.child(
-            btn("reading", "Reading (p)").on_click(cx.listener(|view, _, _, cx| {
-                view.toggle_reading(cx);
-            })),
+            btn("reading", "Reading (p)")
+                .icon(IconName::BookOpenText)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.toggle_reading(cx);
+                })),
         );
         bar = bar.child(
-            btn("save", "Save (Ctrl+S)").on_click(cx.listener(|view, _, _, cx| {
-                view.save(cx);
-            })),
+            btn("zoom-pane-btn", "Zoom (z)")
+                .icon(IconName::ZoomIn)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.toggle_zoom_pane(cx);
+                })),
         );
         bar = bar.child(
-            btn("settings", "Settings (,)").on_click(cx.listener(|view, _, _, cx| {
-                view.toggle_settings(cx);
-            })),
+            btn("save", "Save (Ctrl+S)")
+                .icon(IconName::Save)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.save(cx);
+                })),
         );
         bar = bar.child(
-            btn("full", "Full screen (f)").on_click(cx.listener(|_, _, window, _| {
-                window.toggle_fullscreen();
-            })),
+            btn("settings", "Settings (,)")
+                .icon(IconName::Settings)
+                .on_click(cx.listener(|view, _, _, cx| {
+                    view.toggle_settings(cx);
+                })),
+        );
+        bar = bar.child(
+            btn("full", "Full screen (f)")
+                .icon(IconName::Maximize)
+                .on_click(cx.listener(|_, _, window, _| {
+                    window.toggle_fullscreen();
+                })),
         );
         bar
     }
@@ -333,6 +399,7 @@ impl AppView {
 
     fn picture(
         &mut self,
+        stream: &StreamSlice,
         capture: &CaptureSlice,
         blocks: &BlocksSlice,
         config: &squigl_engine::config::Config,
@@ -480,6 +547,26 @@ impl AppView {
                         .bg(rgb(0xff5a5a)),
                 );
             }
+        }
+        let chip = match &stream.status {
+            StreamStatus::Connecting => Some("Connecting...".to_string()),
+            StreamStatus::Waiting { reason, .. } => Some(reason.clone()),
+            StreamStatus::Stopped => Some("Stopped".to_string()),
+            StreamStatus::Streaming { .. } => None,
+        };
+        if let Some(chip) = chip {
+            area = area.child(
+                div()
+                    .absolute()
+                    .left(px(8.0))
+                    .top(px(8.0))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .bg(rgb(0x24242c))
+                    .text_sm()
+                    .child(chip),
+            );
         }
         if config.magnifier.reading_line {
             area = area.child(

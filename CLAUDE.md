@@ -319,18 +319,25 @@ Frames take the engine's decimated `render_planes` path (`frame.rs`: YUV to RGB 
 `convert`'s coefficients plus the display LUT, rotated before upload because GPUI
 images have no per-draw rotation) into a `RenderImage`; GPUI does scaling, placement
 and compositing on the GPU. Everything else is the Tauri window's behaviour in native
-widgets: toolbar (freeze, rotation, display modes, magnifier zoom, log-scale camera
-zoom and torch), picture gestures (draw/move/corner, click a block, erase brush,
-alt-drag pan, wheel zoom), connection guidance, the Reading pane (backends and model
-preparation, blocks, reads, erasures, results with copy/read-aloud, history, speech
-controls), Settings (display sliders previewing through `PreviewConfig`, theme,
-reading size, shortcuts toggle) and phone pairing (QR as an SVG image, address with
-copy). Two known gaps against Tauri: readings show maths as its source text (no
-MathML typesetting; GPUI has none built in) and controls are text buttons rather
-than Lucide icons. Hidden flags mirror the desktop's that apply:
+widgets: toolbar with Lucide icons (freeze, rotation, display modes, magnifier
+zoom, log-scale camera zoom and torch), picture gestures (draw/move/corner, click
+a block, erase brush, alt-drag pan, gliding wheel zoom), connection guidance,
+Read settings and pairing; its layout follows the egui window's three panes
+(Preview, Zoom, Reading in a right-hand column, each maximisable with its header
+button; panes are not detachable, unlike egui). The Zoom pane (`zoom.rs`) shows
+the selection as a read sees it -- erased, rectified, enhanced, at native pixels
+up to a 1920px edge via `render_selection` -- with the `[enhance]` knobs live over
+it (mode/channel/strength/points/gamma, previewed through `PreviewConfig`),
+wheel-to-resize the box, and paint-to-erase on the crop (`zoom_to_view` maps the
+points back, Ctrl+Z undoes). Readings are typeset like egui's (the `math` feature,
+on by default: `squigl-math`'s Typst renderer on a thread, one image per reading,
+unsure tokens tinted as egui tints them) with styled text -- wavering/hesitant
+underlines and the sentence being read aloud boxed -- until the typeset image
+lands or when it fails. Hidden flags mirror the desktop's that apply:
 `--dev-fake-phone`, `--dev-fake-voice`, `--dev-backend`, `--dev-config`,
-`--dev-pairing-bind`. `cargo test -p squigl-gpui` covers the frame conversion against
-`squigl_core::convert` and the camera-zoom slider maths.
+`--dev-pairing-bind`. `cargo test -p squigl-gpui` covers the frame conversion
+against `squigl_core::convert`, the erase coverStrokes port, the camera-zoom
+slider maths and the reading-highlight splitting.
 
 `crates/squigl-desktop` is the Tauri 2 app that will replace the egui window
 (roadmap Phase 4 on; a workspace member but not a default one, since Tauri embeds the

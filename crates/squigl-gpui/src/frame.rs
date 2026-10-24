@@ -183,6 +183,20 @@ pub fn to_render_image(view: &ViewPlanes, lut: &Lut, smooth: bool) -> Arc<Render
     Arc::new(RenderImage::new(frames))
 }
 
+/// An already-RGBA buffer (e.g. `render_selection` or a typeset reading) as
+/// a GPUI image: one BGRA-swap pass, no rotation (callers hand view-oriented
+/// pixels).
+pub fn rgba_to_render_image(mut rgba: Vec<u8>, w: usize, h: usize) -> Arc<RenderImage> {
+    for px in rgba.as_chunks_mut::<4>().0 {
+        px.swap(0, 2);
+    }
+    let buffer = ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(w as u32, h as u32, rgba)
+        .expect("RGBA buffer matches the given size");
+    let mut frames = SmallVec::<[Frame; 1]>::new();
+    frames.push(Frame::new(buffer));
+    Arc::new(RenderImage::new(frames))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

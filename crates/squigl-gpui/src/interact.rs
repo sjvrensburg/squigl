@@ -156,12 +156,23 @@ impl AppView {
             .gap_2()
             .p_2()
             .bg(rgb(pane_bg));
-        if fill {
-            pane = pane.flex_1();
-        } else {
+        pane = pane.flex_1().min_h(px(0.0));
+        if !fill {
             pane = pane.w(px(400.0));
         }
-        pane = pane.child(div().text_lg().child("Reading"));
+        pane = pane.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .items_center()
+                .child(div().text_lg().flex_1().child("Reading"))
+                .child(
+                    btn("reading-max", "Maximise").on_click(cx.listener(|view, _, _, cx| {
+                        view.toggle_maximise("reading", cx);
+                    })),
+                ),
+        );
         // Backend + models.
         if reading.backends.is_empty() {
             pane =
@@ -397,16 +408,23 @@ impl AppView {
                         .child(format!("{backend} - {:.1}s", detail.elapsed_secs)),
                 );
             }
-            for (text, count, truncated) in &detail.readings {
-                let shown = if *count > 1 {
-                    format!("{text}  (x{count})")
+            for (r_idx, (text, count, truncated)) in detail.readings.iter().enumerate() {
+                if let Some((image, scale, w, h)) = self.typeset_image(index, r_idx) {
+                    card = card.child(img(image).w(px(w as f32 / scale)).h(px(h as f32 / scale)));
                 } else {
-                    text.clone()
-                };
-                card = card.child(div().text_size(px(text_px)).child(shown));
+                    card = card.child(self.reading_styled_text(index, r_idx, text_px));
+                }
+                if *count > 1 {
+                    card = card.child(
+                        div()
+                            .text_sm()
+                            .child(format!("Read the same {count} times")),
+                    );
+                }
                 if *truncated {
                     card = card.child(div().text_sm().child("Cut short at the token limit."));
                 }
+                let _ = text;
             }
             if detail.silent > 0 {
                 card = card.child(div().text_sm().child(format!(
@@ -503,6 +521,47 @@ impl AppView {
             quad: None,
         };
         pane
+    }
+
+    /// A reading as styled text: unsure tokens tinted/underlined, and the
+    /// sentence being read aloud highlighted. Shown until (or unless) the
+    /// typeset image for the reading is ready.
+    fn reading_styled_text(
+        &mut self,
+        index: usize,
+        r_idx: usize,
+        text_px: f32,
+    ) -> impl IntoElement {
+        let detail = self.result_detail(index);
+        let Some(reading) = detail
+            .as_ref()
+            .and_then(|d| d.reading_objs.get(r_idx).cloned())
+        else {
+            return div().child("");
+        };
+        let tokens = reading.tokens_if_valid();
+        // Token ranges run over the joined token text; use it only when it
+        // is the reading's text (tokens_if_valid already guards whitespace).
+        let joined: String = tokens
+            .iter()
+            .flat_map(|t| t.iter().map(|t| t.text.as_str()))
+            .collect();
+        let (text, tokens) = if !joined.is_empty() && joined == reading.text {
+            (reading.text.clone(), tokens)
+        } else {
+            (reading.text.clone(), None)
+        };
+        let spoken = (r_idx == 0)
+            .then(|| self.engine_speech().speaking)
+            .flatten()
+            .filter(|sp| sp.result == index)
+            .map(|sp| {
+                crate::app::utf16_to_byte(&text, sp.start)..crate::app::utf16_to_byte(&text, sp.end)
+            });
+        let spans = crate::app::highlight_spans(&text, tokens, spoken, &self.config_clone().ui);
+        div()
+            .text_size(px(text_px))
+            .child(gpui_kit::StyledText::new(text).with_highlights(spans))
     }
 
     pub fn settings_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -50,6 +50,15 @@ pub enum Drag {
     },
 }
 
+/// One finished typeset job: (cache key, Some((RGBA, w, h, scale))).
+pub type TypesetJob = (String, Option<(Vec<u8>, usize, usize, f32)>);
+
+pub enum TypesetEntry {
+    Pending,
+    Ready(Arc<RenderImage>, f32, usize, usize),
+    Failed,
+}
+
 pub struct AppView {
     pub engine: Engine,
     pub focus: FocusHandle,
@@ -88,6 +97,27 @@ pub struct AppView {
     pub rebind_action: Option<String>,
     pub dev_phone: Option<squigl_pairing::testing::FakePhone>,
     pub dev_phone_seen: Option<(f32, Option<bool>)>,
+    /// The Zoom pane (rectified selection at native pixels, as in egui).
+    pub zoom_open: bool,
+    pub zoom_image: Option<Arc<RenderImage>>,
+    pub zoom_shown_image: Option<Arc<RenderImage>>,
+    pub zoom_key: Option<u64>,
+    /// Zoom canvas bounds and the fitted image's size in logical px.
+    pub zoom_canvas: CanvasBounds,
+    pub zoom_display: Option<(f32, f32)>,
+    /// (native width, native height, step) of the zoom picture.
+    pub zoom_native: Option<(usize, usize, usize)>,
+    /// Which right-hand pane fills the window, if any ("zoom"/"reading").
+    pub maximised: Option<&'static str>,
+    /// Eased magnification/centre target (wheel and key zooms glide).
+    pub view_target: Option<(f32, [f32; 2])>,
+    /// Typeset readings (squigl-math), rendered off-thread per reading.
+    pub typesetter: Option<Arc<dyn squigl_engine::typeset::Typesetter>>,
+    pub typeset_cache: std::collections::HashMap<String, TypesetEntry>,
+    pub typeset_rx: Option<std::sync::mpsc::Receiver<TypesetJob>>,
+    pub typeset_tx: Option<std::sync::mpsc::Sender<TypesetJob>>,
+    pub dropped_images: Vec<Arc<RenderImage>>,
+    pub results_generation: u64,
     pub last_pump: Instant,
     pub results_scroll: ScrollHandle,
 }
@@ -154,6 +184,21 @@ impl AppView {
             rebind_action: None,
             dev_phone: None,
             dev_phone_seen: None,
+            zoom_open: true,
+            zoom_image: None,
+            zoom_shown_image: None,
+            zoom_key: None,
+            zoom_canvas: Arc::new(Mutex::new(None)),
+            zoom_display: None,
+            zoom_native: None,
+            maximised: None,
+            view_target: None,
+            typesetter: None,
+            typeset_cache: std::collections::HashMap::new(),
+            typeset_rx: None,
+            typeset_tx: None,
+            dropped_images: Vec::new(),
+            results_generation: 0,
             last_pump: Instant::now(),
             results_scroll: ScrollHandle::new(),
         }
@@ -207,6 +252,44 @@ impl AppView {
                 );
             }
         }
+        // Glide the view toward its target (wheel/key zooms set one).
+        if let Some((target_mag, target_centre)) = self.view_target {
+            let ease = |cur: f32, tgt: f32| cur + (tgt - cur) * 0.35;
+            self.magnification = ease(self.magnification.ln(), target_mag.ln()).exp();
+            self.centre = [
+                ease(self.centre[0], target_centre[0]),
+                ease(self.centre[1], target_centre[1]),
+            ];
+            if (self.magnification - target_mag).abs() / target_mag < 0.01
+                && (self.centre[0] - target_centre[0]).abs() < 0.001
+                && (self.centre[1] - target_centre[1]).abs() < 0.001
+            {
+                self.magnification = target_mag;
+                self.centre = target_centre;
+                self.view_target = None;
+            }
+            changed |= self.refresh_image();
+        }
+        // Finished typeset readings.
+        if let Some(rx) = &self.typeset_rx {
+            while let Ok((key, result)) = rx.try_recv() {
+                changed = true;
+                match result {
+                    Some((rgba, w, h, scale)) => {
+                        let img = crate::frame::rgba_to_render_image(rgba, w, h);
+                        if let Some(TypesetEntry::Ready(old, ..)) = self
+                            .typeset_cache
+                            .insert(key, TypesetEntry::Ready(img, scale, w, h))
+                        {
+                            self.dropped_images.push(old);
+                        }
+                    }
+                    None => {
+                        self.typeset_cache.insert(key, TypesetEntry::Failed);
+                    }
+                }
+            }
+        }
         if let Some((corner, to)) = self.pending_corner.take() {
             let _ = self.engine.handle(Command::MoveCorner { corner, to });
             changed = true;
@@ -238,7 +321,15 @@ impl AppView {
         for event in events {
             match event {
                 Event::ResultAppended(result) => self.results.push(result),
-                Event::ResultsCleared => self.results.clear(),
+                Event::ResultsCleared => {
+                    self.results.clear();
+                    self.results_generation += 1;
+                    for (_, entry) in self.typeset_cache.drain() {
+                        if let TypesetEntry::Ready(img, ..) = entry {
+                            self.dropped_images.push(img);
+                        }
+                    }
+                }
                 Event::HistoryAppended(entry) => self.history.push(entry),
                 Event::Notice(notice) => self.notice = notice.text,
                 _ => {}
@@ -253,9 +344,79 @@ impl AppView {
             self.guidance_hidden = None;
         }
         changed |= self.refresh_image();
+        changed |= self.refresh_zoom();
         if changed {
             cx.notify();
         }
+    }
+
+    /// The Zoom pane's picture: the selection rendered as a read would see
+    /// it (erased, rectified, enhanced), at native pixels up to a 1920px
+    /// edge (the egui pane's cap). Reconverted only when its inputs move.
+    fn refresh_zoom(&mut self) -> bool {
+        if !self.zoom_open {
+            return false;
+        }
+        let Some(selection) = self.engine.selection() else {
+            let had = self.zoom_image.take().map(|i| self.dropped_images.push(i));
+            self.zoom_key = None;
+            return had.is_some();
+        };
+        let Some(frame) = self.engine.frame(squigl_engine::view::FrameRef::Shown) else {
+            return false;
+        };
+        let enhance = self.engine.config().enhance;
+        let erasures = self.engine.state().capture.value.erasures.clone();
+        let step = selection.rect.w.max(selection.rect.h).div_ceil(1920).max(1);
+        // Inputs hashed cheaply: frame identity by pointer, the rest by value.
+        let mut hash = 0xcbf29ce484222325u64;
+        let mut mix = |v: u64| hash = (hash ^ v).wrapping_mul(0x100000001b3);
+        mix(Arc::as_ptr(&frame) as u64);
+        mix(self.engine.capture_seq());
+        for v in [
+            selection.rect.x,
+            selection.rect.y,
+            selection.rect.w,
+            selection.rect.h,
+            step,
+        ] {
+            mix(v as u64);
+        }
+        if let Some(quad) = selection.quad {
+            for pt in quad {
+                mix(pt[0].to_bits() as u64);
+                mix(pt[1].to_bits() as u64);
+            }
+        }
+        mix(crate::frame::erasures_key(&erasures));
+        mix(enhance.mode as u64);
+        mix(enhance.channel as u64);
+        for f in [
+            enhance.strength,
+            enhance.black_point,
+            enhance.white_point,
+            enhance.gamma,
+        ] {
+            mix(f.to_bits() as u64);
+        }
+        if self.zoom_key == Some(hash) {
+            return false;
+        }
+        self.zoom_key = Some(hash);
+        let (rgba, w, h) = squigl_engine::render::render_selection(
+            &frame,
+            self.engine.rotation(),
+            Some(selection),
+            step,
+            &erasures,
+            Some(&enhance),
+        );
+        if let Some(old) = self.zoom_image.take() {
+            self.dropped_images.push(old);
+        }
+        self.zoom_image = Some(crate::frame::rgba_to_render_image(rgba, w, h));
+        self.zoom_native = Some((w * step, h * step, step));
+        true
     }
 
     // -- the picture -------------------------------------------------------
@@ -371,18 +532,24 @@ impl AppView {
 
     pub fn zoom_view(&mut self, steps: f32, cx: &mut Context<Self>) {
         let max = self.engine.config().magnifier.max_magnification;
-        self.magnification = (self.magnification * ZOOM_FACTOR.powf(steps)).clamp(1.0, max);
-        self.pump(cx);
+        let (mag, centre) = self
+            .view_target
+            .unwrap_or((self.magnification, self.centre));
+        self.view_target = Some(((mag * ZOOM_FACTOR.powf(steps)).clamp(1.0, max), centre));
+        cx.notify();
     }
 
     pub fn pan(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
-        let shown = 1.0 / self.magnification;
+        let (mag, centre) = self
+            .view_target
+            .unwrap_or((self.magnification, self.centre));
+        let shown = 1.0 / mag;
         let clamp = |c: f32| c.clamp(shown / 2.0, 1.0 - shown / 2.0);
-        self.centre = [
-            clamp(self.centre[0] + dx * shown),
-            clamp(self.centre[1] + dy * shown),
-        ];
-        self.pump(cx);
+        self.view_target = Some((
+            mag,
+            [clamp(centre[0] + dx * shown), clamp(centre[1] + dy * shown)],
+        ));
+        cx.notify();
     }
 
     pub fn cycle_mode(&mut self, cx: &mut Context<Self>) {
@@ -626,6 +793,21 @@ impl AppView {
         }
         cx.notify();
     }
+    pub fn toggle_zoom_pane(&mut self, cx: &mut Context<Self>) {
+        self.zoom_open = !self.zoom_open;
+        if !self.zoom_open && self.maximised == Some("zoom") {
+            self.maximised = None;
+        }
+        cx.notify();
+    }
+    pub fn toggle_maximise(&mut self, pane: &'static str, cx: &mut Context<Self>) {
+        self.maximised = if self.maximised == Some(pane) {
+            None
+        } else {
+            Some(pane)
+        };
+        cx.notify();
+    }
     pub fn toggle_reading(&mut self, cx: &mut Context<Self>) {
         self.reading_open = !self.reading_open;
         cx.notify();
@@ -656,9 +838,8 @@ impl AppView {
             "zoom-in" => self.zoom_view(1.0, cx),
             "zoom-out" => self.zoom_view(-1.0, cx),
             "zoom-reset" => {
-                self.magnification = 1.0;
-                self.centre = [0.5, 0.5];
-                self.pump(cx);
+                self.view_target = Some((1.0, [0.5, 0.5]));
+                cx.notify();
             }
             "pan-left" => self.pan(-0.2, 0.0, cx),
             "pan-right" => self.pan(0.2, 0.0, cx),
@@ -746,6 +927,13 @@ impl AppView {
                 self.settings_open = !self.settings_open;
                 cx.notify();
             }
+            "zoom-pane" => {
+                self.zoom_open = !self.zoom_open;
+                if !self.zoom_open && self.maximised == Some("zoom") {
+                    self.maximised = None;
+                }
+                cx.notify();
+            }
             _ => {}
         }
     }
@@ -775,7 +963,7 @@ pub fn from_slider(pos: f32, (lo, hi): (f32, f32)) -> f32 {
     ((zoom * 100.0).round() / 100.0).clamp(lo, hi)
 }
 
-pub const ACTIONS: [(&str, &str); 36] = [
+pub const ACTIONS: [(&str, &str); 37] = [
     ("freeze", " "),
     ("rotate-cw", "r"),
     ("rotate-ccw", "R"),
@@ -811,6 +999,7 @@ pub const ACTIONS: [(&str, &str); 36] = [
     ("previous-spoken", "<"),
     ("fullscreen", "f"),
     ("settings", ","),
+    ("zoom-pane", "z"),
     ("save", "S"),
 ];
 
@@ -834,6 +1023,7 @@ pub struct ResultDetail {
     pub backend: Option<String>,
     pub elapsed_secs: f32,
     pub readings: Vec<(String, u32, bool)>,
+    pub reading_objs: Vec<squigl_engine::transcribe::Reading>,
     pub silent: u32,
     pub samples: u32,
     pub error: Option<String>,
@@ -888,6 +1078,9 @@ fn key_name(event: &KeyDownEvent) -> String {
     if ks.modifiers.control && key.eq_ignore_ascii_case("s") {
         return "ctrl+s".to_string();
     }
+    if ks.modifiers.control && key.eq_ignore_ascii_case("z") {
+        return "ctrl+z".to_string();
+    }
     key
 }
 
@@ -896,12 +1089,16 @@ fn action_for(event: &KeyDownEvent, config: &Config) -> Option<String> {
     // screen); Ctrl+S is the one deliberate exception, handled below. The
     // desktop returns early on ctrl/alt/meta the same way.
     let m = &event.keystroke.modifiers;
-    if (m.control || m.alt || m.platform) && key_name(event) != "ctrl+s" {
+    let named = key_name(event);
+    if (m.control || m.alt || m.platform) && named != "ctrl+s" && named != "ctrl+z" {
         return None;
     }
-    let key = key_name(event);
+    let key = named;
     if key == "ctrl+s" {
         return Some("save".to_string());
+    }
+    if key == "ctrl+z" {
+        return Some("undo-erase".to_string());
     }
     let desktop = &config.desktop;
     for (action, default) in ACTIONS {
@@ -1084,6 +1281,7 @@ impl AppView {
                 clamp(centre[0] - (x - from[0]) / w.max(1.0) * shown),
                 clamp(centre[1] - (y - from[1]) / h.max(1.0) * shown),
             ];
+            self.view_target = None;
             self.refresh_image();
         }
     }
@@ -1190,6 +1388,7 @@ impl AppView {
                     .iter()
                     .map(|x| (x.text.clone(), x.count, x.truncated))
                     .collect(),
+                reading_objs: t.readings.clone(),
                 silent: t.silent,
                 samples: t.samples,
                 error: None,
@@ -1199,6 +1398,7 @@ impl AppView {
                 backend: None,
                 elapsed_secs: 0.0,
                 readings: Vec::new(),
+                reading_objs: Vec::new(),
                 silent: 0,
                 samples: 0,
                 error: Some(e.clone()),
@@ -1364,6 +1564,10 @@ pub enum SliderKind {
     Contrast,
     Brightness,
     Gamma,
+    Strength,
+    BlackPoint,
+    WhitePoint,
+    EnhGamma,
 }
 
 impl SliderKind {
@@ -1373,6 +1577,10 @@ impl SliderKind {
             SliderKind::Contrast => "contrast",
             SliderKind::Brightness => "brightness",
             SliderKind::Gamma => "gamma",
+            SliderKind::Strength => "strength",
+            SliderKind::BlackPoint => "black",
+            SliderKind::WhitePoint => "white",
+            SliderKind::EnhGamma => "enh-gamma",
         }
     }
     /// (min, max) of the value, matching the desktop's Settings ranges.
@@ -1382,6 +1590,10 @@ impl SliderKind {
             SliderKind::Contrast => (0.5, 4.0),
             SliderKind::Brightness => (-0.5, 0.5),
             SliderKind::Gamma => (0.3, 3.0),
+            SliderKind::Strength => (0.0, 1.0),
+            SliderKind::BlackPoint => (0.0, 100.0),
+            SliderKind::WhitePoint => (0.0, 100.0),
+            SliderKind::EnhGamma => (0.3, 3.0),
         }
     }
 }
@@ -1394,6 +1606,9 @@ impl AppView {
     }
     pub fn slider_bounds_handle(&self) -> SliderBounds {
         Arc::clone(&self.slider_bounds)
+    }
+    pub fn clear_drag_kind(&mut self) {
+        self.drag = None;
     }
     pub fn drag_is_erase(&self) -> bool {
         matches!(self.drag, Some(Drag::Erase))
@@ -1416,6 +1631,30 @@ impl AppView {
             SliderKind::Contrast => self.display_slider("contrast", value, released, cx),
             SliderKind::Brightness => self.display_slider("brightness", value, released, cx),
             SliderKind::Gamma => self.display_slider("gamma", value, released, cx),
+            SliderKind::Strength
+            | SliderKind::BlackPoint
+            | SliderKind::WhitePoint
+            | SliderKind::EnhGamma => {
+                let mut config = self.engine.config().clone();
+                match kind {
+                    SliderKind::Strength => config.enhance.strength = value,
+                    SliderKind::BlackPoint => config.enhance.black_point = value,
+                    SliderKind::WhitePoint => config.enhance.white_point = value,
+                    _ => config.enhance.gamma = value,
+                }
+                self.cmd(
+                    if released {
+                        Command::SetConfig {
+                            config: Box::new(config),
+                        }
+                    } else {
+                        Command::PreviewConfig {
+                            config: Box::new(config),
+                        }
+                    },
+                    cx,
+                );
+            }
         }
     }
 
@@ -1444,11 +1683,175 @@ impl Drop for AppView {
     }
 }
 
+impl AppView {
+    /// The typeset image for result `index` reading `reading_idx`, starting
+    /// its off-thread render on first ask. `None` while pending/failed/absent
+    /// (the pane then shows styled text).
+    pub fn typeset_image(
+        &mut self,
+        index: usize,
+        reading_idx: usize,
+    ) -> Option<(Arc<RenderImage>, f32, usize, usize)> {
+        let typesetter = self.typesetter.clone()?;
+        let result = self.results.get(index)?;
+        let Ok(transcription) = &result.result else {
+            return None;
+        };
+        let reading = transcription.readings.get(reading_idx)?.clone();
+        let config = self.engine.config().clone();
+        let (fg, _, _) = theme_colours(config.desktop.theme);
+        let rgb = [
+            ((fg >> 16) & 0xff) as u8,
+            ((fg >> 8) & 0xff) as u8,
+            (fg & 0xff) as u8,
+        ];
+        let size_pt = config.ui.reading_size;
+        let width_pt = 360.0;
+        let scale = self.scale_factor.max(1.0);
+        let key = format!(
+            "{}:{}:{}:{:?}:{}",
+            self.results_generation,
+            index,
+            reading_idx,
+            (width_pt * 10.0) as i32,
+            (size_pt * 10.0) as i32
+        ) + &reading.text.chars().take(24).collect::<String>();
+        match self.typeset_cache.get(&key) {
+            Some(TypesetEntry::Ready(img, s2, w, h)) => Some((img.clone(), *s2, *w, *h)),
+            Some(_) => None,
+            None => {
+                self.typeset_cache
+                    .insert(key.clone(), TypesetEntry::Pending);
+                if self.typeset_tx.is_none() {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.typeset_tx = Some(tx);
+                    self.typeset_rx = Some(rx);
+                }
+                let tx = self.typeset_tx.clone().expect("just made");
+                std::thread::spawn(move || {
+                    let ui_cfg = config.ui.clone();
+                    let (text, spans) =
+                        squigl_engine::typeset::typeset_source(&reading, &ui_cfg, |c| {
+                            use squigl_engine::transcribe::Confidence;
+                            match c {
+                                Confidence::Steady => None,
+                                Confidence::Wavering => Some([255, 179, 0, 70]),
+                                Confidence::Hesitant => Some([229, 57, 53, 80]),
+                            }
+                        });
+                    let out = typesetter
+                        .render(&text, &spans, width_pt, size_pt, scale, rgb)
+                        .ok()
+                        .map(|(img, sc)| {
+                            let (w, h) = (img.width() as usize, img.height() as usize);
+                            (img.into_raw(), w, h, sc)
+                        });
+                    let _ = tx.send((key, out));
+                });
+                None
+            }
+        }
+    }
+}
+
+/// Disjoint highlight spans over `text`: unsure tokens underlined, and the
+/// sentence being read aloud (`spoken`, byte range) given a background.
+/// Spans are split at the spoken boundaries so GPUI's runs never overlap.
+pub fn highlight_spans(
+    text: &str,
+    tokens: Option<&[squigl_engine::transcribe::Token]>,
+    spoken: Option<std::ops::Range<usize>>,
+    ui: &squigl_engine::config::UiConfig,
+) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+    use squigl_engine::transcribe::Confidence;
+    let underline = |colour: u32, wavy: bool| UnderlineStyle {
+        thickness: px(1.5),
+        color: Some(rgb(colour).into()),
+        wavy,
+    };
+    // Base boundaries: token edges and the spoken range's edges.
+    let mut cuts: Vec<usize> = vec![0, text.len()];
+    let mut token_style: Vec<(std::ops::Range<usize>, Option<HighlightStyle>)> = Vec::new();
+    if let Some(tokens) = tokens {
+        let mut at = 0usize;
+        for tok in tokens {
+            let range = at..at + tok.text.len();
+            at += tok.text.len();
+            cuts.push(range.start);
+            cuts.push(range.end);
+            let style = match tok.confidence(ui) {
+                Confidence::Steady => None,
+                Confidence::Wavering => Some(HighlightStyle {
+                    color: Some(rgb(0xffb300).into()),
+                    underline: Some(underline(0xffb300, false)),
+                    ..Default::default()
+                }),
+                Confidence::Hesitant => Some(HighlightStyle {
+                    color: Some(rgb(0xe53935).into()),
+                    underline: Some(underline(0xe53935, true)),
+                    ..Default::default()
+                }),
+            };
+            token_style.push((range, style));
+        }
+    }
+    if let Some(sp) = &spoken {
+        cuts.push(sp.start.min(text.len()));
+        cuts.push(sp.end.min(text.len()));
+    }
+    cuts.retain(|c| text.is_char_boundary(*c));
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out = Vec::new();
+    for w in cuts.windows(2) {
+        let seg = w[0]..w[1];
+        if seg.is_empty() {
+            continue;
+        }
+        let mut style = token_style
+            .iter()
+            .find(|(r, _)| r.start <= seg.start && seg.end <= r.end)
+            .and_then(|(_, s)| *s)
+            .unwrap_or_default();
+        if let Some(sp) = &spoken {
+            if sp.start <= seg.start && seg.end <= sp.end.min(text.len()) {
+                style.background_color = Some(
+                    gpui_kit::Rgba {
+                        r: 1.0,
+                        g: 0.77,
+                        b: 0.0,
+                        a: 0.35,
+                    }
+                    .into(),
+                );
+            }
+        }
+        if style.color.is_some() || style.background_color.is_some() || style.underline.is_some() {
+            out.push((seg, style));
+        }
+    }
+    out
+}
+
+/// A UTF-16 offset (speech spans are in UTF-16 units) to a byte offset.
+pub fn utf16_to_byte(text: &str, units: usize) -> usize {
+    let mut used = 0usize;
+    for (byte, ch) in text.char_indices() {
+        if used >= units {
+            return byte;
+        }
+        used += ch.len_utf16();
+    }
+    text.len()
+}
+
 #[cfg(test)]
 mod tests {
     // Not `use super::*`: gpui-kit's glob brings GPUI's own `test` macro,
     // which would shadow Rust's here.
-    use super::{cover_strokes, from_slider, to_slider, zoom_bounds};
+    use super::{
+        cover_strokes, from_slider, highlight_spans, to_slider, utf16_to_byte, zoom_bounds,
+    };
     use squigl_engine::geometry::{Crop, Selection};
     use squigl_engine::stream::SourceSpec;
 
@@ -1464,6 +1867,49 @@ mod tests {
         // Ends are exact.
         assert_eq!(from_slider(0.0, bounds), 1.0);
         assert_eq!(from_slider(100.0, bounds), 100.0);
+    }
+
+    #[test]
+    fn highlights_split_at_the_spoken_sentence_and_stay_disjoint() {
+        use squigl_engine::transcribe::{Confidence, Token};
+        let text = "hello brave world";
+        let tokens = vec![
+            Token {
+                text: "hello ".into(),
+                prob: 0.99,
+                alternates: Vec::new(),
+            },
+            Token {
+                text: "brave ".into(),
+                prob: 0.05,
+                alternates: Vec::new(),
+            },
+            Token {
+                text: "world".into(),
+                prob: 0.99,
+                alternates: Vec::new(),
+            },
+        ];
+        let _ = Confidence::Steady;
+        let spans = highlight_spans(text, Some(&tokens), Some(3..8), &Default::default());
+        // Sorted and non-overlapping.
+        for w in spans.windows(2) {
+            assert!(w[0].0.end <= w[1].0.start, "{spans:?}");
+        }
+        // The hesitant token's range carries a style; the spoken part has a bg.
+        assert!(spans
+            .iter()
+            .any(|(r, st)| r.start >= 6 && st.color.is_some()));
+        assert!(spans.iter().any(|(_, st)| st.background_color.is_some()));
+    }
+
+    #[test]
+    fn utf16_offsets_convert_past_multibyte_chars() {
+        let text = "aé𝑏c"; // é: 1 unit/2 bytes, 𝑏: 2 units/4 bytes
+        assert_eq!(utf16_to_byte(text, 0), 0);
+        assert_eq!(utf16_to_byte(text, 2), 3);
+        assert_eq!(utf16_to_byte(text, 4), 7);
+        assert_eq!(utf16_to_byte(text, 99), text.len());
     }
 
     #[test]

@@ -10954,6 +10954,7 @@ dependencies = [
  "smallvec",
  "squigl-core",
  "squigl-engine",
+ "squigl-math",
  "squigl-models",
  "squigl-pairing",
  "squigl-speech",

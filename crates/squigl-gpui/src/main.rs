@@ -16,6 +16,7 @@ mod guidance;
 mod interact;
 mod pairing;
 mod render;
+mod zoom;
 
 use app::AppView;
 use clap::Parser;
