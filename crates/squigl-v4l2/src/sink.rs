@@ -133,6 +133,16 @@ impl LazyV4l2Sink {
 
 impl FrameSink for LazyV4l2Sink {
     fn frame(&mut self, frame: &YuvFrame) -> Result<()> {
+        // The browser may change size mid-stream (the phone turns, or its encoder
+        // renegotiates): follow it by reopening, as the engine's tee does, rather
+        // than ending the session on the size mismatch.
+        if self
+            .sink
+            .as_ref()
+            .is_some_and(|s| s.size() != (frame.width as u32, frame.height as u32))
+        {
+            self.sink = None;
+        }
         let sink = match &mut self.sink {
             Some(sink) => sink,
             None => self.sink.insert(V4l2Sink::open(
@@ -142,5 +152,36 @@ impl FrameSink for LazyV4l2Sink {
             )?),
         };
         sink.frame(frame)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(width: usize, height: usize) -> YuvFrame {
+        YuvFrame {
+            width,
+            height,
+            y: vec![128; width * height],
+            u: vec![128; width * height / 4],
+            v: vec![128; width * height / 4],
+        }
+    }
+
+    /// A paired phone's stream can change size mid-session (the phone turns, or
+    /// its browser renegotiates); the lazy sink must follow, not end the session
+    /// with "frame is AxB, sink was opened at CxD". Needs a v4l2loopback device;
+    /// skipped where there is none (CI has no /dev/video10 unless one is set up).
+    #[test]
+    fn lazy_sink_follows_a_mid_stream_size_change() {
+        let path = Path::new("/dev/video10");
+        if !path.exists() {
+            return;
+        }
+        let mut sink = LazyV4l2Sink::new(path);
+        sink.frame(&frame(320, 240)).unwrap();
+        sink.frame(&frame(176, 320)).unwrap();
+        sink.frame(&frame(320, 240)).unwrap();
     }
 }

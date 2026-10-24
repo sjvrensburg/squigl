@@ -397,9 +397,19 @@ fn certificate(dir: Option<&Path>, names: &[String]) -> Result<Cert> {
 }
 
 fn generate(names: &[String]) -> Result<Cert> {
-    let rcgen::CertifiedKey { cert, signing_key } =
-        rcgen::generate_simple_self_signed(names.to_vec())
-            .context("generating a self-signed TLS certificate")?;
+    // Not `generate_simple_self_signed`: that leaves BasicConstraints out
+    // entirely, and Android's Conscrypt then refuses the certificate as a
+    // trust anchor even when a user installs it in the system CA store
+    // (WebView browsers show a blank page instead of a warning). Marking it
+    // CA:TRUE keeps the fingerprint/interstitial behaviour identical in
+    // Chrome-class browsers while making the cert installable where needed.
+    let mut params = rcgen::CertificateParams::new(names.to_vec())
+        .context("generating a self-signed TLS certificate")?;
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let signing_key = rcgen::KeyPair::generate().context("generating a TLS key pair")?;
+    let cert = params
+        .self_signed(&signing_key)
+        .context("generating a self-signed TLS certificate")?;
     Ok(Cert {
         cert_pem: cert.pem(),
         key_pem: signing_key.serialize_pem(),

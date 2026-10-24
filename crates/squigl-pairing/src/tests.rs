@@ -1,5 +1,42 @@
 use super::*;
 use std::io::Write;
+
+/// The generated certificate must be usable as a trust anchor: Android's
+/// Conscrypt ignores a CA-store entry without BasicConstraints CA:TRUE (the
+/// old `generate_simple_self_signed` output), which left WebView browsers
+/// showing a blank page for the pairing address. The DER needle is the
+/// extension (OID 2.5.29.19, critical, cA TRUE) as rcgen encodes it.
+#[test]
+fn the_generated_certificate_is_a_ca() {
+    let cert = generate(&["192.168.1.169".to_string()]).unwrap();
+    // Re-derive the DER from the PEM (base64 between the markers).
+    let body: String = cert
+        .cert_pem
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect();
+    let mut der = Vec::new();
+    // Minimal base64 decode via the standard alphabet.
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut acc: u32 = 0;
+    let mut bits = 0;
+    for b in body.bytes().filter(|b| !b"=".contains(b)) {
+        let v = alphabet.iter().position(|&c| c == b).unwrap() as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            der.push((acc >> bits) as u8);
+        }
+    }
+    let needle: [u8; 13] = [
+        0x06, 0x03, 0x55, 0x1d, 0x13, 0x01, 0x01, 0xff, 0x04, 0x05, 0x30, 0x03, 0x01,
+    ];
+    assert!(
+        der.windows(needle.len()).any(|w| w == needle),
+        "certificate lacks a critical BasicConstraints extension"
+    );
+}
 use std::net::{Ipv4Addr, TcpStream};
 use std::sync::mpsc;
 
