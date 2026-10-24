@@ -18,15 +18,25 @@ pub enum ReadingLine {
     Image(Arc<RenderImage>, f32, usize, usize),
 }
 
+/// One thing a detached window asked the main window to do. Commands and
+/// shortcut actions share one queue so they run in the order they were
+/// pressed (a Read click followed by Escape must not swap).
+pub enum DetachedMsg {
+    Command(Command),
+    Action(String),
+}
+
 pub struct DetachedShared {
     pub kind: &'static str,
     pub title: &'static str,
     pub open: Mutex<bool>,
     pub image: Mutex<Option<Arc<RenderImage>>>,
     pub lines: Mutex<Vec<ReadingLine>>,
-    pub commands: Mutex<Vec<Command>>,
-    pub actions: Mutex<Vec<String>>,
+    pub queue: Mutex<Vec<DetachedMsg>>,
     pub config: Mutex<Option<Config>>,
+    /// The detached Reading window's content width in logical px, so a
+    /// typeset reading is laid out for the window that shows it.
+    pub width: Mutex<Option<f32>>,
 }
 
 impl DetachedShared {
@@ -42,9 +52,9 @@ impl DetachedShared {
             open: Mutex::new(false),
             image: Mutex::new(None),
             lines: Mutex::new(Vec::new()),
-            commands: Mutex::new(Vec::new()),
-            actions: Mutex::new(Vec::new()),
+            queue: Mutex::new(Vec::new()),
             config: Mutex::new(None),
+            width: Mutex::new(None),
         })
     }
 
@@ -56,6 +66,9 @@ impl DetachedShared {
 pub struct DetachedView {
     shared: Arc<DetachedShared>,
     focus: FocusHandle,
+    /// Images shown by the previous render: ones no longer shown are
+    /// dropped from this window's atlas instead of accumulating.
+    shown: Vec<Arc<RenderImage>>,
 }
 
 impl DetachedView {
@@ -72,13 +85,19 @@ impl DetachedView {
             }
         })
         .detach();
-        Self { shared, focus }
+        Self {
+            shared,
+            focus,
+            shown: Vec::new(),
+        }
     }
 }
 
 impl Drop for DetachedView {
     fn drop(&mut self) {
         *self.shared.open.lock().unwrap() = false;
+        // Nothing queued by a closed window may run later.
+        self.shared.queue.lock().unwrap().clear();
     }
 }
 
@@ -87,8 +106,23 @@ fn btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 }
 
 impl Render for DetachedView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let shared = Arc::clone(&self.shared);
+        // Release atlas tiles for images this render no longer shows.
+        let mut now_shown: Vec<Arc<RenderImage>> = Vec::new();
+        if let Some(image) = shared.image.lock().unwrap().clone() {
+            now_shown.push(image);
+        }
+        for line in shared.lines.lock().unwrap().iter() {
+            if let ReadingLine::Image(image, ..) = line {
+                now_shown.push(image.clone());
+            }
+        }
+        for old in std::mem::replace(&mut self.shown, now_shown) {
+            if !self.shown.iter().any(|i| i.id == old.id) {
+                let _ = window.drop_image(old);
+            }
+        }
         let mut root = div()
             .track_focus(&self.focus)
             .on_key_down({
@@ -96,7 +130,11 @@ impl Render for DetachedView {
                 move |event: &KeyDownEvent, _, _| {
                     if let Some(config) = shared.config.lock().unwrap().clone() {
                         if let Some(action) = crate::app::action_for(event, &config) {
-                            shared.actions.lock().unwrap().push(action);
+                            shared
+                                .queue
+                                .lock()
+                                .unwrap()
+                                .push(DetachedMsg::Action(action));
                         }
                     }
                 }
@@ -104,8 +142,28 @@ impl Render for DetachedView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x1a1a1e))
-            .text_color(rgb(0xe8e8e8));
+            .bg(rgb({
+                let (bg, _, _) = crate::app::theme_colours(
+                    shared
+                        .config
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map_or(Default::default(), |c| c.desktop.theme),
+                );
+                bg
+            }))
+            .text_color(rgb({
+                let (_, fg, _) = crate::app::theme_colours(
+                    shared
+                        .config
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map_or(Default::default(), |c| c.desktop.theme),
+                );
+                fg
+            }));
         match self.shared.kind {
             "reading" => {
                 let mut controls = div().flex().flex_row().flex_wrap().gap_1().p_1();
@@ -119,22 +177,39 @@ impl Render for DetachedView {
                 ] {
                     let shared = Arc::clone(&self.shared);
                     controls = controls.child(btn(id, label).on_click(move |_, _, _| {
-                        shared.commands.lock().unwrap().push(command.clone());
+                        shared
+                            .queue
+                            .lock()
+                            .unwrap()
+                            .push(DetachedMsg::Command(command.clone()));
                     }));
                 }
                 let shared_clear = Arc::clone(&self.shared);
                 controls =
                     controls.child(btn("d-clear", "Clear readings").on_click(move |_, _, _| {
                         shared_clear
-                            .commands
+                            .queue
                             .lock()
                             .unwrap()
-                            .push(Command::ClearResults);
+                            .push(DetachedMsg::Command(Command::ClearResults));
                     }));
                 let _ = cx;
                 root = root.child(controls);
+                let width_slot = Arc::clone(&self.shared);
                 let mut list = div()
                     .id("detached-readings")
+                    .relative()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| {
+                                *width_slot.width.lock().unwrap() =
+                                    Some(bounds.size.width.as_f32());
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
                     .flex()
                     .flex_col()
                     .gap_2()

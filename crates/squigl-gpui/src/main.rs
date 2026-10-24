@@ -95,11 +95,11 @@ fn voice(wake: squigl_engine::engine::Waker) -> Option<Box<dyn squigl_engine::sp
                 notify: wake.clone(),
             },
         )));
-        match squigl_speech::Voices::start(
-            wake,
-            #[cfg(feature = "local-model")]
-            kokoro,
-        ) {
+        #[cfg(feature = "local-model")]
+        let started = squigl_speech::Voices::start_with_kokoro(wake, kokoro);
+        #[cfg(not(feature = "local-model"))]
+        let started = squigl_speech::Voices::start(wake);
+        match started {
             Ok(v) => {
                 log::info!("reading aloud ready");
                 return Some(Box::new(v));
@@ -228,7 +228,8 @@ fn main() -> anyhow::Result<()> {
         _ => squigl_core::convert::Rotation::None,
     };
 
-    if args.dev_fake_phone {
+    // Kept by the view, which logs what its camera is asked for.
+    let fake_phone = if args.dev_fake_phone {
         let queue = pairing.sessions_queue();
         match squigl_pairing::testing::FakePhone::connect((640, 480), move |offer| {
             let local = std::net::Ipv4Addr::LOCALHOST.into();
@@ -237,10 +238,15 @@ fn main() -> anyhow::Result<()> {
             queue.lock().unwrap().push(session);
             Ok(answer)
         }) {
-            Ok(phone) => std::mem::forget(phone),
-            Err(e) => log::error!("the fake phone did not pair: {e}"),
+            Ok(phone) => Some(phone),
+            Err(e) => {
+                log::error!("the fake phone did not pair: {e}");
+                None
+            }
         }
-    }
+    } else {
+        None
+    };
 
     let dev_detach = args.dev_detach.clone();
     let wake_for_engine = Arc::clone(&wake_flag);
@@ -262,9 +268,15 @@ fn main() -> anyhow::Result<()> {
             );
             // Startup rotation (the engine starts unrotated).
             // Applied as a command once the view exists, below.
+            let mut fake_phone = fake_phone;
             gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, move |window, cx| {
                 cx.new(|cx| {
                     let mut view = AppView::new(engine, pairing, wake_flag, window, cx);
+                    view.dev_phone = fake_phone.take();
+                    #[cfg(feature = "math")]
+                    {
+                        view.typesetter = Some(std::sync::Arc::new(squigl_math::Renderer::new()));
+                    }
                     if rotation != squigl_core::convert::Rotation::None {
                         view.cmd(squigl_engine::engine::Command::SetRotation { rotation }, cx);
                     }

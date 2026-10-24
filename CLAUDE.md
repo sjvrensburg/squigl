@@ -28,7 +28,7 @@ cargo clippy --all-targets [--features ffmpeg]
 cargo fmt --all -- --check             # CI enforces this and clippy -D warnings, both feature sets
 (cd crates/squigl-desktop/ui && npm ci && npm run check && npm test && npm run build)   # the desktop app's web UI, first
 cargo build --release -p squigl-desktop [--features ffmpeg]   # the Tauri app (needs WebKitGTK 4.1 and libspeechd-dev headers on Linux)
-cargo build --release -p squigl-gpui [--features speech]     # the GPUI app, Linux only (needs libxkbcommon-x11-devel, wayland-devel, vulkan-loader-devel, fontconfig-devel; speech adds libspeechd-devel)
+cargo build --release -p squigl-gpui     # the GPUI app, Linux only (needs libxkbcommon-x11-devel, wayland-devel, vulkan-loader-devel, fontconfig-devel, and -- speech being a default feature -- libspeechd-devel and alsa-lib-devel; `--no-default-features` drops models/speech/maths and those headers)
 cargo test -p squigl-speech --features kokoro [--release -- --ignored --nocapture listen]   # reading aloud; `listen` says a sentence and its maths (Kokoro if in $SQUIGL_MODEL_DIR/kokoro)
 SQUIGL_MODEL_DIR=... cargo test -p squigl-misaki --release -- --include-ignored   # the Misaki port against Python Misaki's readings (needs the Kokoro download's misaki*/ files)
 cargo build --release -p squigl-core --example synth_recording && node --test crates/squigl-desktop/e2e/app.test.mjs

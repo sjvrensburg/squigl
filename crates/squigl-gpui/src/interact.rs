@@ -63,6 +63,16 @@ impl AppView {
     }
 
     pub fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // A Zoom-pane erase stroke is the zoom pane's, not this picture's.
+        if matches!(self.drag_kind(), Some(crate::app::DragKind::EraseZoom)) {
+            return;
+        }
+        // A drag whose button is no longer down lost its release outside
+        // the picture: commit it from its last point, do not strand it.
+        if self.drag_kind().is_some() && event.pressed_button != Some(MouseButton::Left) {
+            self.finish_drag(cx);
+            return;
+        }
         let Some(pt) = self.to_view_f(event.position) else {
             return;
         };
@@ -89,13 +99,20 @@ impl AppView {
                 self.update_pan(event.position);
                 cx.notify();
             }
-            None => {}
+            Some(crate::app::DragKind::EraseZoom) | None => {}
         }
     }
 
     pub fn mouse_up(&mut self, _event: &MouseUpEvent, cx: &mut Context<Self>) {
-        // Outside the picture there is no fresh point; the gesture still
-        // commits from its last known point instead of vanishing.
+        if matches!(self.drag_kind(), Some(crate::app::DragKind::EraseZoom)) {
+            return;
+        }
+        self.finish_drag(cx);
+    }
+
+    /// Commits the current gesture from its last known point (a release
+    /// outside the picture has no fresh point, but still commits).
+    pub fn finish_drag(&mut self, cx: &mut Context<Self>) {
         match self.take_drag() {
             Some(crate::app::FinishedDrag::Draw { from, to }) => {
                 let p = to;
@@ -149,6 +166,7 @@ impl AppView {
         let models = self.engine_models();
         let speech = self.engine_speech();
         let (pane_bg, _, _) = crate::app::theme_colours(self.config_clone().desktop.theme);
+        let card_bg = crate::app::card_colour(self.config_clone().desktop.theme);
         let mut pane = div()
             .h_full()
             .flex()
@@ -210,7 +228,7 @@ impl AppView {
                     ),
             );
         }
-        for model in &models {
+        for (mi, model) in models.iter().enumerate() {
             let phase = model.phase.describe();
             let model_name = model.name.clone();
             let ready = matches!(model.phase, squigl_engine::model::ModelPhase::Ready { .. });
@@ -231,18 +249,20 @@ impl AppView {
                     | squigl_engine::model::ModelPhase::Verifying
             ) {
                 let n = model_name.clone();
-                row = row.child(btn("cancel-model", "Cancel").on_click(cx.listener(
-                    move |view, _, _, cx| {
-                        view.cmd(Command::CancelModelDownload { name: n.clone() }, cx);
-                    },
-                )));
+                row = row.child(
+                    btn(format!("cancel-model-{mi}"), "Cancel").on_click(cx.listener(
+                        move |view, _, _, cx| {
+                            view.cmd(Command::CancelModelDownload { name: n.clone() }, cx);
+                        },
+                    )),
+                );
             } else {
                 let n = model_name.clone();
-                row = row.child(btn("prepare-model", "Get ready").on_click(cx.listener(
-                    move |view, _, _, cx| {
+                row = row.child(btn(format!("prepare-model-{mi}"), "Get ready").on_click(
+                    cx.listener(move |view, _, _, cx| {
                         view.cmd(Command::PrepareModel { name: n.clone() }, cx);
-                    },
-                )));
+                    }),
+                ));
             }
             pane = pane.child(row);
         }
@@ -415,7 +435,7 @@ impl AppView {
             let Some(detail) = self.result_detail(index) else {
                 continue;
             };
-            let mut card = div().flex().flex_col().gap_1().p_2().bg(rgb(0x2c2c34));
+            let mut card = div().flex().flex_col().gap_1().p_2().bg(rgb(card_bg));
             if let Some(label) = &detail.label {
                 card = card.child(div().text_sm().child(label.clone()));
             }
@@ -485,14 +505,14 @@ impl AppView {
             );
             list = list.child(card);
         }
-        pane = pane.child(list);
-        // History + housekeeping.
+        // History scrolls with the readings rather than squeezing them
+        // from below as it grows; the footer goes with it.
         if !self.history_entries().is_empty() {
-            pane = pane.child(div().text_base().child("History"));
+            list = list.child(div().text_base().child("History"));
             for (hi, entry) in self.history_entries().iter().enumerate() {
                 let text = entry.clone();
-                pane =
-                    pane.child(
+                list =
+                    list.child(
                         div()
                             .flex()
                             .flex_row()
@@ -528,7 +548,8 @@ impl AppView {
             })),
         );
         foot = foot.child(div().child(format!("{} in history", self.history_len())));
-        pane = pane.child(foot);
+        list = list.child(foot);
+        pane = pane.child(list);
         let _ = Selection {
             rect: Crop {
                 x: 0,
@@ -586,10 +607,13 @@ impl AppView {
         let config = self.config_clone();
         let (panel_bg, _, _) = crate::app::theme_colours(self.config_clone().desktop.theme);
         let mut panel = div()
+            .id("settings-panel")
             .absolute()
             .right(px(8.0))
             .top(px(48.0))
             .w(px(340.0))
+            .max_h(relative(0.9))
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_2()
@@ -1004,7 +1028,12 @@ impl AppView {
                 }),
         );
         for (action, _) in crate::app::ACTIONS {
-            let key = crate::app::action_key(&config, action);
+            let bound = crate::app::action_key(&config, action);
+            let key = if bound.is_empty() {
+                "(none)".to_string()
+            } else {
+                bound
+            };
             let a = action.to_string();
             panel = panel.child(
                 div()
@@ -1032,16 +1061,18 @@ impl AppView {
     }
 
     pub fn pair_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (panel_bg, _, _) = crate::app::theme_colours(self.config_clone().desktop.theme);
         let mut panel = div()
             .absolute()
             .left(relative(0.25))
             .top(relative(0.15))
             .w(relative(0.5))
+            .max_h(relative(0.8))
             .flex()
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(rgb(0x24242c))
+            .bg(rgb(panel_bg))
             .border(px(1.0))
             .border_color(rgb(0x888888));
         panel = panel.child(div().text_lg().child("Pair a phone"));
@@ -1050,7 +1081,7 @@ impl AppView {
             let note = self.pair_note_text();
             panel = panel.child(div().child(note));
         }
-        for offer in self.pair_offers() {
+        for (oi, offer) in self.pair_offers().into_iter().enumerate() {
             let url = offer.url.clone();
             let mut row = div().flex().flex_col().gap_1()
                 .child(div().child(format!("{} {}: {}", if offer.overlay { "Overlay" } else { "Network" }, offer.network, offer.url)))
@@ -1069,11 +1100,13 @@ impl AppView {
                 .w(px(160.0))
                 .h(px(160.0)),
             );
-            row = row.child(btn("copy-url", "Copy address").on_click(cx.listener(
-                move |_, _, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
-                },
-            )));
+            row = row.child(
+                btn(format!("copy-url-{oi}"), "Copy address").on_click(cx.listener(
+                    move |_, _, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                    },
+                )),
+            );
             row = row.child(div().text_sm().child("If the phone is on another network, pair through an overlay (Tailscale, ZeroTier) both are on; Squigl cannot join one for the phone."));
             panel = panel.child(row);
         }

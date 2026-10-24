@@ -172,9 +172,34 @@ impl AppView {
                     )),
             );
         }
+        // The erase brush, here as in the reading pane: painting on the
+        // zoomed crop is the precise way to erase, so its controls live
+        // beside it (Ctrl+wheel here also resizes the brush).
+        let mut brow = div().flex().flex_row().flex_wrap().gap_1().items_center();
+        brow = brow.child(
+            btn(
+                "zoom-brush",
+                if self.is_erasing() {
+                    "Brush on (e)"
+                } else {
+                    "Erase brush (e)"
+                },
+            )
+            .on_click(cx.listener(|view, _, _, cx| view.toggle_erasing(cx))),
+        );
+        brow = brow.child(
+            btn("zoom-brush-minus", "Brush -")
+                .on_click(cx.listener(|view, _, _, cx| view.brush_by(-4.0, cx))),
+        );
+        brow = brow.child(div().child(format!("{:.0}px", self.brush_radius())));
+        brow = brow.child(
+            btn("zoom-brush-plus", "Brush +")
+                .on_click(cx.listener(|view, _, _, cx| view.brush_by(4.0, cx))),
+        );
+        pane = pane.child(brow);
         pane = pane.child(self.zoom_picture(cx));
         pane = pane.child(div().text_sm().child(
-            "Wheel here resizes the box. With the erase brush on, paint here to erase under the crop (Ctrl+Z undoes).",
+            "Wheel here resizes the box, Ctrl+wheel the brush. With the erase brush on, paint here to erase under the crop (Ctrl+Z undoes).",
         ));
         pane
     }
@@ -194,6 +219,10 @@ impl AppView {
                 cx.listener(|view, event: &MouseMoveEvent, _, cx| view.zoom_mouse_move(event, cx)),
             )
             .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| view.zoom_mouse_up(event, cx)),
+            )
+            .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| view.zoom_mouse_up(event, cx)),
             )
@@ -228,10 +257,12 @@ impl AppView {
                 );
             }
         }
-        // The stroke being painted, in image fractions mapped to the display.
-        if self.drag_is_erase() {
-            if let (Some(sel), Some((dw, dh))) = (self.selection(), self.zoom_display) {
-                let _ = (dw, dh);
+        // The stroke being painted: dots at brush size, positioned
+        // within the fitted image (which may be letterboxed inside the
+        // area), against the selection captured when the stroke began.
+        if self.drag_is_erase_zoom() {
+            if let (Some((sel, _)), Some((dw, dh))) = (self.zoom_stroke, self.zoom_display) {
+                let dot = (2.0 * self.brush_radius()).clamp(4.0, 160.0);
                 for pt in self.erase_points_view() {
                     // View point back to an image fraction via the rect.
                     let fx = (pt[0] - sel.rect.x as f32) / sel.rect.w.max(1) as f32;
@@ -239,10 +270,10 @@ impl AppView {
                     area = area.child(
                         div()
                             .absolute()
-                            .left(relative(fx.clamp(0.0, 1.0)))
-                            .top(relative(fy.clamp(0.0, 1.0)))
-                            .w(px(6.0))
-                            .h(px(6.0))
+                            .left(px(fx.clamp(0.0, 1.0) * dw - dot / 2.0))
+                            .top(px(fy.clamp(0.0, 1.0) * dh - dot / 2.0))
+                            .w(px(dot))
+                            .h(px(dot))
                             .rounded_full()
                             .bg(rgb(0xff5a5a)),
                     );
@@ -266,10 +297,14 @@ impl AppView {
     fn zoom_frac(&self, pos: Point<Pixels>) -> Option<[f32; 2]> {
         let (ox, oy, _, _) = (*self.zoom_canvas.lock().unwrap())?;
         let (dw, dh) = self.zoom_display?;
-        Some([
-            ((pos.x.as_f32() - ox) / dw.max(1.0)).clamp(0.0, 1.0),
-            ((pos.y.as_f32() - oy) / dh.max(1.0)).clamp(0.0, 1.0),
-        ])
+        let fx = (pos.x.as_f32() - ox) / dw.max(1.0);
+        let fy = (pos.y.as_f32() - oy) / dh.max(1.0);
+        // The letterbox around the fitted image is not the crop: a press
+        // there paints nothing rather than clamping onto the edge.
+        (0.0..=1.0)
+            .contains(&fx)
+            .then_some([fx, fy])
+            .filter(|_| (0.0..=1.0).contains(&fy))
     }
 
     pub fn zoom_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
@@ -280,35 +315,56 @@ impl AppView {
         let Some(frac) = self.zoom_frac(event.position) else {
             return;
         };
+        let Some((dw, _)) = self.zoom_display else {
+            return;
+        };
         if let Some(pt) = zoom_to_view(sel, frac) {
-            self.set_drag_erase(vec![pt]);
+            // Brush radius in view pixels, measured through the same
+            // rectification the points go through: the distance between
+            // where the brush centre and its right edge land. A quad's
+            // scale varies across it, so the rect-width ratio is wrong.
+            let edge_frac = [frac[0] + self.brush_radius() / dw.max(1.0), frac[1]];
+            let radius = zoom_to_view(sel, edge_frac)
+                .map_or(self.brush_radius(), |edge| {
+                    (edge[0] - pt[0]).hypot(edge[1] - pt[1])
+                })
+                .max(0.5);
+            // The stroke belongs to this selection as it is now; the
+            // rest of the stroke maps through it even if the selection
+            // is changed mid-paint.
+            self.zoom_stroke = Some((sel, radius));
+            self.set_drag_erase_zoom(vec![pt]);
             cx.notify();
         }
     }
 
     pub fn zoom_mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if !self.drag_is_erase() {
+        if !self.drag_is_erase_zoom() {
             return;
         }
-        let Some(sel) = self.selection() else { return };
+        if event.pressed_button != Some(MouseButton::Left) {
+            // The release happened where this pane did not see it.
+            self.zoom_finish(cx);
+            return;
+        }
+        let Some((sel, radius)) = self.zoom_stroke else {
+            return;
+        };
         let Some(frac) = self.zoom_frac(event.position) else {
             return;
         };
         if let Some(pt) = zoom_to_view(sel, frac) {
-            self.extend_erase(pt);
+            self.extend_erase_spaced(pt, radius / 3.0);
             cx.notify();
         }
     }
 
-    pub fn zoom_mouse_up(&mut self, _event: &MouseUpEvent, cx: &mut Context<Self>) {
-        if !self.drag_is_erase() {
-            return;
-        }
+    fn zoom_finish(&mut self, cx: &mut Context<Self>) {
         self.clear_drag_kind();
+        let captured = self.zoom_stroke.take();
         if let Some(mut stroke) = self.take_erase_stroke() {
-            // Brush radius: screen px on the zoom image to view px.
-            if let (Some(sel), Some((dw, _))) = (self.selection(), self.zoom_display) {
-                stroke.radius = self.brush_radius() * (sel.rect.w as f32 / dw.max(1.0));
+            if let Some((_, radius)) = captured {
+                stroke.radius = radius;
             }
             let mut strokes = self.erasures();
             self.push_erase_step(strokes.len());
@@ -317,15 +373,40 @@ impl AppView {
         }
     }
 
-    pub fn zoom_scroll(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        // Wheel over the zoomed crop grows/shrinks the box about its centre.
-        let Some(sel) = self.selection() else { return };
-        let Some(view) = self.view_size() else { return };
-        let delta = event.delta.pixel_delta(px(16.0)).y.as_f32();
-        if delta.abs() < 4.0 {
+    pub fn zoom_mouse_up(&mut self, _event: &MouseUpEvent, cx: &mut Context<Self>) {
+        if !self.drag_is_erase_zoom() {
             return;
         }
-        let factor = if delta < 0.0 { 1.1 } else { 1.0 / 1.1 };
+        self.zoom_finish(cx);
+    }
+
+    pub fn zoom_scroll(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let delta = event.delta.pixel_delta(px(16.0)).y.as_f32();
+        if event.modifiers.control {
+            // Ctrl+wheel sizes the brush, as over the main picture's
+            // pane in egui terms; accumulated so smooth wheels work.
+            self.zoom_wheel_acc += delta;
+            let notches = (self.zoom_wheel_acc / 16.0).trunc();
+            if notches != 0.0 {
+                self.zoom_wheel_acc -= notches * 16.0;
+                self.brush_by(-notches * 2.0, cx);
+            }
+            return;
+        }
+        // Wheel over the zoomed crop resizes the box about its centre,
+        // one factor per notch: up (away) shrinks the box, i.e. zooms
+        // in further, the same direction as the main view's wheel.
+        let Some(sel) = self.selection() else { return };
+        let Some(view) = self.view_size() else { return };
+        self.zoom_wheel_acc += delta;
+        let notches = (self.zoom_wheel_acc / 16.0).trunc();
+        if notches == 0.0 {
+            return;
+        }
+        self.zoom_wheel_acc -= notches * 16.0;
+        // delta < 0 (up) gives negative notches: factor below 1, smaller box.
+        let factor = 1.1f32.powf(notches);
+        log::debug!("zoom wheel: {notches} notches, box x{factor:.3}");
         let scaled = sel.rect.scaled(factor, view.0, view.1);
         self.cmd(
             Command::SetSelection {

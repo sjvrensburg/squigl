@@ -33,6 +33,18 @@ pub struct FrameKey {
     pub smooth: bool,
 }
 
+/// The sequence a `FrameKey` carries: the frozen capture's and the live
+/// stream's numbers come from different counters and can coincide, so the
+/// frozen one is tagged. Freeze/unfreeze at the same number then still
+/// counts as a new picture.
+pub fn shown_seq(frozen: bool, seq: u64) -> u64 {
+    if frozen {
+        seq | (1 << 63)
+    } else {
+        seq & !(1 << 63)
+    }
+}
+
 impl FrameKey {
     pub fn of(planes: &ViewPlanes, lut: u64, erasures: u64, smooth: bool) -> Self {
         let h = &planes.header;
@@ -201,6 +213,14 @@ pub fn rgba_to_render_image(mut rgba: Vec<u8>, w: usize, h: usize) -> Arc<Render
 mod tests {
     use super::*;
     use squigl_engine::display::{DisplayConfig, DisplayMode};
+
+    #[test]
+    fn shown_seq_keeps_frozen_and_live_apart_at_the_same_number() {
+        assert_ne!(shown_seq(true, 7), shown_seq(false, 7));
+        assert_eq!(shown_seq(false, 7), 7);
+        // The tag never collides with a live counter value.
+        assert_eq!(shown_seq(true, 7) & !(1 << 63), 7);
+    }
 
     fn planes(y: Vec<u8>, u: Vec<u8>, v: Vec<u8>, w: usize, h: usize) -> Planes {
         Planes {

@@ -389,3 +389,8 @@ jobs:
 
       - name: Build
         run: cargo build --release -p squigl-gpui
+
+      # The trimmed build (no built-in models, speech or typesetting)
+      # must keep compiling: feature-gated call sites rot first.
+      - name: Build without default features
+        run: cargo build -p squigl-gpui --no-default-features

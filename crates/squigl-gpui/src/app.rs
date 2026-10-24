@@ -5,7 +5,7 @@
 //! which sets a flag the pump loop collects at ~50 Hz, and a new live frame is
 //! converted at most once per pump from the engine's decimated planes.
 
-use crate::frame::{erasures_key, lut_key, to_render_image, FrameKey};
+use crate::frame::{erasures_key, lut_key, shown_seq, to_render_image, FrameKey};
 use crate::pairing::{Offer, Pairing};
 use gpui_kit::*;
 use squigl_core::convert::PlaneFormat;
@@ -44,6 +44,9 @@ pub enum Drag {
     },
     Corner(usize),
     Erase,
+    /// An erase stroke painted on the Zoom pane: kept apart from `Erase`
+    /// so a stroke started on one picture cannot continue on the other.
+    EraseZoom,
     Pan {
         from: [f32; 2],
         centre: [f32; 2],
@@ -126,6 +129,25 @@ pub struct AppView {
     pub results_generation: u64,
     pub last_pump: Instant,
     pub results_scroll: ScrollHandle,
+    /// Focus handles for the custom sliders (keyboard control), by kind.
+    pub slider_focuses: Vec<FocusHandle>,
+    /// Detached windows' handles, closed when the main window closes.
+    pub detached_windows: Arc<Mutex<Vec<AnyWindowHandle>>>,
+    /// Last seen (preview, zoom, reading) detached-open states, so a
+    /// detached window closing redraws the main window at once.
+    pub detached_open_seen: [bool; 3],
+    /// What was last published to the detached windows: (preview image id,
+    /// zoom image id, reading content key), so unchanged snapshots are
+    /// not rebuilt every pump.
+    pub detached_published: (Option<ImageId>, Option<ImageId>, u64),
+    /// Typeset renders currently running off-thread (bounded).
+    pub typeset_inflight: usize,
+    /// The selection and brush radius captured when a Zoom-pane erase
+    /// stroke started: the stroke belongs to that frame, even if the
+    /// selection moves while it is painted.
+    pub zoom_stroke: Option<(Selection, f32)>,
+    /// Zoom-pane wheel accumulator, in pixels not yet a full notch.
+    pub zoom_wheel_acc: f32,
 }
 
 impl AppView {
@@ -138,6 +160,19 @@ impl AppView {
     ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let slider_focuses: Vec<FocusHandle> = (0..8).map(|_| cx.focus_handle()).collect();
+        // Detached pane windows must not outlive the main window: closing
+        // it closes them too (their views then drop, quiescing publishing).
+        let detached_windows: Arc<Mutex<Vec<AnyWindowHandle>>> = Arc::new(Mutex::new(Vec::new()));
+        {
+            let windows = Arc::clone(&detached_windows);
+            window.on_window_should_close(cx, move |_, cx| {
+                for handle in windows.lock().unwrap().iter() {
+                    let _ = handle.update(cx, |_, window, _| window.remove_window());
+                }
+                true
+            });
+        }
         // The pump: collect whatever the waker flagged, 50 times a second.
         // Between flags it still ticks at 5 Hz for countdowns, but does not
         // pump the engine (or touch the picture) on every tick.
@@ -213,6 +248,13 @@ impl AppView {
             results_generation: 0,
             last_pump: Instant::now(),
             results_scroll: ScrollHandle::new(),
+            slider_focuses,
+            detached_windows,
+            detached_open_seen: [false; 3],
+            detached_published: (None, None, 0),
+            typeset_inflight: 0,
+            zoom_stroke: None,
+            zoom_wheel_acc: 0.0,
         }
     }
 
@@ -224,7 +266,14 @@ impl AppView {
             Command::UseSource { .. } | Command::SetRotation { .. }
         ) {
             self.centre = [0.5, 0.5];
-            self.magnification = self.engine.config().magnifier.magnification;
+            self.magnification = self
+                .engine
+                .config()
+                .magnifier
+                .magnification
+                .clamp(1.0, self.engine.config().magnifier.max_magnification);
+            // A glide toward the old picture's region must not resume.
+            self.view_target = None;
         }
         match self.engine.handle(command) {
             Ok(Reply::Done) => {}
@@ -253,19 +302,36 @@ impl AppView {
             }
         }
         // Detached windows: run what they asked for, publish snapshots.
+        // A detached window opening or closing must redraw this window
+        // (the pane appears/disappears here), even between engine pumps.
+        let open_now = [
+            self.detached_preview.is_open(),
+            self.detached_zoom.is_open(),
+            self.detached_reading.is_open(),
+        ];
+        if open_now != self.detached_open_seen {
+            self.detached_open_seen = open_now;
+            changed = true;
+        }
+        let mut config_for_detached: Option<Config> = None;
         for shared in [
             Arc::clone(&self.detached_preview),
             Arc::clone(&self.detached_zoom),
             Arc::clone(&self.detached_reading),
         ] {
-            for command in std::mem::take(&mut *shared.commands.lock().unwrap()) {
-                self.cmd(command, cx);
-            }
-            for action in std::mem::take(&mut *shared.actions.lock().unwrap()) {
-                self.detached_action(&action, cx);
+            // Drain to locals first: no lock is held across a command.
+            let queue = std::mem::take(&mut *shared.queue.lock().unwrap());
+            for msg in queue {
+                match msg {
+                    crate::detach::DetachedMsg::Command(command) => self.cmd(command, cx),
+                    crate::detach::DetachedMsg::Action(action) => self.detached_action(&action, cx),
+                }
             }
             if shared.is_open() {
-                *shared.config.lock().unwrap() = Some(self.engine.config().clone());
+                if config_for_detached.is_none() {
+                    config_for_detached = Some(self.engine.config().clone());
+                }
+                *shared.config.lock().unwrap() = config_for_detached.clone();
             }
         }
         self.publish_detached();
@@ -312,10 +378,19 @@ impl AppView {
             }
             changed |= self.refresh_image();
         }
-        // Finished typeset readings.
+        // Finished typeset readings. Each completion was started for a
+        // particular results generation; one from a cleared list is
+        // dropped rather than resurrecting a reading.
         if let Some(rx) = &self.typeset_rx {
             while let Ok((key, result)) = rx.try_recv() {
+                self.typeset_inflight = self.typeset_inflight.saturating_sub(1);
                 changed = true;
+                let generation_ok = key.split(':').next().and_then(|g| g.parse::<u64>().ok())
+                    == Some(self.results_generation);
+                if !generation_ok {
+                    self.typeset_cache.remove(&key);
+                    continue;
+                }
                 match result {
                     Some((rgba, w, h, scale)) => {
                         let img = crate::frame::rgba_to_render_image(rgba, w, h);
@@ -396,12 +471,15 @@ impl AppView {
     /// it (erased, rectified, enhanced), at native pixels up to a 1920px
     /// edge (the egui pane's cap). Reconverted only when its inputs move.
     fn refresh_zoom(&mut self) -> bool {
-        if !self.zoom_open {
+        if !self.zoom_open && !self.detached_zoom.is_open() {
             return false;
         }
         let Some(selection) = self.engine.selection() else {
             let had = self.zoom_image.take().map(|i| self.dropped_images.push(i));
             self.zoom_key = None;
+            // No picture: nothing for a later press to map through.
+            self.zoom_display = None;
+            self.zoom_native = None;
             return had.is_some();
         };
         let Some(frame) = self.engine.frame(squigl_engine::view::FrameRef::Shown) else {
@@ -410,10 +488,20 @@ impl AppView {
         let enhance = self.engine.config().enhance;
         let erasures = self.engine.state().capture.value.erasures.clone();
         let step = selection.rect.w.max(selection.rect.h).div_ceil(1920).max(1);
-        // Inputs hashed cheaply: frame identity by pointer, the rest by value.
+        // Inputs hashed cheaply. The frame is identified the way
+        // refresh_image identifies it (rotation plus the shown sequence:
+        // the frozen capture's, else the live stream's), never by an
+        // Arc pointer, which a later frame can reuse after a drop.
         let mut hash = 0xcbf29ce484222325u64;
         let mut mix = |v: u64| hash = (hash ^ v).wrapping_mul(0x100000001b3);
-        mix(Arc::as_ptr(&frame) as u64);
+        let capture = &self.engine.state().capture.value;
+        let seq = capture.frozen.map_or_else(
+            || self.engine.shared().latest_numbered().map_or(0, |(n, _)| n),
+            |f| f.seq,
+        );
+        mix(seq);
+        mix(self.engine.rotation() as u64);
+        mix(capture.frozen.is_some() as u64);
         mix(self.engine.capture_seq());
         for v in [
             selection.rect.x,
@@ -482,9 +570,12 @@ impl AppView {
             return false;
         };
         let capture = &self.engine.state().capture.value;
-        let seq = capture.frozen.map_or_else(
-            || self.engine.shared().latest_numbered().map_or(0, |(n, _)| n),
-            |f| f.seq,
+        let seq = shown_seq(
+            capture.frozen.is_some(),
+            capture.frozen.map_or_else(
+                || self.engine.shared().latest_numbered().map_or(0, |(n, _)| n),
+                |f| f.seq,
+            ),
         );
         let lut = self.engine.lut();
         let smooth = self.engine.config().magnifier.smooth;
@@ -494,7 +585,13 @@ impl AppView {
             PlaneFormat::Yuv420
         };
         let request = viewport.request(view, FrameRef::Shown, format);
-        self.placement = Some(viewport.placement(view));
+        // A placement-only move (window resized, pan clamped) needs a
+        // redraw even when the converted pixels do not change.
+        let new_placement = viewport.placement(view);
+        let placement_changed = self.placement.is_none_or(|old| {
+            old.origin != new_placement.origin || old.scale != new_placement.scale
+        }) || self.view_region != Some(request.region);
+        self.placement = Some(new_placement);
         self.view_region = Some(request.region);
         // Cheap identity check first: region/step/rotation/LUT/erasures, so
         // an unchanged picture costs no plane extraction (render_planes
@@ -514,18 +611,19 @@ impl AppView {
             smooth,
         };
         if self.image_key == Some(cheap) {
-            return false;
+            return placement_changed;
         }
         let Some(planes) = self.engine.render_planes(&request) else {
-            return false;
+            return placement_changed;
         };
-        let key = FrameKey::of(&planes, cheap.lut, cheap.erasures, smooth);
+        let mut key = FrameKey::of(&planes, cheap.lut, cheap.erasures, smooth);
+        key.seq = cheap.seq;
         if self.image_key != Some(key) {
             self.image = Some(to_render_image(&planes, &lut, smooth));
             self.image_key = Some(key);
             true
         } else {
-            false
+            placement_changed
         }
     }
 
@@ -549,9 +647,6 @@ impl AppView {
 
     pub fn toggle_freeze(&mut self, cx: &mut Context<Self>) {
         let freezing = !self.frozen();
-        if freezing {
-            self.freeze_flash = Some(Instant::now());
-        }
         self.cmd(
             if freezing {
                 Command::Freeze
@@ -560,6 +655,12 @@ impl AppView {
             },
             cx,
         );
+        // The flash marks a freeze that actually happened (a Freeze with
+        // no picture yet is a no-op in the engine).
+        if freezing && self.frozen() {
+            self.freeze_flash = Some(Instant::now());
+            cx.notify();
+        }
     }
 
     pub fn rotate(&mut self, cw: bool, cx: &mut Context<Self>) {
@@ -577,10 +678,11 @@ impl AppView {
     }
 
     pub fn zoom_view(&mut self, steps: f32, cx: &mut Context<Self>) {
-        let max = self.engine.config().magnifier.max_magnification;
+        let max = self.engine.config().magnifier.max_magnification.max(1.0);
         let (mag, centre) = self
             .view_target
             .unwrap_or((self.magnification, self.centre));
+        let mag = mag.clamp(1.0, max);
         self.view_target = Some(((mag * ZOOM_FACTOR.powf(steps)).clamp(1.0, max), centre));
         cx.notify();
     }
@@ -589,7 +691,7 @@ impl AppView {
         let (mag, centre) = self
             .view_target
             .unwrap_or((self.magnification, self.centre));
-        let shown = 1.0 / mag;
+        let shown = (1.0 / mag.max(1.0)).min(1.0);
         let clamp = |c: f32| c.clamp(shown / 2.0, 1.0 - shown / 2.0);
         self.view_target = Some((
             mag,
@@ -740,8 +842,20 @@ impl AppView {
         // A rebind in Settings captures the next key instead of acting on it.
         if let Some(action) = self.rebind_action.take() {
             let key = key_name(event);
-            if !key.is_empty() && key != "Escape" {
+            let m = &event.keystroke.modifiers;
+            // Tab must stay focus navigation, and a shortcut here is a
+            // plain key: Ctrl/Alt/Meta combinations are not bindable (the
+            // two deliberate ones, Ctrl+S and Ctrl+Z, are fixed).
+            let acceptable = !key.is_empty()
+                && key != "Escape"
+                && key != "Tab"
+                && !m.control
+                && !m.alt
+                && !m.platform;
+            if acceptable {
                 self.apply_rebind(&action, &key, cx);
+            } else if key != "Escape" {
+                self.notice = "That key cannot be a shortcut".into();
             }
             cx.notify();
             cx.stop_propagation();
@@ -753,10 +867,19 @@ impl AppView {
             if key_name(event) == "Escape" {
                 self.pair_open = false;
                 self.settings_open = false;
+                self.rebind_action = None;
                 self.pairing.stop();
                 cx.notify();
             }
             cx.stop_propagation();
+            return;
+        }
+        // Enter and Space activate a focused control (a button, a
+        // slider); they are also Read and Freeze here. When a control
+        // holds focus the key is the control's alone -- without this,
+        // choosing "Get ready" by keyboard also starts a read.
+        let key = key_name(event);
+        if (key == "Enter" || key == " ") && !self.focus.is_focused(window) {
             return;
         }
         let Some(action) = action_for(event, self.engine.config()) else {
@@ -856,10 +979,16 @@ impl AppView {
     }
     pub fn toggle_reading(&mut self, cx: &mut Context<Self>) {
         self.reading_open = !self.reading_open;
+        if !self.reading_open && self.maximised == Some("reading") {
+            self.maximised = None;
+        }
         cx.notify();
     }
     pub fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
+        if !self.settings_open {
+            self.rebind_action = None;
+        }
         cx.notify();
     }
     /// The drawn image's rectangle in canvas logical px: region by placement.
@@ -908,10 +1037,7 @@ impl AppView {
                 let on = self.engine.state().stream.value.torch;
                 self.cmd(Command::SetTorch { on: !on }, cx);
             }
-            "reading-pane" => {
-                self.reading_open = !self.reading_open;
-                cx.notify();
-            }
+            "reading-pane" => self.toggle_reading(cx),
             "read" => self.cmd(Command::Read, cx),
             "read-all" => {
                 self.reading_open = true;
@@ -969,17 +1095,8 @@ impl AppView {
             "next-spoken" => self.cmd(Command::SkipSpeech { delta: 1 }, cx),
             "previous-spoken" => self.cmd(Command::SkipSpeech { delta: -1 }, cx),
             "fullscreen" => window.toggle_fullscreen(),
-            "settings" => {
-                self.settings_open = !self.settings_open;
-                cx.notify();
-            }
-            "zoom-pane" => {
-                self.zoom_open = !self.zoom_open;
-                if !self.zoom_open && self.maximised == Some("zoom") {
-                    self.maximised = None;
-                }
-                cx.notify();
-            }
+            "settings" => self.toggle_settings(cx),
+            "zoom-pane" => self.toggle_zoom_pane(cx),
             _ => {}
         }
     }
@@ -1009,7 +1126,7 @@ pub fn from_slider(pos: f32, (lo, hi): (f32, f32)) -> f32 {
     ((zoom * 100.0).round() / 100.0).clamp(lo, hi)
 }
 
-pub const ACTIONS: [(&str, &str); 37] = [
+pub const ACTIONS: [(&str, &str); 36] = [
     ("freeze", " "),
     ("rotate-cw", "r"),
     ("rotate-ccw", "R"),
@@ -1046,15 +1163,16 @@ pub const ACTIONS: [(&str, &str); 37] = [
     ("fullscreen", "f"),
     ("settings", ","),
     ("zoom-pane", "z"),
-    ("save", "S"),
+    // "save" is deliberately absent: it is fixed to Ctrl+S (see
+    // action_for), and a plain "S" default would steal stop-speech's key.
 ];
 
 /// The key an action has now (after `[desktop].shortcuts` overrides).
+/// An action displaced by a rebind is stored with an empty key and shows
+/// as unbound here, not as its default (which it no longer has).
 pub fn action_key(config: &Config, action: &str) -> String {
     if let Some(k) = config.desktop.shortcuts.get(action) {
-        if !k.is_empty() {
-            return k.clone();
-        }
+        return k.clone();
     }
     ACTIONS
         .iter()
@@ -1101,6 +1219,13 @@ pub fn key_name(event: &KeyDownEvent) -> String {
         "space" => " ".to_string(),
         "enter" => "Enter".to_string(),
         "escape" => "Escape".to_string(),
+        "tab" => "Tab".to_string(),
+        "backspace" => "Backspace".to_string(),
+        "delete" => "Delete".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
         "left" | "arrowleft" => "ArrowLeft".to_string(),
         "right" | "arrowright" => "ArrowRight".to_string(),
         "up" | "arrowup" => "ArrowUp".to_string(),
@@ -1109,6 +1234,9 @@ pub fn key_name(event: &KeyDownEvent) -> String {
         "minus" => "-".to_string(),
         "comma" => ",".to_string(),
         "period" => ".".to_string(),
+        "bracketleft" => "[".to_string(),
+        "bracketright" => "]".to_string(),
+        "slash" => "/".to_string(),
         other => other.to_string(),
     };
     if ks.modifiers.shift {
@@ -1187,6 +1315,16 @@ pub fn theme_colours(theme: Theme) -> (u32, u32, u32) {
     }
 }
 
+/// A raised surface (result card, panel) in the theme: a shade off the
+/// background, never a fixed dark grey on a light theme.
+pub fn card_colour(theme: Theme) -> u32 {
+    match theme {
+        Theme::Dark => 0x2c2c34,
+        Theme::Light => 0xffffff,
+        Theme::HighContrastYellow | Theme::HighContrastWhite => 0x000000,
+    }
+}
+
 pub fn role_colour(role: Role) -> u32 {
     match role {
         Role::Text => 0xff5a28,
@@ -1202,6 +1340,7 @@ pub enum DragKind {
     Move,
     Corner(usize),
     Erase,
+    EraseZoom,
     Pan,
 }
 
@@ -1254,7 +1393,14 @@ impl AppView {
         self.drag = Some(Drag::Erase);
         self.erase_points = points;
     }
+    pub fn set_drag_erase_zoom(&mut self, points: Vec<[f32; 2]>) {
+        self.drag = Some(Drag::EraseZoom);
+        self.erase_points = points;
+    }
     pub fn set_drag_pan(&mut self, _pt: [f32; 2], pos: Point<Pixels>) {
+        // A pan takes the view over from any glide in flight: where the
+        // picture is now, not the stale target, is where the hand is.
+        self.view_target = None;
         let (x, y) = self.canvas_pos(pos);
         self.drag = Some(Drag::Pan {
             from: [x, y],
@@ -1280,16 +1426,23 @@ impl AppView {
             Drag::Move { .. } => DragKind::Move,
             Drag::Corner(i) => DragKind::Corner(i),
             Drag::Erase => DragKind::Erase,
+            Drag::EraseZoom => DragKind::EraseZoom,
             Drag::Pan { .. } => DragKind::Pan,
         })
     }
     pub fn extend_erase(&mut self, pt: [f32; 2]) {
         let radius =
             self.brush * self.scale_factor.max(1.0) / self.placement.map_or(1.0, |p| p.scale);
+        self.extend_erase_spaced(pt, radius / 2.0);
+    }
+    /// Appends a stroke point once it is more than `spacing` (view pixels)
+    /// from the last one: dense enough to look painted, sparse enough to
+    /// keep the saved strokes small.
+    pub fn extend_erase_spaced(&mut self, pt: [f32; 2], spacing: f32) {
         if self
             .erase_points
             .last()
-            .is_none_or(|last| (last[0] - pt[0]).hypot(last[1] - pt[1]) > radius / 2.0)
+            .is_none_or(|last| (last[0] - pt[0]).hypot(last[1] - pt[1]) > spacing.max(0.5))
         {
             self.erase_points.push(pt);
         }
@@ -1321,7 +1474,7 @@ impl AppView {
         if let Some(Drag::Pan { from, centre }) = self.drag {
             let (x, y) = self.canvas_pos(pos);
             let (_, _, w, h) = self.canvas.lock().unwrap().unwrap_or((0.0, 0.0, 1.0, 1.0));
-            let shown = 1.0 / self.magnification;
+            let shown = (1.0 / self.magnification.max(1.0)).min(1.0);
             let clamp = |c: f32| c.clamp(shown / 2.0, 1.0 - shown / 2.0);
             self.centre = [
                 clamp(centre[0] - (x - from[0]) / w.max(1.0) * shown),
@@ -1335,7 +1488,7 @@ impl AppView {
         match self.drag.take() {
             Some(Drag::Draw { from, to }) => Some(FinishedDrag::Draw { from, to }),
             Some(Drag::Move { shown, .. }) => Some(FinishedDrag::Move { shown }),
-            Some(Drag::Erase) => Some(FinishedDrag::Erase),
+            Some(Drag::Erase | Drag::EraseZoom) => Some(FinishedDrag::Erase),
             Some(_) => Some(FinishedDrag::Other),
             None => None,
         }
@@ -1637,8 +1790,10 @@ impl SliderKind {
             SliderKind::Brightness => (-0.5, 0.5),
             SliderKind::Gamma => (0.3, 3.0),
             SliderKind::Strength => (0.0, 1.0),
-            SliderKind::BlackPoint => (0.0, 100.0),
-            SliderKind::WhitePoint => (0.0, 100.0),
+            // The engine keeps white above black; keep the sliders from
+            // even asking for the inverted half.
+            SliderKind::BlackPoint => (0.0, 49.0),
+            SliderKind::WhitePoint => (51.0, 100.0),
             SliderKind::EnhGamma => (0.3, 3.0),
         }
     }
@@ -1657,7 +1812,13 @@ impl AppView {
         self.drag = None;
     }
     pub fn drag_is_erase(&self) -> bool {
-        matches!(self.drag, Some(Drag::Erase))
+        matches!(self.drag, Some(Drag::Erase | Drag::EraseZoom))
+    }
+    pub fn drag_is_erase_zoom(&self) -> bool {
+        matches!(self.drag, Some(Drag::EraseZoom))
+    }
+    pub fn slider_focus(&self, kind: SliderKind) -> FocusHandle {
+        self.slider_focuses[kind as usize].clone()
     }
     pub fn erase_points_view(&self) -> Vec<[f32; 2]> {
         self.erase_points.clone()
@@ -1745,31 +1906,73 @@ impl AppView {
         };
         let reading = transcription.readings.get(reading_idx)?.clone();
         let config = self.engine.config().clone();
-        let (fg, _, _) = theme_colours(config.desktop.theme);
+        // theme_colours is (background, text, edge): the ink is the text.
+        let (_, fg, _) = theme_colours(config.desktop.theme);
         let rgb = [
             ((fg >> 16) & 0xff) as u8,
             ((fg >> 8) & 0xff) as u8,
             (fg & 0xff) as u8,
         ];
         let size_pt = config.ui.reading_size;
-        let width_pt = self
-            .reading_width
-            .lock()
-            .unwrap()
-            .map_or(360.0, |w: f32| (w - 28.0).clamp(180.0, 1400.0));
+        // The widest reading surface asking: the pane here, or the
+        // detached Reading window when it is open (measured by its own
+        // canvas). Bucketed coarsely so a window resize crosses few
+        // re-renders instead of one per pixel.
+        let main_width = self.reading_width.lock().unwrap().unwrap_or(0.0);
+        let detached_width = if self.detached_reading.is_open() {
+            self.detached_reading.width.lock().unwrap().unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let raw_width = main_width.max(detached_width);
+        let width_pt = if raw_width > 0.0 {
+            (((raw_width - 28.0).clamp(180.0, 1400.0)) / 40.0).round() * 40.0
+        } else {
+            360.0
+        };
         let scale = self.scale_factor.max(1.0);
+        // Everything the picture depends on is in the key: width, size,
+        // the theme's ink, the pixel scale and the confidence thresholds
+        // the tint spans are built from.
         let key = format!(
-            "{}:{}:{}:{:?}:{}",
+            "{}:{}:{}:{}:{}:{:02x}{:02x}{:02x}:{}:{}:{}",
             self.results_generation,
             index,
             reading_idx,
-            (width_pt * 10.0) as i32,
-            (size_pt * 10.0) as i32
+            width_pt as i32,
+            (size_pt * 10.0) as i32,
+            rgb[0],
+            rgb[1],
+            rgb[2],
+            (scale * 100.0) as i32,
+            (config.ui.steady_threshold * 1000.0) as i32,
+            (config.ui.wavering_threshold * 1000.0) as i32,
         ) + &reading.text.chars().take(24).collect::<String>();
         match self.typeset_cache.get(&key) {
             Some(TypesetEntry::Ready(img, s2, w, h)) => Some((img.clone(), *s2, *w, *h)),
             Some(_) => None,
             None => {
+                // Bounded: Typst renders are seconds of CPU; at most two
+                // at a time, the rest start as slots free (this is asked
+                // again on every render).
+                if self.typeset_inflight >= 2 {
+                    return None;
+                }
+                // This reading at another width/size is superseded: evict
+                // it now rather than keeping every resize's image.
+                let prefix = format!("{}:{}:{}:", self.results_generation, index, reading_idx);
+                let stale: Vec<String> = self
+                    .typeset_cache
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix) && **k != key)
+                    .cloned()
+                    .collect();
+                for k in stale {
+                    if let Some(TypesetEntry::Ready(old, ..)) = self.typeset_cache.remove(&k) {
+                        self.dropped_images.push(old);
+                    }
+                }
+                self.typeset_inflight += 1;
                 self.typeset_cache
                     .insert(key.clone(), TypesetEntry::Pending);
                 if self.typeset_tx.is_none() {
@@ -1836,7 +2039,10 @@ impl AppView {
             },
         );
         match opened {
-            Ok(_) => log::info!("detached the {kind} pane into its own window"),
+            Ok((handle, _)) => {
+                self.detached_windows.lock().unwrap().push(handle);
+                log::info!("detached the {kind} pane into its own window");
+            }
             Err(e) => {
                 log::error!("could not open the {kind} window: {e}");
                 self.notice = format!("Could not open the {kind} window: {e}");
@@ -1854,13 +2060,37 @@ impl AppView {
     }
 
     fn publish_detached(&mut self) {
+        // Only on change: rebuilding the reading lines clones every
+        // result, and this runs on every pump tick.
         if self.detached_preview.is_open() {
-            *self.detached_preview.image.lock().unwrap() = self.image.clone();
+            let id = self.image.as_ref().map(|i| i.id);
+            if self.detached_published.0 != id {
+                self.detached_published.0 = id;
+                *self.detached_preview.image.lock().unwrap() = self.image.clone();
+            }
         }
         if self.detached_zoom.is_open() {
-            *self.detached_zoom.image.lock().unwrap() = self.zoom_image.clone();
+            let id = self.zoom_image.as_ref().map(|i| i.id);
+            if self.detached_published.1 != id {
+                self.detached_published.1 = id;
+                *self.detached_zoom.image.lock().unwrap() = self.zoom_image.clone();
+            }
         }
         if self.detached_reading.is_open() {
+            let ready = self
+                .typeset_cache
+                .values()
+                .filter(|e| matches!(e, TypesetEntry::Ready(..)))
+                .count() as u64;
+            let mut content_key = self.results_generation.wrapping_mul(0x9e3779b9);
+            content_key ^= (self.results.len() as u64).wrapping_mul(0x1000193);
+            content_key ^= (self.history.len() as u64).wrapping_mul(0x85ebca6b);
+            content_key ^= ready.wrapping_mul(0xc2b2ae35);
+            content_key ^= u64::from(self.engine_reading().in_page_order);
+            if self.detached_published.2 == content_key {
+                return;
+            }
+            self.detached_published.2 = content_key;
             let mut lines = Vec::new();
             let in_order = self.engine_reading().in_page_order;
             let mut indices: Vec<usize> = (0..self.results.len()).collect();
@@ -1907,12 +2137,32 @@ impl AppView {
     /// A shortcut fired in a detached window: everything window-free, run
     /// against the main window's engine and view state.
     pub fn detached_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        // The main window's guards apply here too: while Settings is
+        // rebinding a key, or a panel owns the keyboard there, a key
+        // pressed in a detached window must not slip past them.
+        if self.rebind_action.is_some() || self.pair_open || self.settings_open {
+            return;
+        }
         match action {
             "freeze" => self.toggle_freeze(cx),
             "rotate-cw" => self.rotate(true, cx),
             "rotate-ccw" => self.rotate(false, cx),
             "zoom-in" => self.zoom_view(1.0, cx),
             "zoom-out" => self.zoom_view(-1.0, cx),
+            "zoom-reset" => {
+                self.view_target = Some((1.0, [0.5, 0.5]));
+                cx.notify();
+            }
+            "reading-line" => {
+                let mut c = self.engine.config().clone();
+                c.magnifier.reading_line = !c.magnifier.reading_line;
+                self.cmd(
+                    Command::SetConfig {
+                        config: Box::new(c),
+                    },
+                    cx,
+                );
+            }
             "pan-left" => self.pan(-0.2, 0.0, cx),
             "pan-right" => self.pan(0.2, 0.0, cx),
             "pan-up" => self.pan(0.0, -0.2, cx),
@@ -1929,11 +2179,27 @@ impl AppView {
             "second-opinion" => self.cmd(Command::SecondOpinion, cx),
             "block-mode" => {
                 let on = self.engine_blocks().enabled;
+                if !on {
+                    self.blocks_asked = true;
+                }
                 self.cmd(Command::SetBlockMode { on: !on }, cx);
             }
             "next-block" => self.cmd(Command::StepBlock { delta: 1 }, cx),
             "previous-block" => self.cmd(Command::StepBlock { delta: -1 }, cx),
-            "clear-selection" => self.cmd(Command::SetSelection { selection: None }, cx),
+            // Escape's precedence, as in the main window minus what needs
+            // its window: leave the brush before clearing the box.
+            "clear-selection" => {
+                if self.erasing {
+                    self.erasing = false;
+                    cx.notify();
+                } else {
+                    self.cmd(Command::SetSelection { selection: None }, cx);
+                }
+            }
+            "erase-brush" => {
+                self.erasing = !self.erasing;
+                cx.notify();
+            }
             "erase-box" => self.erase_box(cx),
             "undo-erase" => self.undo_erase(cx),
             "speak" => self.cmd(Command::Speak { result: None }, cx),
@@ -2050,8 +2316,10 @@ mod tests {
     // Not `use super::*`: gpui-kit's glob brings GPUI's own `test` macro,
     // which would shadow Rust's here.
     use super::{
-        cover_strokes, from_slider, highlight_spans, to_slider, utf16_to_byte, zoom_bounds,
+        action_key, cover_strokes, from_slider, highlight_spans, to_slider, utf16_to_byte,
+        zoom_bounds, SliderKind, ACTIONS,
     };
+    use squigl_engine::config::Config;
     use squigl_engine::geometry::{Crop, Selection};
     use squigl_engine::stream::SourceSpec;
 
@@ -2133,6 +2401,37 @@ mod tests {
             }
             assert!(st.radius <= 12.0 / std::f32::consts::SQRT_2 + 0.01);
         }
+    }
+
+    #[test]
+    fn enhance_point_sliders_cannot_cross() {
+        let (_, black_hi) = SliderKind::BlackPoint.range();
+        let (white_lo, _) = SliderKind::WhitePoint.range();
+        assert!(black_hi < white_lo, "black {black_hi} < white {white_lo}");
+    }
+
+    #[test]
+    fn displaced_action_shows_as_unbound_not_its_default() {
+        let mut config = Config::default();
+        assert_eq!(action_key(&config, "torch"), "t");
+        config
+            .desktop
+            .shortcuts
+            .insert("torch".to_string(), String::new());
+        assert_eq!(action_key(&config, "torch"), "");
+    }
+
+    #[test]
+    fn default_shortcut_keys_are_unique_and_save_is_not_plain_s() {
+        assert!(!ACTIONS.iter().any(|(a, _)| *a == "save"));
+        let mut keys: Vec<&str> = ACTIONS.iter().map(|(_, k)| *k).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(
+            keys.len(),
+            ACTIONS.len(),
+            "a default key serves two actions"
+        );
     }
 
     #[test]

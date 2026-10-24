@@ -28,11 +28,29 @@ pub fn slider(
 ) -> impl IntoElement {
     let bounds_slot = view.slider_bounds_handle();
     let name = kind.name();
+    let focus = view.slider_focus(kind);
     let mut track = div()
+        .id(name)
+        .track_focus(&focus)
+        .tab_stop(true)
         .relative()
         .h(px(22.0))
         .flex()
         .items_center()
+        .on_key_down(cx.listener(move |view, event: &KeyDownEvent, _, cx| {
+            // Keyboard control: arrows step, Home/End to the ends. Each
+            // step commits (there is no drag to release).
+            let step = 0.05;
+            let next = match crate::app::key_name(event).as_str() {
+                "ArrowLeft" | "ArrowDown" => fraction - step,
+                "ArrowRight" | "ArrowUp" => fraction + step,
+                "Home" => 0.0,
+                "End" => 1.0,
+                _ => return,
+            };
+            view.slider_apply(kind, next.clamp(0.0, 1.0), true, cx);
+            cx.stop_propagation();
+        }))
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |view, event: &MouseDownEvent, _, cx| {
@@ -52,6 +70,19 @@ pub fn slider(
         .on_mouse_up(
             MouseButton::Left,
             cx.listener(move |view, event: &MouseUpEvent, _, cx| {
+                if view.active_slider == Some(kind) {
+                    view.active_slider = None;
+                    if let Some(f) = view.slider_fraction(kind, event.position) {
+                        view.slider_apply(kind, f, true, cx);
+                    }
+                }
+            }),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |view, event: &MouseUpEvent, _, cx| {
+                // Released past the track's end: still commit (a preview
+                // left uncommitted would never be saved).
                 if view.active_slider == Some(kind) {
                     view.active_slider = None;
                     if let Some(f) = view.slider_fraction(kind, event.position) {
@@ -106,6 +137,7 @@ pub fn slider(
             div()
                 .absolute()
                 .left(relative(fraction.clamp(0.0, 1.0)))
+                .ml(px(-7.0))
                 .top(px(4.0))
                 .w(px(14.0))
                 .h(px(14.0))
@@ -158,7 +190,14 @@ impl Render for AppView {
             root = root.child(self.toolbar(&stream, &config, frozen, cx));
         }
         let mut main = div().flex().flex_row().flex_1().min_h(px(0.0));
-        match self.maximised {
+        // Readings-only outranks a maximised pane (it is the fullscreen
+        // reading view; a stale "zoom" maximise must not hide it).
+        let maximised = if self.reading_only {
+            None
+        } else {
+            self.maximised
+        };
+        match maximised {
             Some("zoom") => {
                 main = main.child(self.zoom_pane(true, cx));
             }
@@ -202,6 +241,15 @@ impl Render for AppView {
                         }
                         main = main.child(col);
                     }
+                } else if self.pane_detached("reading") {
+                    main = main.child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child("Reading is in its own window. Close it to bring it back."),
+                    );
                 } else {
                     main = main.child(self.reading_pane(true, cx));
                 }
@@ -395,7 +443,7 @@ impl AppView {
         corners: [[f32; 2]; 4],
         colour: u32,
         width: f32,
-        dashed: bool,
+        dash: &'static [f32],
     ) -> impl IntoElement {
         let pts: Vec<(f32, f32)> = corners.iter().map(|c| self.to_canvas(*c)).collect();
         canvas(
@@ -403,8 +451,9 @@ impl AppView {
             move |bounds, pts, window, _| {
                 let origin = bounds.origin;
                 let mut builder = PathBuilder::stroke(px(width));
-                if dashed {
-                    builder = builder.dash_array(&[px(6.0), px(4.0)]);
+                if !dash.is_empty() {
+                    let dashes: Vec<Pixels> = dash.iter().map(|d| px(*d)).collect();
+                    builder = builder.dash_array(&dashes);
                 }
                 for i in 0..4 {
                     let a = pts[i];
@@ -443,6 +492,10 @@ impl AppView {
                 cx.listener(|view, event: &MouseMoveEvent, _, cx| view.mouse_move(event, cx)),
             )
             .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, cx| view.mouse_up(event, cx)),
+            )
+            .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|view, event: &MouseUpEvent, _, cx| view.mouse_up(event, cx)),
             )
@@ -493,17 +546,18 @@ impl AppView {
                 let corners = block
                     .quad
                     .unwrap_or_else(|| squigl_engine::layout::rect_quad(block.rect));
-                // Kind by dash as well as colour (the desktop's encoding):
-                // text solid, formula dashed, figure dotted-ish, other thin.
-                let (width, dashed) = match block.role() {
+                // Kind by dash as well as colour (the desktop's encoding,
+                // each kind its own pattern): text solid, formula long
+                // dashes, figure dots, other sparse pinpricks.
+                let (width, dash): (f32, &'static [f32]) = match block.role() {
                     squigl_engine::layout::Role::Text => {
-                        (if blocks.selected == Some(i) { 3.0 } else { 2.0 }, false)
+                        (if blocks.selected == Some(i) { 3.0 } else { 2.0 }, &[])
                     }
-                    squigl_engine::layout::Role::Formula => (2.0, true),
-                    squigl_engine::layout::Role::Figure => (2.0, true),
-                    squigl_engine::layout::Role::Other => (1.0, false),
+                    squigl_engine::layout::Role::Formula => (2.0, &[8.0, 4.0]),
+                    squigl_engine::layout::Role::Figure => (2.0, &[2.0, 4.0]),
+                    squigl_engine::layout::Role::Other => (1.0, &[1.0, 6.0]),
                 };
-                area = area.child(self.quad_outline(corners, colour, width, dashed));
+                area = area.child(self.quad_outline(corners, colour, width, dash));
                 let (lx, ly) = self.to_canvas(corners[0]);
                 area = area.child(
                     div()
@@ -522,7 +576,7 @@ impl AppView {
             let corners = spoken
                 .quad
                 .unwrap_or_else(|| squigl_engine::layout::rect_quad(spoken.rect));
-            area = area.child(self.quad_outline(corners, 0xffffff, 3.0, false));
+            area = area.child(self.quad_outline(corners, 0xffffff, 3.0, &[]));
         }
         // Selection (or the in-progress drag's box), with corner handles.
         let shown_selection = match self.drag_box() {
@@ -542,7 +596,7 @@ impl AppView {
                     [r.x as f32, (r.y + r.h) as f32],
                 ]
             });
-            area = area.child(self.quad_outline(corners, 0xffc400, 2.0, false));
+            area = area.child(self.quad_outline(corners, 0xffc400, 2.0, &[]));
             for corner in corners {
                 let (x, y) = self.to_canvas(corner);
                 area = area.child(
@@ -587,7 +641,7 @@ impl AppView {
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .bg(rgb(0x24242c))
+                    .bg(rgb(crate::app::card_colour(config.desktop.theme)))
                     .text_sm()
                     .child(chip),
             );
@@ -655,6 +709,7 @@ impl AppView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let g = guidance(problem);
+        let (panel_bg, _, _) = theme_colours(self.engine.config().desktop.theme);
         let mut panel = div()
             .absolute()
             .left(relative(0.3))
@@ -664,7 +719,7 @@ impl AppView {
             .flex_col()
             .gap_2()
             .p_3()
-            .bg(rgb(0x24242c))
+            .bg(rgb(panel_bg))
             .border(px(1.0))
             .border_color(rgb(0x888888))
             .child(div().text_lg().child(g.title));
