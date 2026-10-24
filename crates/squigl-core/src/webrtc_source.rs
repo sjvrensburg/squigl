@@ -11,11 +11,13 @@
 //! caller binds to. A phone on a different network (cellular, guest Wi-Fi) won't reach
 //! this without a relay, which is out of scope -- see the crate README.
 //!
-//! H.264 only ([`WebrtcSource::accept_offer`] restricts the SDP negotiation to it), so
-//! the browser page must prefer/force H.264 in its `getUserMedia`/transceiver setup:
-//! str0m's H.264 depacketizer hands back complete Annex-B access units (start-code
-//! delimited, exactly what [`crate::decode::Decoder::decode`] already expects from the
-//! scrcpy protocol path), so no format conversion is needed between the two sources.
+//! Codecs: VP9 preferred, VP8 next, H.264 as the fallback
+//! ([`WebrtcSource::accept_offer`] restricts the SDP negotiation to what the
+//! configured decoder can handle). VP8/VP9 decode through FFmpeg; without that
+//! backend only H.264 is offered, since openh264 knows nothing else. str0m's
+//! depacketizers hand back complete frames for all three (Annex-B access units
+//! for H.264, raw frames for VP8/VP9), each feeding
+//! [`crate::decode::Decoder::decode`] in the form it expects.
 //!
 //! Camera controls travel on a data channel the page opens, labelled
 //! [`CONTROL_CHANNEL`], as JSON text: the page reports its camera as a
@@ -255,10 +257,26 @@ impl WebrtcStats {
     }
 }
 
+/// Which codec a depacketized frame belongs to, from str0m's codec extras.
+/// `None` for codecs squigl does not decode (never negotiated, so unreachable
+/// in practice).
+fn codec_of(extra: &str0m::format::CodecExtra) -> Option<decode::RtcCodec> {
+    use str0m::format::CodecExtra;
+    match extra {
+        CodecExtra::H264(_) => Some(decode::RtcCodec::H264),
+        CodecExtra::Vp8(_) => Some(decode::RtcCodec::Vp8),
+        CodecExtra::Vp9(_) => Some(decode::RtcCodec::Vp9),
+        _ => None,
+    }
+}
+
 pub struct WebrtcSource {
     rtc: Rtc,
     socket: UdpSocket,
-    decoder: Decoder,
+    /// Decoder backend for whichever codec gets negotiated; the decoder itself
+    /// is created at the first frame, when the codec is known.
+    backend: decode::Backend,
+    frame_decoder: Option<(decode::RtcCodec, Decoder)>,
     connected: bool,
     /// Any media data has arrived (as opposed to merely connecting, the
     /// distinction between a network problem and a browser that encodes
@@ -293,8 +311,19 @@ impl WebrtcSource {
         let offer = SdpOffer::from_sdp_string(offer_sdp)
             .map_err(|e| Error::Protocol(format!("invalid SDP offer: {e}")))?;
 
-        let mut rtc = RtcConfig::new()
-            .clear_codecs()
+        // Enable every codec the configured decoder can handle; the page's
+        // codec preferences (VP9, then VP8, then H.264) order the offer, and
+        // the browser sends the first codec the answer keeps. VP9 for quality
+        // per bit, VP8 as the fallback weak phones encode happily, H.264
+        // where it works.
+        let mut config = RtcConfig::new().clear_codecs();
+        if decode::RtcCodec::Vp9.supported(decoder_backend) {
+            config = config.enable_vp9(true);
+        }
+        if decode::RtcCodec::Vp8.supported(decoder_backend) {
+            config = config.enable_vp8(true);
+        }
+        let mut rtc = config
             .enable_h264(true)
             .set_reordering_size_video(REORDER_PACKETS)
             .build(Instant::now());
@@ -313,13 +342,12 @@ impl WebrtcSource {
             .accept_offer(offer)
             .map_err(|e| Error::Protocol(format!("accepting SDP offer: {e}")))?;
 
-        let decoder = Decoder::with_backend(decoder_backend)?;
-
         Ok((
             Self {
                 rtc,
                 socket,
-                decoder,
+                backend: decoder_backend,
+                frame_decoder: None,
                 connected: false,
                 saw_media: false,
                 stats: WebrtcStats::default(),
@@ -410,7 +438,15 @@ impl WebrtcSource {
                     if !data.contiguous && !data.is_keyframe() {
                         self.request_keyframe();
                     }
-                    match self.decoder.decode(&data.data) {
+                    let Some(codec) = codec_of(&data.codec_extra) else {
+                        log::debug!("ignoring media in an unnegotiated codec");
+                        continue;
+                    };
+                    let decoded = match self.decoder_for(codec) {
+                        Ok(decoder) => decoder.decode(&data.data),
+                        Err(e) => Err(e),
+                    };
+                    match decoded {
                         Ok(Some(frame)) => {
                             self.stats.frames += 1;
                             return Ok(Some(frame));
@@ -478,7 +514,7 @@ impl WebrtcSource {
                         if !self.saw_media {
                             log::warn!(
                                 "the phone connected but sent no video at all; its browser \
-                                 may be unable to encode H.264 (the capture page says so too)"
+                                 may be unable to encode video (the capture page says so too)"
                             );
                         }
                         return Err(Error::StreamStalled(STALL_TIMEOUT));
@@ -498,6 +534,17 @@ impl WebrtcSource {
 }
 
 impl WebrtcSource {
+    /// The decoder for `codec`, created at the first frame of that codec (and
+    /// recreated if the codec ever changes, which negotiation should prevent).
+    fn decoder_for(&mut self, codec: decode::RtcCodec) -> Result<&mut Decoder> {
+        if self.frame_decoder.as_ref().map(|(c, _)| *c) != Some(codec) {
+            log::info!("paired phone is sending {}", codec.name());
+            let decoder = Decoder::rtc(codec, self.backend)?;
+            self.frame_decoder = Some((codec, decoder));
+        }
+        Ok(&mut self.frame_decoder.as_mut().unwrap().1)
+    }
+
     /// Asks the phone for a fresh keyframe (PLI), rate-limited: after packet
     /// loss the decoder cannot recover from P-frames alone, and the browser's
     /// own keyframe interval can be seconds away.
@@ -556,6 +603,39 @@ mod tests {
         control.reported(r#"{"zoom_range":[1,8],"zoom":7.5,"torch":true}"#);
         assert_eq!((control.zoom(), control.torch()), (Some(7.5), Some(true)));
         assert_eq!(control.camera().unwrap().zoom_range, Some((1.0, 8.0)));
+    }
+
+    #[test]
+    fn codecs_come_from_the_frame_extras() {
+        use str0m::format::{CodecExtra, H264CodecExtra, Vp8CodecExtra, Vp9CodecExtra};
+        assert_eq!(
+            codec_of(&CodecExtra::H264(H264CodecExtra { is_keyframe: true })),
+            Some(decode::RtcCodec::H264)
+        );
+        assert_eq!(
+            codec_of(&CodecExtra::Vp8(Vp8CodecExtra {
+                discardable: false,
+                sync: false,
+                layer_index: 0,
+                picture_id: None,
+                tl0_picture_id: None,
+                is_keyframe: true,
+            })),
+            Some(decode::RtcCodec::Vp8)
+        );
+        assert_eq!(
+            codec_of(&CodecExtra::Vp9(Vp9CodecExtra {
+                layers_scheme: [None, None, None],
+                tid: None,
+                layers_widths: [None, None, None],
+                layers_heights: [None, None, None],
+                tl0_picture_id: None,
+                pid: 0,
+                is_keyframe: true,
+            })),
+            Some(decode::RtcCodec::Vp9)
+        );
+        assert_eq!(codec_of(&CodecExtra::None), None);
     }
 
     #[test]

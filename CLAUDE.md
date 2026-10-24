@@ -154,10 +154,11 @@ push here, unlike scrcpy-server -- the phone side is a browser page doing
 `getUserMedia` and posting an SDP offer over HTTP, WHIP-style). `WebrtcSource::accept_offer`
 drives `str0m` (a sans-I/O WebRTC/ICE/DTLS/SRTP implementation, chosen because it fits
 this crate's synchronous style with no async runtime) to answer the offer, restricted to
-H.264 only (`clear_codecs().enable_h264(true)`); `run` then blocks decoding
-frames the same way `CameraSession::run` does. str0m's H.264 depacketizer already hands
-back Annex-B (start-code delimited), so it feeds `decode::Decoder::decode` unchanged --
-no format conversion between the two sources. Camera controls go over a data channel the
+the codecs the configured decoder handles: VP9 and VP8 (FFmpeg backend only) plus
+H.264, in the page's preference order; `run` then blocks decoding
+frames the same way `CameraSession::run` does. str0m's depacketizers hand back complete
+frames (Annex-B for H.264, raw frames for VP8/VP9), feeding `decode::Decoder::decode`
+in the form each codec expects. Camera controls go over a data channel the
 page opens (`CONTROL_CHANNEL`, JSON text): the page reports a `RemoteCamera` (zoom range,
 zoom, torch -- `getCapabilities`/`getSettings`; `getUserMedia` asks `zoom: true`, without
 which Chrome hides it) on opening and exactly once per message, and takes `{"zoom": r}` /
@@ -180,8 +181,8 @@ LAN and overlay address, each printed) and streams each session to the V4L2 devi
 `PairingServer::start(PairingOptions { addresses, port, decoder, cert_dir,
 tailscale_https }, on_session)` runs a `tiny_http` HTTPS server per address (one token
 for all; the WebRTC host candidate is the address the offer came in at) serving `capture.html` (the `getUserMedia` +
-`RTCPeerConnection` page, with `setCodecPreferences` steering the browser to H.264 since
-that's all squigl decodes) at `/` and a minimal WHIP-shaped ingest endpoint at
+`RTCPeerConnection` page, with `setCodecPreferences` ordering the codecs squigl
+decodes -- VP9, VP8, then H.264) at `/` and a minimal WHIP-shaped ingest endpoint at
 `POST /whip`, both answering only with this start's random `?t=` token (403 otherwise);
 an accepted offer's `WebrtcSource` goes to `on_session` before the answer is sent (an
 `Err` there is a 503). `offers()` is each address's `Offer` (network, URL with token,
