@@ -339,3 +339,58 @@ jobs:
       - name: GLM-OCR on the CPU
         run: cargo test -p squigl-models --release glmocr -- --ignored --nocapture --test-threads=1
 
+
+  # The GPUI app (Linux only, not a default member): GPUI needs Vulkan/Wayland/
+  # xkbcommon development packages, and speech needs speech-dispatcher + ALSA.
+  gpui:
+    name: gpui
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm libclang-dev pkg-config \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev \
+            libvulkan-dev libspeechd-dev libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gpui
+
+      - name: Cache scrcpy-server jar
+        id: jar
+        uses: actions/cache@v4
+        with:
+          path: .cache/scrcpy-server.jar
+          key: scrcpy-server-${{ hashFiles('crates/squigl-core/build.rs') }}
+
+      - name: Fetch scrcpy-server jar
+        if: steps.jar.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache
+          version=$(sed -n 's/^const SCRCPY_VERSION: &str = "\(.*\)";/\1/p' crates/squigl-core/build.rs)
+          curl -fsSL -o .cache/scrcpy-server.jar \
+            "https://github.com/Genymobile/scrcpy/releases/download/v${version}/scrcpy-server-v${version}"
+
+      - name: Clippy
+        run: cargo clippy -p squigl-gpui --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test -p squigl-gpui
+
+      - name: Build
+        run: cargo build --release -p squigl-gpui
+
+      # The trimmed build (no built-in models, speech or typesetting)
+      # must keep compiling: feature-gated call sites rot first.
+      - name: Build without default features
+        run: cargo build -p squigl-gpui --no-default-features

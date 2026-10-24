@@ -294,11 +294,11 @@ fn voice(wake: squigl_engine::engine::Waker) -> Option<Box<dyn squigl_engine::sp
                 notify: wake.clone(),
             }),
         ));
-        match squigl_speech::Voices::start(
-            wake,
-            #[cfg(feature = "local-model")]
-            kokoro,
-        ) {
+        #[cfg(feature = "local-model")]
+        let started = squigl_speech::Voices::start_with_kokoro(wake, kokoro);
+        #[cfg(not(feature = "local-model"))]
+        let started = squigl_speech::Voices::start(wake);
+        match started {
             Ok(v) => {
                 log::info!("reading aloud ready");
                 return Some(Box::new(v));

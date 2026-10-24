@@ -39,8 +39,29 @@ pub struct Voices {
 }
 
 impl Voices {
+    /// The system's speech and MathCAT (no Kokoro, whatever features other
+    /// crates in this build unified on).
+    pub fn start(wake: Waker) -> Result<Self> {
+        #[cfg(feature = "kokoro")]
+        {
+            Self::start_with_kokoro(wake, None)
+        }
+        #[cfg(not(feature = "kokoro"))]
+        {
+            Self::start_inner(wake)
+        }
+    }
+
     /// The system's speech and MathCAT, and Kokoro when given its model.
-    pub fn start(
+    #[cfg(feature = "kokoro")]
+    pub fn start_with_kokoro(
+        wake: Waker,
+        kokoro: Option<std::sync::Arc<squigl_models::kokoro::KokoroService>>,
+    ) -> Result<Self> {
+        Self::start_inner(wake, kokoro)
+    }
+
+    fn start_inner(
         wake: Waker,
         #[cfg(feature = "kokoro")] kokoro: Option<
             std::sync::Arc<squigl_models::kokoro::KokoroService>,
@@ -230,12 +251,10 @@ mod tests {
                 notify: Arc::new(|| {}),
             },
         )));
-        let voice = Voices::start(
-            Arc::new(|| {}),
-            #[cfg(feature = "kokoro")]
-            service,
-        )
-        .unwrap();
+        #[cfg(feature = "kokoro")]
+        let voice = Voices::start_with_kokoro(Arc::new(|| {}), service).unwrap();
+        #[cfg(not(feature = "kokoro"))]
+        let voice = Voices::start(Arc::new(|| {})).unwrap();
         println!(
             "started in {:?}: {} voices, model {:?}",
             t.elapsed(),
@@ -271,12 +290,10 @@ mod tests {
             }
             Some(k)
         };
-        let mut voice = Voices::start(
-            wake,
-            #[cfg(feature = "kokoro")]
-            service,
-        )
-        .unwrap();
+        #[cfg(feature = "kokoro")]
+        let mut voice = Voices::start_with_kokoro(wake, service).unwrap();
+        #[cfg(not(feature = "kokoro"))]
+        let mut voice = Voices::start(wake).unwrap();
         voice.configure(None, 1.0).unwrap();
         let text = squigl_engine::speech::utterances(
             "The entropy is $E=-\\sum_{i=1}^{k} p_{i} \\log_{2} p_{i}$ in bits. Recursively splits data in order to clarify the point.",
