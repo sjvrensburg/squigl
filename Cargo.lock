@@ -11033,6 +11033,7 @@ dependencies = [
  "cpal",
  "log",
  "mathcat",
+ "serde_json",
  "squigl-engine",
  "squigl-models",
  "tts",
