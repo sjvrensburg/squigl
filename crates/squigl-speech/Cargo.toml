@@ -23,3 +23,7 @@ tts = "0.26"
 mathcat = { version = "=0.7.7-alpha.1", features = ["include-zip"] }
 squigl-models = { path = "../squigl-models", optional = true }
 cpal = { version = "0.16", optional = true }
+
+[dev-dependencies]
+# examples/say_maths.rs reads and writes one JSON string per line.
+serde_json = "1"
