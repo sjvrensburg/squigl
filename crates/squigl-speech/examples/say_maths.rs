@@ -17,7 +17,15 @@ fn main() -> anyhow::Result<()> {
     let maths = Maths::start()?;
     let mut out = std::io::stdout().lock();
     for line in std::io::stdin().lock().lines() {
-        let text: String = serde_json::from_str(&line?)?;
+        let line = line?;
+        // A blank line is no JSON string; answer it with an empty one, so a
+        // caller waiting for each answer keeps its lockstep.
+        if line.trim().is_empty() {
+            writeln!(out, "\"\"")?;
+            out.flush()?;
+            continue;
+        }
+        let text: String = serde_json::from_str(&line)?;
         let said: Vec<String> = squigl_engine::speech::utterances(&text, |m| maths.say(m))
             .into_iter()
             .map(|u| u.text)
